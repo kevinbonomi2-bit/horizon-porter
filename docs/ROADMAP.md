@@ -58,7 +58,9 @@ scenarios we check.
   `native_block_entity_tick` (hook points version 129). `build --play` loads `content/`
   as a dev mod, and `package` also writes the `.hmod`. On Create: 190 blocks, 84 items,
   7,793 resource files and 114 block entity states, whose generated code compiles and
-  passes its tests. TESTED_LIVE
+  passes its tests. **Tested live:** the demo mod's crank, its tick filled in, built
+  with the launcher and played in Horizon: the block places with its properties, and
+  `/data get block` shows its saved `Speed` rising each tick.
 - **Desktop app (2026-11-04):** Horizon Porter (`app/`, Tauri) wraps scan, report and
   port in a drag-and-drop window, with installers for Windows, macOS and Linux in each
   release. Designed with the unslop and oil-ui skills (see the README).
