@@ -157,15 +157,17 @@ pub fn full(scan: &ModScan, all: bool, top: usize) -> String {
             let _ = writeln!(out, "  @{annotation:<24} {:>5}   {detail}", n(total));
         }
 
+        let own: BTreeSet<&str> = scan.classes.iter().map(|c| c.name.as_str()).collect();
         let other_mod_targets: BTreeSet<&str> = scan
             .mixins
             .iter()
             .flat_map(|m| &m.targets)
             .filter(|t| {
-                !matches!(
-                    SymbolOrigin::classify(t, |_| false),
-                    SymbolOrigin::Minecraft | SymbolOrigin::Jdk | SymbolOrigin::Platform
-                )
+                !own.contains(t.as_str())
+                    && !matches!(
+                        SymbolOrigin::classify(t, |_| false),
+                        SymbolOrigin::Minecraft | SymbolOrigin::Jdk | SymbolOrigin::Platform
+                    )
             })
             .map(String::as_str)
             .collect();
@@ -317,7 +319,8 @@ fn header(scan: &ModScan, out: &mut String) {
         Some(m) => {
             let name = m.name.clone().or(m.id.clone()).unwrap_or_default();
             let mut t = name;
-            if let Some(v) = &m.version {
+            // A version the build script computes stays a placeholder: leave it out.
+            if let Some(v) = m.version.as_ref().filter(|v| !v.contains('$')) {
                 let _ = write!(t, " {v}");
             }
             if let (Some(id), Some(_)) = (&m.id, &m.name) {

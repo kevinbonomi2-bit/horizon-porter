@@ -17,12 +17,26 @@ scenarios we check.
 
 ## Status
 
-- **M0, first version (2026-11-04):** `scan` and `report` work on source trees
-  (Fabric, NeoForge, Forge, multi-loader) and jars. They are tested on two fixture mods
-  and a generated jar, and run on Create's full source in about 2 seconds
-  ([results](CREATE.md#what-the-scanner-found)). Still to do for M0: hand-check reports
-  for more popular mods, count registrations made through helper methods, and read
-  Mixin details from jars.
+- **M0, done (2026-11-04):** `scan` and `report` work on source trees (Fabric,
+  NeoForge, Forge, multi-loader) and jars, Mixin details included. Registrations are
+  found through Registrate, DeferredRegister, `Registry.register`, multi-loader
+  `BiConsumer<T, ResourceLocation>` callbacks, and helper methods that pass an id on
+  (helpers of helpers too). Reports were checked by hand on six real mods:
+
+  | Mod | Kind | Classes | Mixin members (supported / partial / blocked / not needed) | Registrations | Scan time |
+  | --- | --- | --: | --- | --: | --: |
+  | Create 6.0.11 | NeoForge tech | 2,011 | 108 / 5 / 2 / 29 | 570 | 2 s |
+  | Applied Energistics 2 | NeoForge tech | 1,409 | 15 / 5 / 2 / 12 | 308 | 9 s |
+  | Botania | Fabric + Forge magic | 1,098 | 195 / 2 / 7 / 42 | 1,139 | 7 s |
+  | Sodium | Fabric + NeoForge performance | 647 | 264 / 12 / 34 / 109 | 0 | 4 s |
+  | Farmer's Delight | NeoForge content | 237 | 16 / 1 / 0 / 3 | 379 | 2 s |
+  | Mod Menu | Fabric client | 52 | 4 / 0 / 3 / 1 | 0 | 0.3 s |
+
+  What the six have in common: Mixins that add an interface to a Minecraft class
+  (`implements` on the Mixin) are the most common blocked case (28 of Sodium's 34), so
+  that is the first horizon-mixins feature worth proposing. Known gaps: registrations
+  whose id is a constant (`AEBlockIds.QUARTZ`) are counted without their id, and Java
+  type annotations on varargs (`String @NotNull ...`) are reported as unreadable lines.
 
 ## Working with Horizon
 

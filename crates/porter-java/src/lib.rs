@@ -107,6 +107,7 @@ fn scan_tree(root: &Path) -> Result<ModScan> {
             Err(e) => warnings.push(format!("{e:#}")),
         }
     }
+    metadata::drop_own_dependencies(&mut mods);
     if mods.is_empty() {
         warnings.push(
             "no fabric.mod.json, neoforge.mods.toml or mods.toml found: is this a mod's source tree?"
@@ -144,9 +145,9 @@ fn scan_tree(root: &Path) -> Result<ModScan> {
             continue;
         }
         let file = source::parse(&mut parser, &read_lossy(&f.abs)?)?;
-        if file.has_syntax_errors {
+        if let Some(line) = file.syntax_error_line {
             warnings.push(format!(
-                "{}: parts of this file could not be parsed; its facts may be incomplete",
+                "{}:{line}: Java syntax the parser could not read; facts from this file may be incomplete",
                 f.rel
             ));
         }
@@ -371,6 +372,147 @@ fn side_of(package: &str, annotations: &[Annotation]) -> Side {
     }
 }
 
+/// A registration made directly by a call: Registrate, `Registry.register` or a
+/// DeferredRegister.
+struct DirectRegistration {
+    registry: String,
+    via: &'static str,
+    id: Option<String>,
+    /// The argument that carries the id: 0, or 1 for `Registry.register`.
+    id_arg: usize,
+}
+
+fn direct_registration(
+    call: &source::Call,
+    method: Option<&source::MethodSig>,
+    fields: &HashMap<(&str, &str), &str>,
+) -> Option<DirectRegistration> {
+    if call.object_is_chain {
+        return None;
+    }
+    // Multi-loader mods pass a registration callback around:
+    // `void registerBlocks(BiConsumer<Block, ResourceLocation> r) { r.accept(block, id); }`
+    if call.method == "accept"
+        && let Some(m) = method
+        && let Some(i) = m.params.iter().position(|p| *p == call.object)
+        && m.param_types[i].trim_start().starts_with("BiConsumer")
+        && second_type_argument(&m.param_types[i])
+            .is_some_and(|t| t.ends_with("ResourceLocation") || t.ends_with("Identifier"))
+    {
+        return Some(DirectRegistration {
+            registry: source::first_type_argument_registry(&m.param_types[i])?,
+            via: "BiConsumer",
+            id: call.second_arg_last_string.clone(),
+            id_arg: 1,
+        });
+    }
+    if let Some((_, registry)) = source::REGISTRATE_METHODS
+        .iter()
+        .find(|(m, _)| *m == call.method)
+        .filter(|_| call.object.to_ascii_lowercase().contains("registrate"))
+    {
+        return Some(DirectRegistration {
+            registry: registry.to_string(),
+            via: "Registrate",
+            id: call.first_string.clone(),
+            id_arg: 0,
+        });
+    }
+    if (call.object == "Registry" || call.object.ends_with(".Registry"))
+        && ["register", "registerForHolder", "registerReference"].contains(&call.method.as_str())
+    {
+        let reg = call.args.first().filter(|a| a.contains("Registries"))?;
+        return Some(DirectRegistration {
+            registry: last_segment(reg).to_ascii_lowercase(),
+            via: "Registry.register",
+            id: call.second_arg_last_string.clone(),
+            id_arg: 1,
+        });
+    }
+    if !call.method.starts_with("register") {
+        return None;
+    }
+    // BLOCKS.register(...) in the declaring class, or ModBlocks.BLOCKS.register(...).
+    let key = match call.object.rsplit_once('.') {
+        Some((owner, field)) => (last_segment(owner), field),
+        None => (call.enclosing.as_str(), call.object.as_str()),
+    };
+    fields.get(&key).map(|registry| DirectRegistration {
+        registry: registry.to_string(),
+        via: "DeferredRegister",
+        id: call.first_string.clone(),
+        id_arg: 0,
+    })
+}
+
+/// `BiConsumer<Map<A, B>, ResourceLocation>` → `ResourceLocation`: the second type
+/// argument at the top nesting level.
+fn second_type_argument(ty: &str) -> Option<&str> {
+    let start = ty.find('<')? + 1;
+    let mut depth = 0;
+    for (i, c) in ty[start..].char_indices() {
+        match c {
+            '<' => depth += 1,
+            '>' if depth == 0 => return None,
+            '>' => depth -= 1,
+            ',' if depth == 0 => {
+                let rest = &ty[start + i + 1..];
+                let end = rest.find([',', '>']).unwrap_or(rest.len());
+                return Some(rest[..end].trim());
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// A helper method that registers under an id it receives as a parameter, such as
+/// Create's `ingredient(String name)` calling `REGISTRATE.item(name, ...)`.
+#[derive(Clone)]
+struct Helper {
+    registry: String,
+    param: usize,
+}
+
+/// Which parameter of the enclosing method an id argument is built from, if any:
+/// `name`, `id.getPath()`, `prefix(name)` and `name + "_slab"` all use `name`.
+/// Text inside string literals does not count.
+fn id_param(arg: &str, params: &[String]) -> Option<usize> {
+    let mut code = String::with_capacity(arg.len());
+    let mut in_string = false;
+    let mut escaped = false;
+    for c in arg.chars() {
+        if in_string {
+            match (escaped, c) {
+                (false, '\\') => escaped = true,
+                (false, '"') => in_string = false,
+                _ => escaped = false,
+            }
+        } else if c == '"' {
+            in_string = true;
+            code.push(' ');
+        } else {
+            code.push(c);
+        }
+    }
+    code.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '$'))
+        .filter(|t| !t.is_empty())
+        .find_map(|t| params.iter().position(|p| p == t))
+}
+
+/// The helper a call goes to, as (class simple name, method name), when it is an
+/// unqualified, `this.` or `Class.` call.
+fn helper_key(call: &source::Call) -> Option<(&str, &str)> {
+    let class = match call.object.as_str() {
+        "" | "this" => call.enclosing.as_str(),
+        o if o.starts_with(|c: char| c.is_ascii_uppercase()) && !o.contains(['(', ' ']) => {
+            last_segment(o)
+        }
+        _ => return None,
+    };
+    Some((class, call.method.as_str()))
+}
+
 fn registrations(parsed: &[(String, ParsedFile)]) -> Vec<Registration> {
     // DeferredRegister fields by (declaring class simple name, field name).
     let fields: HashMap<(&str, &str), &str> = parsed
@@ -378,53 +520,121 @@ fn registrations(parsed: &[(String, ParsedFile)]) -> Vec<Registration> {
         .flat_map(|(_, f)| f.registers.iter())
         .map(|r| ((r.class.as_str(), r.field.as_str()), r.registry.as_str()))
         .collect();
+    fn enclosing_method<'a>(
+        file: &'a ParsedFile,
+        call: &source::Call,
+    ) -> Option<&'a source::MethodSig> {
+        call.in_method.map(|i| &file.methods[i])
+    }
+
+    // 1. Helpers: methods that register under an id parameter, directly or by
+    //    passing the parameter on to another helper. A few rounds reach helpers of
+    //    helpers.
+    let mut helpers: HashMap<(String, String), Helper> = HashMap::new();
+    for round in 0..4 {
+        let before = helpers.len();
+        for (_, file) in parsed {
+            for call in &file.calls {
+                let Some(method) = enclosing_method(file, call) else {
+                    continue;
+                };
+                let found = if round == 0 {
+                    direct_registration(call, Some(method), &fields)
+                        .filter(|d| d.id.is_none())
+                        .and_then(|d| {
+                            let arg = call.args.get(d.id_arg)?;
+                            let param = id_param(arg, &method.params)?;
+                            Some(Helper {
+                                registry: d.registry,
+                                param,
+                            })
+                        })
+                } else {
+                    helper_key(call)
+                        .and_then(|(c, m)| helpers.get(&(c.to_string(), m.to_string())))
+                        .filter(|h| call.literal_args.get(h.param).is_none_or(Option::is_none))
+                        .and_then(|h| {
+                            let arg = call.args.get(h.param)?;
+                            let param = id_param(arg, &method.params)?;
+                            Some(Helper {
+                                registry: h.registry.clone(),
+                                param,
+                            })
+                        })
+                };
+                if let Some(helper) = found {
+                    helpers
+                        .entry((call.enclosing.clone(), method.name.clone()))
+                        .or_insert(helper);
+                }
+            }
+        }
+        if helpers.len() == before && round > 0 {
+            break;
+        }
+    }
+
+    // 2. Registrations: direct ones, and helper calls with a literal id. Calls that
+    //    only pass an id on are part of a helper, not registrations of their own.
     let mut out = Vec::new();
+    let mut helper_used: BTreeSet<(String, String)> = BTreeSet::new();
     for (_, file) in parsed {
         for call in &file.calls {
             let class = qualify(&file.package, &call.enclosing);
-            if call.object_is_chain {
-                continue;
-            }
-            let object_lower = call.object.to_ascii_lowercase();
-            if let Some((_, registry)) = source::REGISTRATE_METHODS
-                .iter()
-                .find(|(m, _)| *m == call.method)
-                .filter(|_| object_lower.contains("registrate"))
-            {
-                out.push(Registration {
-                    registry: registry.to_string(),
-                    id: call.first_string.clone(),
-                    via: "Registrate".into(),
-                    class,
-                });
-                continue;
-            }
-            if call.object == "Registry" || call.object.ends_with(".Registry") {
-                let Some(reg) = call.args.first().filter(|a| a.contains("Registries")) else {
-                    continue;
-                };
-                out.push(Registration {
-                    registry: last_segment(reg).to_ascii_lowercase(),
-                    id: call.second_arg_last_string.clone(),
-                    via: "Registry.register".into(),
-                    class,
-                });
-                continue;
-            }
-            // BLOCKS.register(...) in the declaring class, or ModBlocks.BLOCKS.register(...).
-            let key = match call.object.rsplit_once('.') {
-                Some((owner, field)) => (last_segment(owner), field),
-                None => (call.enclosing.as_str(), call.object.as_str()),
+            let method = enclosing_method(file, call);
+            let passes_param = |arg: Option<&String>| {
+                method.is_some_and(|m| arg.and_then(|a| id_param(a, &m.params)).is_some())
             };
-            if let Some(registry) = fields.get(&key) {
+            if let Some(d) = direct_registration(call, method, &fields) {
+                if d.id.is_none() && passes_param(call.args.get(d.id_arg)) {
+                    continue;
+                }
                 out.push(Registration {
-                    registry: registry.to_string(),
-                    id: call.first_string.clone(),
-                    via: "DeferredRegister".into(),
+                    registry: d.registry,
+                    id: d.id,
+                    via: d.via.into(),
                     class,
                 });
+                continue;
             }
+            let Some((c, m)) = helper_key(call) else {
+                continue;
+            };
+            let key = (c.to_string(), m.to_string());
+            let Some(helper) = helpers.get(&key) else {
+                continue;
+            };
+            helper_used.insert(key.clone());
+            let id = call.literal_args.get(helper.param).cloned().flatten();
+            if id.is_none() && passes_param(call.args.get(helper.param)) {
+                continue;
+            }
+            out.push(Registration {
+                registry: helper.registry.clone(),
+                id,
+                via: "helper method".into(),
+                class,
+            });
         }
+    }
+    // A helper nobody calls with an id still registers something.
+    let mut unused: Vec<_> = helpers
+        .iter()
+        .filter(|(key, _)| !helper_used.contains(*key))
+        .collect();
+    unused.sort_by(|a, b| a.0.cmp(b.0));
+    for ((class, _), helper) in unused {
+        let package = parsed
+            .iter()
+            .find(|(_, f)| f.types.iter().any(|t| &t.name == class))
+            .map(|(_, f)| f.package.as_str())
+            .unwrap_or("");
+        out.push(Registration {
+            registry: helper.registry.clone(),
+            id: None,
+            via: "helper method".into(),
+            class: qualify(package, class),
+        });
     }
     out
 }
@@ -484,4 +694,33 @@ pub fn reference_counts(
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reads_the_second_type_argument() {
+        assert_eq!(
+            second_type_argument("BiConsumer<Block, ResourceLocation>"),
+            Some("ResourceLocation")
+        );
+        assert_eq!(
+            second_type_argument(
+                "BiConsumer<Map<String, Block>, net.minecraft.resources.Identifier>"
+            ),
+            Some("net.minecraft.resources.Identifier")
+        );
+        assert_eq!(second_type_argument("Consumer<Block>"), None);
+    }
+
+    #[test]
+    fn finds_id_parameters() {
+        let params = vec!["english".to_string(), "id".to_string()];
+        assert_eq!(id_param("id.getPath()", &params), Some(1));
+        assert_eq!(id_param("prefix(id)", &params), Some(1));
+        assert_eq!(id_param("\"id\"", &params), None);
+        assert_eq!(id_param("\"a \\\" id\" + other", &params), None);
+    }
 }

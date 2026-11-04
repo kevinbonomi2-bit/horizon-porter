@@ -47,7 +47,9 @@ fn scans_a_neoforge_source_tree() {
         names,
         vec![
             "com.demo.Demo",
+            "com.demo.ModItems",
             "com.demo.SpeedHolder",
+            "com.demo.Xplat",
             "com.demo.block.CrankBlock",
             "com.demo.block.CrankBlockEntity",
             "com.demo.mixin.LevelMixin",
@@ -114,20 +116,33 @@ fn scans_a_neoforge_source_tree() {
         ]
     );
 
-    // Registrations through DeferredRegister fields.
-    let mut regs: Vec<(String, Option<String>)> = scan
+    // Registrations through DeferredRegister fields, and through helper methods.
+    let mut regs: Vec<(String, Option<String>, String)> = scan
         .registrations
         .iter()
-        .map(|r| (r.registry.clone(), r.id.clone()))
+        .map(|r| (r.registry.clone(), r.id.clone(), r.via.clone()))
         .collect();
     regs.sort();
+    let entry = |registry: &str, id: Option<&str>, via: &str| {
+        (
+            registry.to_string(),
+            id.map(str::to_string),
+            via.to_string(),
+        )
+    };
     assert_eq!(
         regs,
         vec![
-            ("block".to_string(), Some("crank".to_string())),
-            ("block".to_string(), Some("crank_2".to_string())),
-            ("block_entity_type".to_string(), Some("crank".to_string())),
-            ("item".to_string(), Some("handle".to_string())),
+            entry("block", Some("brass_anvil"), "BiConsumer"),
+            entry("block", Some("brass_bell"), "BiConsumer"),
+            entry("block", Some("crank"), "DeferredRegister"),
+            entry("block", Some("crank_2"), "DeferredRegister"),
+            entry("block_entity_type", Some("crank"), "DeferredRegister"),
+            entry("item", None, "helper method"),
+            entry("item", Some("axle"), "helper method"),
+            entry("item", Some("gear"), "helper method"),
+            entry("item", Some("handle"), "DeferredRegister"),
+            entry("item", Some("name"), "DeferredRegister"),
         ]
     );
 
@@ -219,6 +234,182 @@ fn class_bytes(this: &str, superclass: &str, classes: &[&str], utf8: &[&str]) ->
     b
 }
 
+/// Writes class files whose members carry annotations, as compiled Mixins do.
+#[derive(Default)]
+struct ClassWriter {
+    pool: Vec<Vec<u8>>,
+}
+
+impl ClassWriter {
+    fn push(&mut self, entry: Vec<u8>) -> u16 {
+        self.pool.push(entry);
+        self.pool.len() as u16
+    }
+    fn utf8(&mut self, s: &str) -> u16 {
+        let mut u = vec![1];
+        u.extend_from_slice(&(s.len() as u16).to_be_bytes());
+        u.extend_from_slice(s.as_bytes());
+        self.push(u)
+    }
+    fn class(&mut self, internal: &str) -> u16 {
+        let name = self.utf8(internal);
+        let mut c = vec![7];
+        c.extend_from_slice(&name.to_be_bytes());
+        self.push(c)
+    }
+    fn int(&mut self, v: i32) -> u16 {
+        let mut c = vec![3];
+        c.extend_from_slice(&v.to_be_bytes());
+        self.push(c)
+    }
+    fn tagged(&mut self, tag: u8, index: u16) -> Vec<u8> {
+        let mut v = vec![tag];
+        v.extend_from_slice(&index.to_be_bytes());
+        v
+    }
+    fn string(&mut self, s: &str) -> Vec<u8> {
+        let i = self.utf8(s);
+        self.tagged(b's', i)
+    }
+    fn boolean(&mut self, b: bool) -> Vec<u8> {
+        let i = self.int(b as i32);
+        self.tagged(b'Z', i)
+    }
+    fn class_value(&mut self, descriptor: &str) -> Vec<u8> {
+        let i = self.utf8(descriptor);
+        self.tagged(b'c', i)
+    }
+    fn array(values: Vec<Vec<u8>>) -> Vec<u8> {
+        let mut v = vec![b'['];
+        v.extend_from_slice(&(values.len() as u16).to_be_bytes());
+        values.into_iter().for_each(|x| v.extend(x));
+        v
+    }
+    fn nested(annotation: Vec<u8>) -> Vec<u8> {
+        let mut v = vec![b'@'];
+        v.extend(annotation);
+        v
+    }
+    fn annotation(&mut self, descriptor: &str, pairs: Vec<(&str, Vec<u8>)>) -> Vec<u8> {
+        let ty = self.utf8(descriptor);
+        let mut v = ty.to_be_bytes().to_vec();
+        v.extend_from_slice(&(pairs.len() as u16).to_be_bytes());
+        for (key, value) in pairs {
+            let k = self.utf8(key);
+            v.extend_from_slice(&k.to_be_bytes());
+            v.extend(value);
+        }
+        v
+    }
+    /// An attribute table holding one RuntimeInvisibleAnnotations attribute.
+    fn annotations(&mut self, annotations: Vec<Vec<u8>>) -> Vec<u8> {
+        if annotations.is_empty() {
+            return vec![0, 0];
+        }
+        let name = self.utf8("RuntimeInvisibleAnnotations");
+        let mut body = (annotations.len() as u16).to_be_bytes().to_vec();
+        annotations.into_iter().for_each(|a| body.extend(a));
+        let mut v = 1u16.to_be_bytes().to_vec();
+        v.extend_from_slice(&name.to_be_bytes());
+        v.extend_from_slice(&(body.len() as u32).to_be_bytes());
+        v.extend(body);
+        v
+    }
+    /// A field or method: access flags, name, descriptor and its attribute table.
+    fn member(
+        &mut self,
+        access: u16,
+        name: &str,
+        descriptor: &str,
+        attributes: Vec<u8>,
+    ) -> Vec<u8> {
+        let n = self.utf8(name);
+        let d = self.utf8(descriptor);
+        let mut v = access.to_be_bytes().to_vec();
+        v.extend_from_slice(&n.to_be_bytes());
+        v.extend_from_slice(&d.to_be_bytes());
+        v.extend(attributes);
+        v
+    }
+    fn finish(
+        self,
+        this: u16,
+        superclass: u16,
+        fields: Vec<Vec<u8>>,
+        methods: Vec<Vec<u8>>,
+        class_attributes: Vec<u8>,
+    ) -> Vec<u8> {
+        let mut b = vec![0xCA, 0xFE, 0xBA, 0xBE, 0, 0, 0, 65];
+        b.extend_from_slice(&(self.pool.len() as u16 + 1).to_be_bytes());
+        self.pool.into_iter().for_each(|e| b.extend(e));
+        b.extend_from_slice(&0x0021u16.to_be_bytes());
+        b.extend_from_slice(&this.to_be_bytes());
+        b.extend_from_slice(&superclass.to_be_bytes());
+        b.extend_from_slice(&0u16.to_be_bytes()); // interfaces
+        for table in [fields, methods] {
+            b.extend_from_slice(&(table.len() as u16).to_be_bytes());
+            table.into_iter().for_each(|m| b.extend(m));
+        }
+        b.extend(class_attributes);
+        b
+    }
+}
+
+/// A compiled Mixin into Level: `@Shadow int x`, a constructor, an `@Inject` at HEAD
+/// (cancellable) and a synthetic lambda.
+fn mixin_class_bytes() -> Vec<u8> {
+    let mut w = ClassWriter::default();
+    let this = w.class("jdemo/mixin/FooMixin");
+    let superclass = w.class("java/lang/Object");
+
+    let level = w.class_value("Lnet/minecraft/world/level/Level;");
+    let mixin = w.annotation(
+        "Lorg/spongepowered/asm/mixin/Mixin;",
+        vec![("value", ClassWriter::array(vec![level]))],
+    );
+    let class_attributes = w.annotations(vec![mixin]);
+
+    let shadow = w.annotation("Lorg/spongepowered/asm/mixin/Shadow;", vec![]);
+    let shadow_attrs = w.annotations(vec![shadow]);
+    let field = w.member(0x0002, "x", "I", shadow_attrs);
+
+    let no_attrs = w.annotations(vec![]);
+    let constructor = w.member(0x0001, "<init>", "()V", no_attrs);
+
+    let head = w.string("HEAD");
+    let at = w.annotation(
+        "Lorg/spongepowered/asm/mixin/injection/At;",
+        vec![("value", head)],
+    );
+    let tick = w.string("tick");
+    let cancellable = w.boolean(true);
+    let inject = w.annotation(
+        "Lorg/spongepowered/asm/mixin/injection/Inject;",
+        vec![
+            ("method", ClassWriter::array(vec![tick])),
+            ("at", ClassWriter::nested(at)),
+            ("cancellable", cancellable),
+        ],
+    );
+    let inject_attrs = w.annotations(vec![inject]);
+    let injector = w.member(
+        0x0002,
+        "jdemo$tick",
+        "(Lorg/spongepowered/asm/mixin/injection/callback/CallbackInfo;)V",
+        inject_attrs,
+    );
+    let no_attrs = w.annotations(vec![]);
+    let lambda = w.member(0x1002, "lambda$jdemo$tick$0", "()V", no_attrs);
+
+    w.finish(
+        this,
+        superclass,
+        vec![field],
+        vec![constructor, injector, lambda],
+        class_attributes,
+    )
+}
+
 #[test]
 fn scans_a_jar() {
     let dir = std::env::temp_dir().join(format!("porter-jar-test-{}", std::process::id()));
@@ -253,15 +444,7 @@ fn scans_a_jar() {
                 &[],
             ),
         );
-        add(
-            "jdemo/mixin/FooMixin.class",
-            &class_bytes(
-                "jdemo/mixin/FooMixin",
-                "java/lang/Object",
-                &[],
-                &["Lorg/spongepowered/asm/mixin/Mixin;"],
-            ),
-        );
+        add("jdemo/mixin/FooMixin.class", &mixin_class_bytes());
         add("META-INF/jars/lib.jar", b"not read");
         add("assets/jdemo/lang/en_us.json", b"{}");
         zip.finish().unwrap();
@@ -285,8 +468,32 @@ fn scans_a_jar() {
             .contains(&"net.minecraft.core.BlockPos".to_string())
     );
     assert!(!gem.references.iter().any(|r| r.starts_with("jdemo.Gem")));
-    assert_eq!(scan.mixins.len(), 1);
     assert!(scan.classes[1].is_mixin);
+    // Mixin details come from the annotations kept in the class file.
+    let [mixin] = scan.mixins.as_slice() else {
+        panic!("expected one Mixin");
+    };
+    assert_eq!(mixin.targets, vec!["net.minecraft.world.level.Level"]);
+    let members: Vec<_> = mixin
+        .members
+        .iter()
+        .map(|m| {
+            (
+                m.annotation.as_str(),
+                m.verdict.name(),
+                m.horizon_kind.as_deref(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        members,
+        vec![
+            ("Shadow", "not needed", None),
+            ("Inject", "supported", Some("HEAD")),
+        ]
+    );
+    assert_eq!(mixin.members[1].target_methods, vec!["tick"]);
+    assert!(mixin.members[1].cancellable);
     assert_eq!(scan.bundled_jars, vec!["META-INF/jars/lib.jar"]);
     assert_eq!(scan.resources.assets(), 1);
 }

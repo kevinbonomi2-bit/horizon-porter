@@ -30,30 +30,40 @@ pub(crate) fn gradle_properties(text: &str) -> HashMap<String, String> {
         .collect()
 }
 
-/// Replaces `${key}` with Gradle property values; unknown keys are left as they are.
+/// Replaces `${key}` and `$key` (both forms Gradle's `expand` accepts) with Gradle
+/// property values; unknown keys are left as they are.
 pub(crate) fn substitute(text: &str, props: &HashMap<String, String>) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
-    while let Some(start) = rest.find("${") {
+    while let Some(start) = rest.find('$') {
         out.push_str(&rest[..start]);
-        let after = &rest[start + 2..];
-        match after.find('}') {
-            Some(end) => {
-                let key = &after[..end];
-                match props.get(key) {
-                    Some(v) => out.push_str(v),
-                    None => out.push_str(&rest[start..start + 2 + end + 1]),
-                }
-                rest = &after[end + 1..];
-            }
+        let after = &rest[start + 1..];
+        let (key, consumed) = match after.strip_prefix('{') {
+            Some(braced) => match braced.find('}') {
+                Some(end) => (&braced[..end], end + 2),
+                None => ("", 0),
+            },
             None => {
-                out.push_str(&rest[start..]);
-                rest = "";
+                let len = after
+                    .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                    .unwrap_or(after.len());
+                (&after[..len], len)
             }
+        };
+        match props.get(key) {
+            Some(v) if !key.is_empty() => out.push_str(v),
+            _ => out.push_str(&rest[start..start + 1 + consumed]),
         }
+        rest = &after[consumed..];
     }
     out.push_str(rest);
     out
+}
+
+/// Whether a dependency id is the game, Java, the loader or a part of its API
+/// (Fabric API's modules are `fabric-*`), rather than a mod to port first.
+fn is_platform(id: &str) -> bool {
+    NOT_DEPENDENCIES.contains(&id) || id.starts_with("fabric-") || id.starts_with("quilt")
 }
 
 /// The loader a metadata file belongs to, from its path.
@@ -94,12 +104,7 @@ fn fabric(path: &str, text: &str) -> Result<ModMetadata> {
         other => other.to_string(),
     });
     let dependencies = depends
-        .map(|d| {
-            d.keys()
-                .filter(|k| !NOT_DEPENDENCIES.contains(&k.as_str()))
-                .cloned()
-                .collect()
-        })
+        .map(|d| d.keys().filter(|k| !is_platform(k)).cloned().collect())
         .unwrap_or_default();
     let mixin_configs = json
         .get("mixins")
@@ -159,7 +164,7 @@ fn mods_toml(loader: Loader, path: &str, text: &str) -> Result<ModMetadata> {
                         .and_then(|v| v.as_str())
                         .map(str::to_string);
                 } else if !optional
-                    && !NOT_DEPENDENCIES.contains(&dep_id)
+                    && !is_platform(dep_id)
                     && !dependencies.iter().any(|d| d == dep_id)
                 {
                     dependencies.push(dep_id.to_string());
@@ -193,6 +198,15 @@ fn mods_toml(loader: Loader, path: &str, text: &str) -> Result<ModMetadata> {
         dependencies,
         mixin_configs,
     })
+}
+
+/// A multi-loader project's metadata files can name each other's mod id (Botania's
+/// Fabric and Forge files both say `botania`): a mod is not its own dependency.
+pub(crate) fn drop_own_dependencies(mods: &mut [ModMetadata]) {
+    let ids: Vec<String> = mods.iter().filter_map(|m| m.id.clone()).collect();
+    for m in mods {
+        m.dependencies.retain(|d| !ids.contains(d));
+    }
 }
 
 /// Whether a file name looks like a Mixin config.
@@ -250,6 +264,10 @@ mod tests {
             substitute("${mod_id} ${mod_version} ${other}", &props),
             "demo 1.2 ${other}"
         );
+        assert_eq!(
+            substitute("\"$mod_version\" $other $ ${unclosed", &props),
+            "\"1.2\" $other $ ${unclosed"
+        );
     }
 
     #[test]
@@ -257,7 +275,7 @@ mod tests {
         let m = fabric(
             "src/main/resources/fabric.mod.json",
             r#"{"id":"demo","version":"1.0","license":"MIT",
-                "depends":{"minecraft":"~26.3","fabric-api":"*","cloth-config":">=1"},
+                "depends":{"minecraft":"~26.3","fabric-api":"*","fabric-screen-api-v1":"*","cloth-config":">=1"},
                 "mixins":["demo.mixins.json",{"config":"demo.client.mixins.json","environment":"client"}]}"#,
         )
         .unwrap();

@@ -97,9 +97,12 @@ pub(crate) struct TypeDecl {
     pub methods: usize,
 }
 
-/// A method call that might register something.
+/// A method call that might register something, directly or through a helper
+/// method: registry calls, and calls passing a string literal or one of the
+/// enclosing method's parameters.
 pub(crate) struct Call {
-    /// The receiver as written: `BLOCKS`, `ModBlocks.BLOCKS`, `Registry`, `REGISTRATE`.
+    /// The receiver as written: `BLOCKS`, `ModBlocks.BLOCKS`, `Registry`, `REGISTRATE`;
+    /// empty for an unqualified call.
     pub object: String,
     /// Whether the receiver is itself a call (a builder chain), other than
     /// `registrate()`.
@@ -107,12 +110,23 @@ pub(crate) struct Call {
     pub method: String,
     /// The text of each argument.
     pub args: Vec<String>,
+    /// Each argument's value when it is a string literal.
+    pub literal_args: Vec<Option<String>>,
     /// The first argument, when it is a string literal.
     pub first_string: Option<String>,
     /// The last string literal inside the second argument (Fabric ids).
     pub second_arg_last_string: Option<String>,
     /// The top-level type it is in.
     pub enclosing: String,
+    /// The method it is in, as an index into [`ParsedFile::methods`].
+    pub in_method: Option<usize>,
+}
+
+/// A method's name, parameter names and parameter types (as written).
+pub(crate) struct MethodSig {
+    pub name: String,
+    pub params: Vec<String>,
+    pub param_types: Vec<String>,
 }
 
 /// A field holding a DeferredRegister, with the registry it registers into.
@@ -132,7 +146,10 @@ pub(crate) struct ParsedFile {
     pub registers: Vec<RegisterField>,
     /// Fully qualified type names used in code, such as `net.minecraft.world.level.Level`.
     pub qualified_refs: Vec<String>,
-    pub has_syntax_errors: bool,
+    /// Methods and constructors, referred to by [`Call::in_method`].
+    pub methods: Vec<MethodSig>,
+    /// The first line (1-based) tree-sitter could not parse, if any.
+    pub syntax_error_line: Option<usize>,
 }
 
 /// Method names that register through a DeferredRegister or `Registry.register`.
@@ -176,7 +193,8 @@ pub(crate) fn parse(parser: &mut Parser, src: &str) -> Result<ParsedFile> {
         calls: Vec::new(),
         registers: Vec::new(),
         qualified_refs: Vec::new(),
-        has_syntax_errors: root.has_error(),
+        methods: Vec::new(),
+        syntax_error_line: root.has_error().then(|| first_error_line(root)),
     };
 
     for node in named_children(root) {
@@ -201,16 +219,64 @@ pub(crate) fn parse(parser: &mut Parser, src: &str) -> Result<ParsedFile> {
     Ok(file)
 }
 
+/// The line of the first node tree-sitter marked as an error or as missing.
+fn first_error_line(root: Node) -> usize {
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        if node.is_error() || node.is_missing() {
+            return node.start_position().row + 1;
+        }
+        let mut cursor = node.walk();
+        let children: Vec<Node> = node.children(&mut cursor).collect();
+        stack.extend(
+            children
+                .into_iter()
+                .rev()
+                .filter(|c| c.has_error() || c.is_missing()),
+        );
+    }
+    root.start_position().row + 1
+}
+
 /// One pass over a top-level type: collects its registry calls, DeferredRegister
 /// fields and fully qualified type names into `file`, and returns its method count.
 fn walk_type(type_node: Node, src: &str, enclosing: &str, file: &mut ParsedFile) -> usize {
+    let text = |n: Node| n.utf8_text(src.as_bytes()).unwrap_or("").to_string();
     let mut methods = 0;
-    // (node, kind of its parent)
-    let mut stack: Vec<(Node, &str)> = vec![(type_node, "")];
-    while let Some((node, parent_kind)) = stack.pop() {
+    // (node, kind of its parent, the method it is in)
+    let mut stack: Vec<(Node, &str, Option<usize>)> = vec![(type_node, "", None)];
+    while let Some((node, parent_kind, mut in_method)) = stack.pop() {
         match node.kind() {
-            "method_declaration" | "constructor_declaration" => methods += 1,
-            "method_invocation" => file.calls.extend(call_at(node, src, enclosing)),
+            "method_declaration" | "constructor_declaration" => {
+                methods += 1;
+                let (params, param_types) = node
+                    .child_by_field_name("parameters")
+                    .map(|p| {
+                        named_children(p)
+                            .into_iter()
+                            .filter_map(|param| {
+                                let name = param.child_by_field_name("name").map(text)?;
+                                let ty = param.child_by_field_name("type").map(text);
+                                Some((name, ty.unwrap_or_default()))
+                            })
+                            .unzip()
+                    })
+                    .unwrap_or_default();
+                file.methods.push(MethodSig {
+                    name: node
+                        .child_by_field_name("name")
+                        .map(text)
+                        .unwrap_or_default(),
+                    params,
+                    param_types,
+                });
+                in_method = Some(file.methods.len() - 1);
+            }
+            "method_invocation" => {
+                let params = in_method.map_or(&[][..], |i| &file.methods[i].params[..]);
+                file.calls
+                    .extend(call_at(node, src, enclosing, params, in_method));
+            }
             "field_declaration" => register_fields_at(node, src, enclosing, &mut file.registers),
             // `a.b.C` nests a scoped_type_identifier for each dot: only the
             // outermost is the whole name.
@@ -224,7 +290,12 @@ fn walk_type(type_node: Node, src: &str, enclosing: &str, file: &mut ParsedFile)
         }
         // Pushed in reverse so they pop in source order.
         let kind = node.kind();
-        stack.extend(named_children(node).into_iter().rev().map(|c| (c, kind)));
+        stack.extend(
+            named_children(node)
+                .into_iter()
+                .rev()
+                .map(|c| (c, kind, in_method)),
+        );
     }
     methods
 }
@@ -436,8 +507,15 @@ fn parse_value(node: Node, src: &str) -> Value {
     }
 }
 
-/// The call at `node` if it might register something.
-fn call_at(node: Node, src: &str, enclosing: &str) -> Option<Call> {
+/// The call at `node` if it might register something, directly or through a helper.
+/// `params` are the enclosing method's parameter names.
+fn call_at(
+    node: Node,
+    src: &str,
+    enclosing: &str,
+    params: &[String],
+    in_method: Option<usize>,
+) -> Option<Call> {
     let text = |n: Node| n.utf8_text(src.as_bytes()).unwrap_or("").to_string();
     let method = node
         .child_by_field_name("name")
@@ -445,15 +523,6 @@ fn call_at(node: Node, src: &str, enclosing: &str) -> Option<Call> {
         .unwrap_or_default();
     let object_node = node.child_by_field_name("object");
     let object = object_node.map(text).unwrap_or_default();
-    let is_registrate = REGISTRATE_METHODS.iter().any(|(m, _)| *m == method)
-        && object.to_ascii_lowercase().contains("registrate");
-    if !REGISTER_METHODS.contains(&method.as_str()) && !is_registrate {
-        return None;
-    }
-    let object_is_chain = object_node.is_some_and(|o| {
-        o.kind() == "method_invocation"
-            && o.child_by_field_name("name").map(text).as_deref() != Some("registrate")
-    });
     let args: Vec<Node> = node
         .child_by_field_name("arguments")
         .map(|a| {
@@ -463,10 +532,29 @@ fn call_at(node: Node, src: &str, enclosing: &str) -> Option<Call> {
                 .collect()
         })
         .unwrap_or_default();
-    let first_string = args
-        .first()
-        .filter(|a| a.kind() == "string_literal")
-        .map(|a| unquote(&text(*a)));
+    let literal_args: Vec<Option<String>> = args
+        .iter()
+        .map(|a| (a.kind() == "string_literal").then(|| unquote(&text(*a))))
+        .collect();
+
+    let is_registrate = REGISTRATE_METHODS.iter().any(|(m, _)| *m == method)
+        && object.to_ascii_lowercase().contains("registrate");
+    // `r.accept(block, id)` on a callback parameter (multi-loader registration).
+    let is_callback = method == "accept" && params.contains(&object);
+    let is_register = REGISTER_METHODS.contains(&method.as_str()) || is_registrate || is_callback;
+    // Possible helper call sites: a string literal, or a parameter passed on.
+    let maybe_helper = literal_args.iter().any(Option::is_some)
+        || args
+            .iter()
+            .any(|a| a.kind() == "identifier" && params.iter().any(|p| *p == text(*a)));
+    if !is_register && !maybe_helper {
+        return None;
+    }
+    let object_is_chain = object_node.is_some_and(|o| {
+        o.kind() == "method_invocation"
+            && o.child_by_field_name("name").map(text).as_deref() != Some("registrate")
+    });
+    let first_string = literal_args.first().cloned().flatten();
     let second_arg_last_string = args.get(1).and_then(|a| {
         descendants(*a)
             .into_iter()
@@ -478,9 +566,11 @@ fn call_at(node: Node, src: &str, enclosing: &str) -> Option<Call> {
         object_is_chain,
         method,
         args: args.iter().map(|a| text(*a)).collect(),
+        literal_args,
         first_string,
         second_arg_last_string,
         enclosing: enclosing.to_string(),
+        in_method,
     })
 }
 
@@ -552,12 +642,23 @@ pub(crate) fn deferred_register_registry(ty: &str, init: &str) -> Option<String>
         }
     }
     // DeferredRegister<BlockEntityType<?>> → block_entity_type
+    first_type_argument_registry(ty)
+}
+
+/// The registry named by a type's first type argument: `DeferredRegister<Block>` and
+/// `BiConsumer<BlockEntityType<?>, ResourceLocation>` give `block` and
+/// `block_entity_type`.
+pub(crate) fn first_type_argument_registry(ty: &str) -> Option<String> {
     let generic = ty.split_once('<')?.1;
     let base: String = generic
+        .trim_start()
         .chars()
         .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '.')
         .collect();
     let base = base.rsplit('.').next()?;
+    if base.is_empty() || base == "T" || base == "?" {
+        return None;
+    }
     Some(normalize_registry(&snake_case(base)))
 }
 
@@ -664,7 +765,7 @@ public class ShaftBlock extends RotatedBlock<Foo> implements IWrenchable, java.i
             f.qualified_refs,
             vec!["java.io.Serializable", "net.minecraft.world.level.Level"]
         );
-        assert!(!f.has_syntax_errors);
+        assert_eq!(f.syntax_error_line, None);
     }
 
     #[test]

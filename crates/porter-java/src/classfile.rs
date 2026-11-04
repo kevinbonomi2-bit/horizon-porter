@@ -1,9 +1,13 @@
 // A minimal Java class file reader: the class's name, superclass, interfaces, method
-// count and every class it refers to (from the constant pool and descriptors).
+// count and every class it refers to (from the constant pool and descriptors). For
+// Mixin classes it also decodes the annotations on the class and its members, which
+// Mixin keeps in the class file.
 
 use std::collections::BTreeSet;
 
 use anyhow::{Result, bail};
+
+use crate::source::{Annotation, Member, Value};
 
 pub(crate) struct ClassFile {
     /// Dotted name, nested classes joined with `.`: `com.demo.Foo.Bar`.
@@ -17,17 +21,49 @@ pub(crate) struct ClassFile {
     pub references: BTreeSet<String>,
     /// Whether the class carries `@Mixin` (it keeps the annotation in the class file).
     pub has_mixin_annotation: bool,
+    /// For Mixin classes: the class's annotations.
+    pub annotations: Vec<Annotation>,
+    /// For Mixin classes: its fields and methods with their annotations, without
+    /// synthetic members and static initializers.
+    pub members: Vec<Member>,
 }
 
 pub(crate) const ACC_INTERFACE: u16 = 0x0200;
 pub(crate) const ACC_ANNOTATION: u16 = 0x2000;
 pub(crate) const ACC_ENUM: u16 = 0x4000;
+const ACC_SYNTHETIC: u16 = 0x1000;
+
+const MIXIN_DESCRIPTOR: &str = "Lorg/spongepowered/asm/mixin/Mixin;";
 
 enum Constant {
     Utf8(String),
+    Integer(i32),
     Class(u16),
     NameAndType(u16),
     Other,
+}
+
+struct Pool(Vec<Constant>);
+
+impl Pool {
+    fn utf8(&self, i: u16) -> Option<&str> {
+        match self.0.get(i as usize) {
+            Some(Constant::Utf8(s)) => Some(s),
+            _ => None,
+        }
+    }
+    fn class_name(&self, i: u16) -> Option<&str> {
+        match self.0.get(i as usize) {
+            Some(Constant::Class(n)) => self.utf8(*n),
+            _ => None,
+        }
+    }
+    fn int(&self, i: u16) -> Option<i32> {
+        match self.0.get(i as usize) {
+            Some(Constant::Integer(v)) => Some(*v),
+            _ => None,
+        }
+    }
 }
 
 struct Reader<'a> {
@@ -35,8 +71,8 @@ struct Reader<'a> {
     pos: usize,
 }
 
-impl Reader<'_> {
-    fn take(&mut self, n: usize) -> Result<&[u8]> {
+impl<'a> Reader<'a> {
+    fn take(&mut self, n: usize) -> Result<&'a [u8]> {
         let Some(slice) = self.bytes.get(self.pos..self.pos + n) else {
             bail!("class file ends early");
         };
@@ -79,7 +115,11 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<ClassFile> {
                 r.u16()?; // name
                 Constant::NameAndType(r.u16()?)
             }
-            3 | 4 => {
+            3 => {
+                let b = r.take(4)?;
+                Constant::Integer(i32::from_be_bytes([b[0], b[1], b[2], b[3]]))
+            }
+            4 => {
                 r.take(4)?;
                 Constant::Other
             }
@@ -104,14 +144,13 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<ClassFile> {
         };
         pool.push(constant);
     }
-    let utf8 = |i: u16| match pool.get(i as usize) {
-        Some(Constant::Utf8(s)) => Some(s.as_str()),
-        _ => None,
-    };
-    let class_name = |i: u16| match pool.get(i as usize) {
-        Some(Constant::Class(n)) => utf8(*n),
-        _ => None,
-    };
+    let pool = Pool(pool);
+    let utf8 = |i: u16| pool.utf8(i);
+    let class_name = |i: u16| pool.class_name(i);
+    let has_mixin_annotation = pool
+        .0
+        .iter()
+        .any(|c| matches!(c, Constant::Utf8(s) if s == MIXIN_DESCRIPTOR));
 
     let access = r.u16()?;
     let this = class_name(r.u16()?).unwrap_or("").to_string();
@@ -129,7 +168,7 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<ClassFile> {
     }
 
     let mut references = BTreeSet::new();
-    for c in &pool {
+    for c in &pool.0 {
         match c {
             Constant::Class(n) => {
                 if let Some(name) = utf8(*n) {
@@ -150,29 +189,36 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<ClassFile> {
     }
 
     let mut methods = 0;
+    let mut members = Vec::new();
     for table in 0..2 {
+        let is_method = table == 1;
         let n = r.u16()?;
         for _ in 0..n {
-            r.u16()?; // access
-            r.u16()?; // name
+            let member_access = r.u16()?;
+            let name = utf8(r.u16()?).unwrap_or("").to_string();
             if let Some(desc) = utf8(r.u16()?) {
                 descriptor_classes(desc, &mut references);
             }
-            let attributes = r.u16()?;
-            for _ in 0..attributes {
-                r.u16()?;
-                let len = r.u32()? as usize;
-                r.take(len)?;
+            let annotations = read_attributes(&mut r, &pool, has_mixin_annotation)?;
+            let keep = has_mixin_annotation
+                && member_access & ACC_SYNTHETIC == 0
+                && name != "<clinit>"
+                && !name.starts_with("lambda$");
+            if keep {
+                members.push(Member {
+                    is_constructor: name == "<init>",
+                    name,
+                    is_method,
+                    annotations,
+                });
             }
         }
-        if table == 1 {
+        if is_method {
             methods = n as usize;
         }
     }
+    let annotations = read_attributes(&mut r, &pool, has_mixin_annotation)?;
 
-    let has_mixin_annotation = pool
-        .iter()
-        .any(|c| matches!(c, Constant::Utf8(s) if s == "Lorg/spongepowered/asm/mixin/Mixin;"));
     let name = dotted(&this);
     let outer = dotted(this.split('$').next().unwrap_or(&this));
     references.remove(&name);
@@ -185,7 +231,88 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<ClassFile> {
         methods,
         references,
         has_mixin_annotation,
+        annotations,
+        members,
     })
+}
+
+/// Reads an attribute table. When `decode` is set, returns the annotations in its
+/// `Runtime(In)visibleAnnotations` attributes; otherwise skips everything.
+fn read_attributes(r: &mut Reader, pool: &Pool, decode: bool) -> Result<Vec<Annotation>> {
+    let mut out = Vec::new();
+    let count = r.u16()?;
+    for _ in 0..count {
+        let name = pool.utf8(r.u16()?).unwrap_or("");
+        let len = r.u32()? as usize;
+        let data = r.take(len)?;
+        if decode
+            && matches!(
+                name,
+                "RuntimeInvisibleAnnotations" | "RuntimeVisibleAnnotations"
+            )
+        {
+            let mut a = Reader {
+                bytes: data,
+                pos: 0,
+            };
+            for _ in 0..a.u16()? {
+                out.push(read_annotation(&mut a, pool)?);
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn read_annotation(r: &mut Reader, pool: &Pool) -> Result<Annotation> {
+    let name = descriptor_name(pool.utf8(r.u16()?).unwrap_or(""));
+    let mut args = Vec::new();
+    for _ in 0..r.u16()? {
+        let key = pool.utf8(r.u16()?).unwrap_or("").to_string();
+        args.push((key, read_value(r, pool)?));
+    }
+    Ok(Annotation { name, args })
+}
+
+fn read_value(r: &mut Reader, pool: &Pool) -> Result<Value> {
+    let tag = r.u8()?;
+    Ok(match tag {
+        b's' => Value::Str(pool.utf8(r.u16()?).unwrap_or("").to_string()),
+        b'Z' => Value::Bool(pool.int(r.u16()?).unwrap_or(0) != 0),
+        b'B' | b'C' | b'I' | b'S' => Value::Other(
+            pool.int(r.u16()?)
+                .map(|v| v.to_string())
+                .unwrap_or_default(),
+        ),
+        b'D' | b'F' | b'J' => {
+            r.u16()?;
+            Value::Other(String::new())
+        }
+        // Enum constant: `At.Shift.AFTER` becomes `org...At.Shift.AFTER`.
+        b'e' => {
+            let ty = descriptor_name(pool.utf8(r.u16()?).unwrap_or(""));
+            let constant = pool.utf8(r.u16()?).unwrap_or("");
+            Value::Name(format!("{ty}.{constant}"))
+        }
+        b'c' => Value::Class(descriptor_name(pool.utf8(r.u16()?).unwrap_or(""))),
+        b'@' => Value::Annotation(read_annotation(r, pool)?),
+        b'[' => {
+            let n = r.u16()?;
+            let mut items = Vec::with_capacity(n as usize);
+            for _ in 0..n {
+                items.push(read_value(r, pool)?);
+            }
+            Value::Array(items)
+        }
+        other => bail!("unknown annotation value tag {}", other as char),
+    })
+}
+
+/// `Lnet/minecraft/world/level/Level;` → `net.minecraft.world.level.Level`.
+fn descriptor_name(desc: &str) -> String {
+    match desc.strip_prefix('L').and_then(|d| d.strip_suffix(';')) {
+        Some(internal) => dotted(internal),
+        None => desc.to_string(),
+    }
 }
 
 /// Adds the classes named in a descriptor such as `(Lnet/minecraft/world/level/Level;I)V`.

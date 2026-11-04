@@ -20,7 +20,7 @@ mod has to reach 26.3 first.
 | --- | --- |
 | Code | 2,011 classes, 275,038 lines, 16,076 methods |
 | Mixins | 65 classes, 144 members: 108 map to a supported horizon-mixins kind, 29 are `@Shadow` (not needed), 5 partial (`TAIL` injections), 2 blocked (Mixins that add an interface) |
-| Registries found in code | 410: block 200, block_entity_type 114, item 58, and 20 more registries (entries made through helpers are not counted yet) |
+| Registries found in code | 570: block 207, block_entity_type 114, item 88, data_component_type 57, and 21 more registries |
 | Libraries | Catnip in 997 classes, Flywheel 235, Registrate 93, Ponder 77, ComputerCraft API 45, JEI 32 |
 | Loader API | 221 NeoForge classes; the most used are `FluidStack`, `IItemHandler`, `Capabilities` and the event bus |
 | Resources | 5,076 asset files, 4,421 data files |

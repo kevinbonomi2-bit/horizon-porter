@@ -9,7 +9,8 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use porter_model::{ClassInfo, ClassKind, InputKind, MixinClass, ModScan, Side};
 
-use crate::{classfile, metadata, resources};
+use crate::source::{Annotation, Member, Value};
+use crate::{classfile, metadata, mixin, resources};
 
 /// Class files bigger than this are skipped (no mod class is near it).
 const MAX_CLASS_BYTES: u64 = 8 * 1024 * 1024;
@@ -71,6 +72,7 @@ pub(crate) fn scan(path: &Path) -> Result<ModScan> {
         }
     }
     mods.sort_by(|a, b| a.path.cmp(&b.path));
+    metadata::drop_own_dependencies(&mut mods);
 
     let listed: BTreeSet<&str> = mods
         .iter()
@@ -93,11 +95,12 @@ pub(crate) fn scan(path: &Path) -> Result<ModScan> {
     // Nested classes fold into their top-level class, as in a source scan.
     let mut top: BTreeMap<String, ClassInfo> = BTreeMap::new();
     let mut nested_refs: Vec<(String, BTreeSet<String>)> = Vec::new();
-    let mut mixin_flags: BTreeSet<String> = BTreeSet::new();
+    // Mixin classes' annotations and members, by class name.
+    let mut mixin_details: BTreeMap<String, (Vec<Annotation>, Vec<Member>)> = BTreeMap::new();
     for c in classes {
         let outer = c.outer.clone();
         if c.has_mixin_annotation {
-            mixin_flags.insert(outer.clone());
+            mixin_details.insert(c.name.clone(), (c.annotations, c.members));
         }
         if outer != c.name {
             nested_refs.push((outer, c.references));
@@ -148,22 +151,25 @@ pub(crate) fn scan(path: &Path) -> Result<ModScan> {
 
     let mut mixins = Vec::new();
     for info in top.values_mut() {
-        if mixin_flags.contains(&info.name) || config_sides.contains_key(info.name.as_str()) {
-            info.is_mixin = true;
-            mixins.push(MixinClass {
-                name: info.name.clone(),
-                targets: Vec::new(),
-                side: info.side,
-                added_interfaces: info.interfaces.clone(),
-                members: Vec::new(),
-            });
+        let details = mixin_details.remove(&info.name);
+        if details.is_none() && !config_sides.contains_key(info.name.as_str()) {
+            continue;
         }
-    }
-    if !mixins.is_empty() {
-        warnings.push(
-            "jar scan: Mixin targets and injections are read from source only; scan the source tree for them"
-                .into(),
-        );
+        info.is_mixin = true;
+        let (annotations, java_members) = details.unwrap_or_default();
+        let mut members = mixin::members(&java_members);
+        members.extend(info.interfaces.iter().map(|i| mixin::interface_member(i)));
+        mixins.push(MixinClass {
+            name: info.name.clone(),
+            targets: annotations
+                .iter()
+                .find(|a| a.simple_name() == "Mixin")
+                .map(mixin_targets)
+                .unwrap_or_default(),
+            side: info.side,
+            added_interfaces: info.interfaces.clone(),
+            members,
+        });
     }
     warnings.push("jar scan: registrations are read from source only".into());
 
@@ -179,4 +185,28 @@ pub(crate) fn scan(path: &Path) -> Result<ModScan> {
         bundled_jars,
         warnings,
     })
+}
+
+/// A compiled `@Mixin`'s targets: `value` holds classes, `targets` internal names.
+fn mixin_targets(annotation: &Annotation) -> Vec<String> {
+    let mut out = Vec::new();
+    for v in annotation
+        .arg("value")
+        .map(Value::items)
+        .unwrap_or_default()
+    {
+        if let Value::Class(name) = v {
+            out.push(name.clone());
+        }
+    }
+    for v in annotation
+        .arg("targets")
+        .map(Value::items)
+        .unwrap_or_default()
+    {
+        if let Some(s) = v.as_str() {
+            out.push(s.replace(['/', '$'], "."));
+        }
+    }
+    out
 }

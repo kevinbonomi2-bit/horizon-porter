@@ -19,6 +19,8 @@ const SKIP_DIRS: &[&str] = &[
     "runs",
     "target",
     "node_modules",
+    // Gradle build logic, not the mod.
+    "buildSrc",
 ];
 
 /// One file of the tree.
