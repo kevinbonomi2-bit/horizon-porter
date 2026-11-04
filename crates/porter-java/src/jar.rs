@@ -183,6 +183,7 @@ pub(crate) fn scan(path: &Path) -> Result<ModScan> {
         registrations: Vec::new(),
         resources: resources::summarize(names.iter().map(String::as_str)),
         bundled_jars,
+        client: Default::default(),
         warnings,
     })
 }

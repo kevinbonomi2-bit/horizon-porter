@@ -18,7 +18,8 @@ use std::path::Path;
 
 use anyhow::{Result, bail};
 use porter_model::{
-    ClassInfo, InputKind, MixinClass, MixinConfig, ModMetadata, ModScan, Registration, Side,
+    ClassInfo, ClientFeatures, InputKind, KeyBinding, MixinClass, MixinConfig, ModMetadata,
+    ModScan, Registration, Side,
 };
 
 use source::{Annotation, ParsedFile, Value};
@@ -247,6 +248,7 @@ fn assemble(
     }
 
     let registrations = registrations(&parsed);
+    let client = client_features(&parsed);
     ModScan {
         input: root.display().to_string(),
         input_kind: InputKind::SourceTree,
@@ -257,8 +259,83 @@ fn assemble(
         registrations,
         resources,
         bundled_jars: Vec::new(),
+        client,
         warnings,
     }
+}
+
+/// Client APIs whose use marks a file's `literal("...")` registrations as client
+/// commands rather than server commands.
+const CLIENT_COMMAND_APIS: &[&str] = &[
+    "net.fabricmc.fabric.api.client.command",
+    "net.neoforged.neoforge.client.event.RegisterClientCommandsEvent",
+];
+
+/// Key bindings and client commands, from the parsed files.
+fn client_features(parsed: &[(String, ParsedFile)]) -> ClientFeatures {
+    let mut features = ClientFeatures::default();
+    for (_, file) in parsed {
+        for (args, enclosing) in &file.key_mappings {
+            // new KeyMapping("key.demo.zoom", [InputConstants.Type.KEYSYM,] GLFW.GLFW_KEY_Z, "category")
+            let Some(name) = args.first().and_then(|a| string_literal(a)) else {
+                continue;
+            };
+            let default_key = args
+                .iter()
+                .find_map(|a| porter_map::glfw_key_name(a.trim()))
+                .unwrap_or_else(|| "key.keyboard.unknown".to_string());
+            if !features.keys.iter().any(|k| k.name == name) {
+                features.keys.push(KeyBinding {
+                    name,
+                    default_key,
+                    class: qualify(&file.package, enclosing),
+                });
+            }
+        }
+
+        let client_file = file.imports.iter().any(|i| {
+            CLIENT_COMMAND_APIS
+                .iter()
+                .any(|api| i.path.starts_with(api))
+        });
+        if !client_file {
+            continue;
+        }
+        // dispatcher.register(ClientCommandManager.literal("zoom")...)
+        for call in file.calls.iter().filter(|c| c.method == "register") {
+            if let Some(name) = call.args.first().and_then(|a| root_literal(a))
+                && !features.commands.contains(&name)
+            {
+                features.commands.push(name);
+            }
+        }
+    }
+    features
+}
+
+/// `"key.demo.zoom"` → `key.demo.zoom`, when the text is one string literal.
+fn string_literal(text: &str) -> Option<String> {
+    let inner = text.trim().strip_prefix('"')?.strip_suffix('"')?;
+    (!inner.contains('"')).then(|| inner.to_string())
+}
+
+/// The command name of a Brigadier root, `literal("zoom")` or
+/// `ClientCommandManager.literal("zoom").then(...)`: `zoom`.
+fn root_literal(arg: &str) -> Option<String> {
+    let arg = arg.trim_start();
+    let at = arg.find("literal(")?;
+    let qualifier = &arg[..at];
+    if !qualifier
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.')
+    {
+        return None;
+    }
+    let rest = arg[at + "literal(".len()..]
+        .trim_start()
+        .strip_prefix('"')?;
+    let name = &rest[..rest.find('"')?];
+    (!name.is_empty()).then(|| name.to_string())
 }
 
 /// Resolves type names as written in one file to fully qualified names.

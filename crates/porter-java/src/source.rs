@@ -146,6 +146,9 @@ pub(crate) struct ParsedFile {
     pub registers: Vec<RegisterField>,
     /// Fully qualified type names used in code, such as `net.minecraft.world.level.Level`.
     pub qualified_refs: Vec<String>,
+    /// `new KeyMapping(...)` (or Yarn's `KeyBinding`): each one's argument texts and
+    /// the top-level type it is in.
+    pub key_mappings: Vec<(Vec<String>, String)>,
     /// Methods and constructors, referred to by [`Call::in_method`].
     pub methods: Vec<MethodSig>,
     /// The first line (1-based) tree-sitter could not parse, if any.
@@ -193,6 +196,7 @@ pub(crate) fn parse(parser: &mut Parser, src: &str) -> Result<ParsedFile> {
         calls: Vec::new(),
         registers: Vec::new(),
         qualified_refs: Vec::new(),
+        key_mappings: Vec::new(),
         methods: Vec::new(),
         syntax_error_line: root.has_error().then(|| first_error_line(root)),
     };
@@ -278,6 +282,27 @@ fn walk_type(type_node: Node, src: &str, enclosing: &str, file: &mut ParsedFile)
                     .extend(call_at(node, src, enclosing, params, in_method));
             }
             "field_declaration" => register_fields_at(node, src, enclosing, &mut file.registers),
+            "object_creation_expression" => {
+                let ty = node
+                    .child_by_field_name("type")
+                    .map(text)
+                    .unwrap_or_default();
+                let simple = base_type(&ty);
+                let simple = simple.rsplit('.').next().unwrap_or("");
+                if simple == "KeyMapping" || simple == "KeyBinding" {
+                    let args = node
+                        .child_by_field_name("arguments")
+                        .map(|a| {
+                            named_children(a)
+                                .into_iter()
+                                .filter(|n| !is_comment(*n))
+                                .map(text)
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    file.key_mappings.push((args, enclosing.to_string()));
+                }
+            }
             // `a.b.C` nests a scoped_type_identifier for each dot: only the
             // outermost is the whole name.
             "scoped_type_identifier" if parent_kind != "scoped_type_identifier" => {

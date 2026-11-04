@@ -38,6 +38,19 @@ scenarios we check.
   whose id is a constant (`AEBlockIds.QUARTZ`) are counted without their id, and Java
   type annotations on varargs (`String @NotNull ...`) are reported as unreadable lines.
 
+- **M1, first version (2026-11-04):** `port` generates a native mod bundle for client
+  mods. It wires eight hook points completely (`mods`, `key`, `command`, `hud`, `tick`,
+  `wheel`, `settings`, `settings_click`) to stubs in `runtime.rs`, and maps 38 Fabric
+  and NeoForge client APIs to Horizon hooks for the `PORTING.md` checklist. The
+  generated helpers are type-checked in CI against a mock of Horizon's hook API that
+  copies its real signatures. Still to do for M1: build a ported mod into Horizon with
+  `native.py check` (it needs WSL on Windows) and play it, and port a real small mod
+  end to end.
+- **Also found:** Horizon now has 427 versioned hook points (`native-hooks.json`) and
+  159 helpers, far beyond the documented client set: blocks, block entities (with
+  drawing helpers), entities, loot, players, screens and more. That makes M2 (content
+  with behaviour) closer than this plan first assumed.
+
 ## Working with Horizon
 
 The tool depends on Horizon gaining hook points for things mods need (block behaviour,

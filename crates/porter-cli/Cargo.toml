@@ -16,4 +16,5 @@ clap = { version = "4.6.7", features = ["derive"] }
 porter-java = { path = "../porter-java" }
 porter-model = { path = "../porter-model" }
 porter-report = { path = "../porter-report" }
+porter-translate = { path = "../porter-translate" }
 serde_json = "1.0.154"

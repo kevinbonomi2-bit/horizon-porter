@@ -1,10 +1,17 @@
 [package]
 name = "porter-translate"
-description = "Translates Java classes to Rust modules: rule-based pass, then AI per method with a compile/fix loop."
+description = "Translates Java mods to Horizon native mod bundles: rule-based bundle generation now, AI-assisted method translation later."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish = false
 
 [dependencies]
+anyhow = "1.0.104"
+porter-map = { path = "../porter-map" }
 porter-model = { path = "../porter-model" }
+serde_json = "1.0.154"
+
+[dev-dependencies]
+porter-java = { path = "../porter-java" }
+toml = "1.2.0"

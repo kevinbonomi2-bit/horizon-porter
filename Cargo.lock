@@ -285,6 +285,7 @@ dependencies = [
  "porter-java",
  "porter-model",
  "porter-report",
+ "porter-translate",
  "serde_json",
 ]
 
@@ -300,6 +301,7 @@ name = "porter-java"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "porter-map",
  "porter-model",
  "serde",
  "serde_json",
@@ -343,7 +345,12 @@ dependencies = [
 name = "porter-translate"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "porter-java",
+ "porter-map",
  "porter-model",
+ "serde_json",
+ "toml",
 ]
 
 [[package]]

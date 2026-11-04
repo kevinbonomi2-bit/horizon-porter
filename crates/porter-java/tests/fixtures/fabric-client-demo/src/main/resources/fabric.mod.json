@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "id": "compasshud",
+  "version": "1.2.0",
+  "name": "Compass HUD",
+  "description": "Shows which way you are facing.",
+  "license": "MIT",
+  "environment": "client",
+  "entrypoints": {
+    "client": ["net.compasshud.CompassHudClient"],
+    "modmenu": ["net.compasshud.CompassModMenu"]
+  },
+  "depends": {
+    "fabricloader": ">=0.17",
+    "minecraft": "~26.3",
+    "fabric-api": "*"
+  }
+}

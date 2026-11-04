@@ -61,6 +61,29 @@ horizon-porter report path/to/your-mod --html report.html   # a page to open or 
 `--html` writes the whole report as a single self-contained page (no scripts, nothing
 loaded from elsewhere). Open it in a browser, attach it to an issue, or post it.
 
+### Porting a client mod
+
+```
+horizon-porter port path/to/your-mod --out my-mod-horizon
+```
+
+`port` writes a Horizon native mod (a [horizon-mixins](https://github.com/horizon-rust/horizon-mixins)
+bundle) for a client mod:
+
+- **Wired for you:** the mod's row in Options > Mods, its key bindings (with their
+  default keys and English labels, rebindable by players), its client commands, a HUD
+  box, the client tick, the mouse wheel and a settings page. Each hook calls a function
+  in `runtime.rs`.
+- **Left for you:** the Java logic itself. Each stub in `runtime.rs` names the Java
+  class to port into it, and `PORTING.md` lists every class, the Mixins with their
+  verdicts, and the other Horizon hooks the mod needs (screens, tooltips, field of view,
+  chat...), mapped from the Fabric and NeoForge events it uses.
+
+`cargo test` works in the generated folder straight away. To build the game with it,
+use Horizon's tools (the steps are at the end of `PORTING.md`). `port` never
+overwrites a folder that has files unless you pass `--force`, and then only replaces
+its own files.
+
 The path is your mod's source folder (the Gradle project; multi-loader projects work)
 or a built `.jar`. The source gives the full picture. A jar gives classes, metadata and
 resources, but not Mixin details or registrations.

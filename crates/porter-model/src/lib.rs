@@ -198,6 +198,9 @@ pub struct ModScan {
     pub resources: ResourceSummary,
     /// Jars bundled inside a jar (jar-in-jar), by path.
     pub bundled_jars: Vec<String>,
+    /// Client features found in the code (source scans only).
+    #[serde(default)]
+    pub client: ClientFeatures,
     /// Problems the scan hit but worked around, and things it could not read.
     pub warnings: Vec<String>,
 }
@@ -211,6 +214,8 @@ pub struct ModMetadata {
     pub id: Option<String>,
     pub name: Option<String>,
     pub version: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
     pub license: Option<String>,
     /// The Minecraft version or range the mod declares.
     pub minecraft: Option<String>,
@@ -303,6 +308,25 @@ pub struct Registration {
     /// How it was registered: `DeferredRegister`, `Registry.register`, `Registrate`.
     pub via: String,
     /// The class that registers it.
+    pub class: String,
+}
+
+/// Client features the porter can wire to Horizon's hook points.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ClientFeatures {
+    pub keys: Vec<KeyBinding>,
+    /// Root command names (`/zoom` → `zoom`), from `dispatcher.register(literal("zoom"))`.
+    pub commands: Vec<String>,
+}
+
+/// A key binding the mod creates (`new KeyMapping("key.demo.zoom", GLFW_KEY_Z, ...)`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeyBinding {
+    /// The translation key, which is also the binding's name: `key.demo.zoom`.
+    pub name: String,
+    /// The default key in vanilla's naming, as Horizon uses it: `key.keyboard.z`.
+    pub default_key: String,
+    /// The class that creates it.
     pub class: String,
 }
 

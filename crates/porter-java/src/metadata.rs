@@ -125,6 +125,7 @@ fn fabric(path: &str, text: &str) -> Result<ModMetadata> {
         id: string("id"),
         name: string("name"),
         version: string("version"),
+        description: string("description"),
         license,
         minecraft,
         dependencies,
@@ -190,6 +191,7 @@ fn mods_toml(loader: Loader, path: &str, text: &str) -> Result<ModMetadata> {
         id,
         name: mod_string("displayName"),
         version: mod_string("version"),
+        description: mod_string("description").map(|d| d.trim().to_string()),
         license: doc
             .get("license")
             .and_then(|v| v.as_str())

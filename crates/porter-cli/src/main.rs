@@ -42,8 +42,17 @@ enum Command {
         #[arg(long, value_name = "FILE")]
         html: Option<PathBuf>,
     },
-    /// Generate the Horizon bundle and content mod (not implemented yet)
-    Port { path: PathBuf },
+    /// Generate a Horizon native mod bundle for a client mod, with a porting checklist
+    Port {
+        /// The mod's source directory (a Gradle project)
+        path: PathBuf,
+        /// The folder to write the bundle into (empty or new)
+        #[arg(long, value_name = "DIR")]
+        out: PathBuf,
+        /// Replace the generated files in a folder that already has files
+        #[arg(long)]
+        force: bool,
+    },
     /// Build the port against Horizon and collect errors (not implemented yet)
     Check { path: PathBuf },
     /// Show the port's progress, class by class (not implemented yet)
@@ -89,7 +98,46 @@ fn run(cli: Cli) -> Result<ExitCode> {
             }
             Ok(ExitCode::SUCCESS)
         }
-        Command::Port { .. } | Command::Check { .. } | Command::Status { .. } => {
+        Command::Port { path, out, force } => {
+            if !path.is_dir() {
+                anyhow::bail!("port needs the mod's source folder, not a jar");
+            }
+            let scan = porter_java::scan(&path)?;
+            let lang = porter_translate::bundle::load_lang(&scan);
+            let bundle = porter_translate::bundle::generate(&scan, &lang);
+            porter_translate::bundle::write(&bundle, &out, force)?;
+            println!(
+                "Wrote a Horizon native mod bundle for `{}` to {}\n",
+                bundle.id,
+                out.display()
+            );
+            println!(
+                "Wired hooks: {}",
+                bundle
+                    .wired
+                    .keys()
+                    .map(|h| format!("native_{h}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            if !bundle.unwired.is_empty() {
+                println!(
+                    "To wire by hand: {}",
+                    bundle
+                        .unwired
+                        .keys()
+                        .map(|h| format!("native_{h}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+            }
+            println!(
+                "Next: port the Java logic into mixins/{}/runtime.rs; PORTING.md lists every class.",
+                bundle.id
+            );
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Check { .. } | Command::Status { .. } => {
             eprintln!("not implemented yet: see docs/ROADMAP.md");
             Ok(ExitCode::FAILURE)
         }
