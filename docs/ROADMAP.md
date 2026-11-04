@@ -38,14 +38,16 @@ scenarios we check.
   whose id is a constant (`AEBlockIds.QUARTZ`) are counted without their id, and Java
   type annotations on varargs (`String @NotNull ...`) are reported as unreadable lines.
 
-- **M1, first version (2026-11-04):** `port` generates a native mod bundle for client
-  mods. It wires eight hook points completely (`mods`, `key`, `command`, `hud`, `tick`,
-  `wheel`, `settings`, `settings_click`) to stubs in `runtime.rs`, and maps 38 Fabric
-  and NeoForge client APIs to Horizon hooks for the `PORTING.md` checklist. The
-  generated helpers are type-checked in CI against a mock of Horizon's hook API that
-  copies its real signatures. Still to do for M1: build a ported mod into Horizon with
-  `native.py check` (it needs WSL on Windows) and play it, and port a real small mod
-  end to end.
+- **M1, done (2026-11-04):** `port` generates a native mod bundle for client mods,
+  with eight hook points wired (`mods`, `key`, `command`, `hud`, `tick`, `wheel`,
+  `settings`, `settings_click`) to stubs that get the player, and 38 Fabric and
+  NeoForge client APIs mapped to Horizon hooks for the `PORTING.md` checklist. The
+  bundle declares hook points version 1 (`horizon-native.json`), so it builds on the
+  player's Horizon. `build` compiles it with the Horizon launcher into its own instance
+  and `package` writes a `.hnmod`. **Tested live:** Compass HUD, ported and its logic
+  filled in, built with the launcher and played in Horizon (keys, HUD, command, the
+  Options > Mods row). The helpers are also type-checked in CI against a mock of
+  Horizon's hook API.
 - **Desktop app (2026-11-04):** Horizon Porter (`app/`, Tauri) wraps scan, report and
   port in a drag-and-drop window, with installers for Windows, macOS and Linux in each
   release. Designed with the unslop and oil-ui skills (see the README).

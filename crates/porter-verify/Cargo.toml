@@ -1,10 +1,12 @@
 [package]
 name = "porter-verify"
-description = "Runs Horizon's native mod checks and tests, and parses compiler diagnostics."
+description = "Builds ported mods with the player's Horizon launcher (native-build), with live progress."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish = false
 
 [dependencies]
-porter-model = { path = "../porter-model" }
+anyhow = "1.0.104"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"

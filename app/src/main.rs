@@ -11,14 +11,33 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use porter_model::{InputKind, ModScan};
+use porter_verify::{Launcher, Trust};
 use serde::Serialize;
-use tauri::{AppHandle, DragDropEvent, Emitter, State, WindowEvent};
+use tauri::{AppHandle, DragDropEvent, Emitter, Manager, State, WindowEvent};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tauri_plugin_opener::OpenerExt;
 
 /// The mod scanned last.
 #[derive(Default)]
 struct Current(Mutex<Option<ModScan>>);
+
+/// The mod ported last: its id and the folder it was written to.
+#[derive(Default)]
+struct Ported(Mutex<Option<(String, PathBuf)>>);
+
+/// The Horizon launcher, once found or chosen, and the instance built last.
+#[derive(Default)]
+struct Horizon {
+    launcher: Mutex<Option<Launcher>>,
+    built: Mutex<Option<porter_verify::Instance>>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BuildView {
+    instance: String,
+    result: String,
+}
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -169,6 +188,7 @@ async fn port(app: AppHandle, current: State<'_, Current>) -> Result<Option<Port
         }
     }
     porter_translate::bundle::write(&bundle, &out, has_files).map_err(|e| format!("{e:#}"))?;
+    *app.state::<Ported>().0.lock().map_err(message)? = Some((bundle.id.clone(), out.clone()));
     Ok(Some(PortView {
         id: bundle.id.clone(),
         out: out.display().to_string(),
@@ -188,17 +208,154 @@ fn open_path(app: AppHandle, path: String) -> Result<(), String> {
     app.opener().open_path(path, None::<&str>).map_err(message)
 }
 
+/// Where the launcher's path is remembered once the player has shown it.
+fn launcher_memory(app: &AppHandle) -> Option<PathBuf> {
+    app.path()
+        .app_config_dir()
+        .ok()
+        .map(|d| d.join("launcher-path.txt"))
+}
+
+/// The Horizon launcher: remembered, found in its usual places, or shown by the
+/// player. None when they cancel.
+fn launcher(app: &AppHandle) -> Result<Option<Launcher>, String> {
+    let horizon = app.state::<Horizon>();
+    if let Some(found) = horizon.launcher.lock().map_err(message)?.clone() {
+        return Ok(Some(found));
+    }
+    let remembered = launcher_memory(app)
+        .and_then(|f| std::fs::read_to_string(f).ok())
+        .map(|p| PathBuf::from(p.trim()));
+    let found = remembered
+        .and_then(|p| Launcher::at(&p).ok())
+        .or_else(|| Launcher::find(None).ok());
+    let launcher = match found {
+        Some(l) => l,
+        None => {
+            let show = app
+                .dialog()
+                .message("Horizon Porter could not find the Horizon launcher. Show it where the launcher is?")
+                .title("Find the Horizon launcher")
+                .buttons(MessageDialogButtons::OkCancelCustom(
+                    "Choose the launcher".into(),
+                    "Cancel".into(),
+                ))
+                .blocking_show();
+            if !show {
+                return Ok(None);
+            }
+            let Some(file) = app
+                .dialog()
+                .file()
+                .set_title("Choose horizon-launcher")
+                .blocking_pick_file()
+            else {
+                return Ok(None);
+            };
+            let path = file.into_path().map_err(message)?;
+            let launcher = Launcher::at(&path).map_err(|e| format!("{e:#}"))?;
+            if let Some(memory) = launcher_memory(app) {
+                if let Some(dir) = memory.parent() {
+                    let _ = std::fs::create_dir_all(dir);
+                }
+                let _ = std::fs::write(memory, path.display().to_string());
+            }
+            launcher
+        }
+    };
+    *horizon.launcher.lock().map_err(message)? = Some(launcher.clone());
+    Ok(Some(launcher))
+}
+
+/// Builds the mod ported last into a "<id> port" instance with the player's
+/// launcher, after the player says they trust its code. Progress arrives as
+/// "build-progress" events.
+#[tauri::command]
+async fn build(app: AppHandle, ported: State<'_, Ported>) -> Result<Option<BuildView>, String> {
+    let (id, out) = ported
+        .0
+        .lock()
+        .map_err(message)?
+        .clone()
+        .ok_or_else(|| "Port a mod first".to_string())?;
+    // Native code is the player's decision: ask every time, in plain words.
+    let trusted = app
+        .dialog()
+        .message(format!(
+            "Building compiles the Rust code in {} into Horizon. Native mods are not sandboxed: \
+             the code runs with your rights on this computer. Build only code you have read and trust.",
+            out.join("mixins").join(&id).display()
+        ))
+        .title("Trust this mod's code")
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            "I trust it: build".into(),
+            "Cancel".into(),
+        ))
+        .blocking_show();
+    if !trusted {
+        return Ok(None);
+    }
+    let Some(launcher) = launcher(&app)? else {
+        return Ok(None);
+    };
+    let events = app.clone();
+    let (instance, result) = tauri::async_runtime::spawn_blocking(move || {
+        let instance = launcher.ensure_instance(&format!("{id} port"))?;
+        let folder = porter_verify::build_folder(&out)?;
+        let _ = events.emit(
+            "build-progress",
+            format!(
+                "Building into \"{}\" with {}",
+                instance.name, launcher.version
+            ),
+        );
+        let result =
+            launcher.native_build(&folder, &instance, Trust::given_by_player(), |line| {
+                let _ = events.emit("build-progress", line.to_string());
+            })?;
+        anyhow::Ok((instance, result))
+    })
+    .await
+    .map_err(message)?
+    .map_err(|e| format!("{e:#}"))?;
+    let name = instance.name.clone();
+    *app.state::<Horizon>().built.lock().map_err(message)? = Some(instance);
+    Ok(Some(BuildView {
+        instance: name,
+        result,
+    }))
+}
+
+/// Starts the instance built last.
+#[tauri::command]
+fn play(app: AppHandle) -> Result<(), String> {
+    let instance = app
+        .state::<Horizon>()
+        .built
+        .lock()
+        .map_err(message)?
+        .clone()
+        .ok_or_else(|| "Build the mod first".to_string())?;
+    let launcher = launcher(&app)?.ok_or_else(|| "No Horizon launcher".to_string())?;
+    launcher.play(&instance).map_err(|e| format!("{e:#}"))
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(Current::default())
+        .manage(Ported::default())
+        .manage(Horizon::default())
         .invoke_handler(tauri::generate_handler![
             scan,
             pick,
             save_report,
             port,
-            open_path
+            open_path,
+            build,
+            play
         ])
         .on_window_event(|window, event| {
             // Drops are handled natively and forwarded to the page as paths.

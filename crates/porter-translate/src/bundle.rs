@@ -131,6 +131,12 @@ pub fn generate(scan: &ModScan, lang: &Lang) -> Bundle {
     let dir = format!("mixins/{id}");
     files.insert("Cargo.toml".into(), ctx.cargo_toml());
     files.insert("compatibility.json".into(), compatibility_json());
+    // Makes the folder an unpacked .hnmod that needs hook points version 1 instead
+    // of pinning a commit, so the launcher builds it on the Horizon the player plays.
+    files.insert(
+        "horizon-native.json".into(),
+        native_manifest(&id, &version, HORIZON_REVISION, HORIZON_MIXINS_REVISION),
+    );
     files.insert(format!("{dir}/horizon-mixin.toml"), ctx.manifest());
     files.insert(format!("{dir}/runtime.rs"), ctx.runtime());
     for hook in wired.keys() {
@@ -196,6 +202,129 @@ fn compatibility_json() -> String {
     format!(
         "{{\n  \"game\": \"26.3\",\n  \"hooks\": 1,\n  \"horizon_repository\": \"https://github.com/horizon-rust/horizon\",\n  \"horizon_revision\": \"{HORIZON_REVISION}\",\n  \"horizon_mixins_repository\": \"https://github.com/horizon-rust/horizon-mixins\",\n  \"horizon_mixins_revision\": \"{HORIZON_MIXINS_REVISION}\"\n}}\n"
     )
+}
+
+/// `horizon-native.json`, as horizon-mods' `native.py package` writes it: schema 1,
+/// keys sorted, two-space indent. `horizon` is the commit the mod was tested on;
+/// `hooks` is the hook points version it needs.
+pub fn native_manifest(id: &str, version: &str, horizon: &str, mixins: &str) -> String {
+    let manifest = serde_json::json!({
+        "game": "26.3",
+        "hooks": 1,
+        "horizon": horizon,
+        "id": id,
+        "mixins": mixins,
+        "schema": 1,
+        "version": version,
+    });
+    // serde_json keeps object keys sorted (BTreeMap), as `sort_keys=True` does.
+    serde_json::to_string_pretty(&manifest).unwrap_or_default() + "\n"
+}
+
+/// Packs a bundle folder (as `port` writes it, edited or not) into a `.hnmod`, the
+/// way horizon-mods' `native.py package` does: `horizon-native.json`, the `.rs` and
+/// `.toml` files under `mixins/<id>/` and the folder's LICENSE, sorted, with fixed
+/// timestamps so the same sources give the same file. Returns its path.
+pub fn package(dir: &Path, out_dir: &Path) -> Result<std::path::PathBuf> {
+    let mixins = dir.join("mixins");
+    let mut bundles = fs::read_dir(&mixins)
+        .with_context(|| {
+            format!(
+                "{} has no mixins/ folder: is it a bundle `port` wrote?",
+                dir.display()
+            )
+        })?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().join("horizon-mixin.toml").is_file())
+        .map(|e| e.path())
+        .collect::<Vec<_>>();
+    bundles.sort();
+    let [bundle] = bundles.as_slice() else {
+        bail!(
+            "{} should hold exactly one bundle with a horizon-mixin.toml, found {}",
+            mixins.display(),
+            bundles.len()
+        );
+    };
+    let manifest_text = fs::read_to_string(bundle.join("horizon-mixin.toml"))?;
+    let manifest: toml::Table = toml::from_str(&manifest_text)
+        .with_context(|| format!("reading {}", bundle.join("horizon-mixin.toml").display()))?;
+    let id = manifest
+        .get("mod")
+        .and_then(|m| m.get("id"))
+        .and_then(|v| v.as_str())
+        .context("horizon-mixin.toml has no [mod] id")?;
+    let version = manifest
+        .get("mod")
+        .and_then(|m| m.get("version"))
+        .and_then(|v| v.as_str())
+        .context("horizon-mixin.toml has no [mod] version")?;
+    let pinned = manifest
+        .get("compatibility")
+        .and_then(|c| c.get("horizon_revision"))
+        .and_then(|v| v.as_str())
+        .unwrap_or(HORIZON_REVISION);
+    let compat: serde_json::Value = fs::read_to_string(dir.join("compatibility.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default();
+    if let Some(rev) = compat.get("horizon_revision").and_then(|v| v.as_str())
+        && rev != pinned
+    {
+        bail!(
+            "horizon-mixin.toml names commit {pinned} but compatibility.json names {rev}: make them the same"
+        );
+    }
+    let mixins_rev = compat
+        .get("horizon_mixins_revision")
+        .and_then(|v| v.as_str())
+        .unwrap_or(HORIZON_MIXINS_REVISION);
+
+    let mut files: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+    files.insert(
+        "horizon-native.json".into(),
+        native_manifest(id, version, pinned, mixins_rev).into_bytes(),
+    );
+    let mut stack = vec![bundle.clone()];
+    while let Some(d) = stack.pop() {
+        for entry in fs::read_dir(&d)? {
+            let path = entry?.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if matches!(
+                path.extension().and_then(|e| e.to_str()),
+                Some("rs" | "toml")
+            ) {
+                let rel = path
+                    .strip_prefix(bundle)
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                files.insert(format!("mixins/{id}/{rel}"), fs::read(&path)?);
+            }
+        }
+    }
+    if let Ok(licence) = fs::read(dir.join("LICENSE")) {
+        files
+            .entry(format!("mixins/{id}/LICENSE"))
+            .or_insert(licence);
+    }
+
+    fs::create_dir_all(out_dir)?;
+    let out = out_dir.join(format!("{id}-{version}.hnmod"));
+    let mut zip = zip::ZipWriter::new(fs::File::create(&out)?);
+    let time = zip::DateTime::from_date_and_time(2026, 1, 1, 0, 0, 0)
+        .map_err(|e| anyhow::anyhow!("zip time: {e:?}"))?;
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated)
+        .last_modified_time(time)
+        .unix_permissions(0o644);
+    for (name, content) in &files {
+        zip.start_file(name.as_str(), options)?;
+        std::io::Write::write_all(&mut zip, content)?;
+    }
+    zip.finish()?;
+    Ok(out)
 }
 
 struct Ctx<'a> {
@@ -333,6 +462,7 @@ pub const DESCRIPTION: &str = "{description}";
             );
         }
         r.push_str("];\n");
+        r.push_str(PLAYER_TYPE);
 
         if self.uses("command") {
             r.push_str("\n/// Commands this mod answers, without the slash.\npub const COMMANDS: &[&str] = &[");
@@ -352,28 +482,28 @@ pub const DESCRIPTION: &str = "{description}";
         if self.uses("key") {
             let _ = write!(
                 r,
-                "\n/// One of KEYS went down or up.\n///\n/// TODO: port from {}.\npub fn on_key(name: &str, pressed: bool) {{\n    let _ = (name, pressed);\n}}\n",
+                "\n/// One of KEYS went down or up.\n///\n/// TODO: port from {}.\npub fn on_key(name: &str, pressed: bool, player: Option<Player>) {{\n    let _ = (name, pressed, player);\n}}\n",
                 self.java_for("key")
             );
         }
         if self.uses("command") {
             let _ = write!(
                 r,
-                "\n/// The player typed `/{{command}} {{args}}` for one of COMMANDS. Returns the chat\n/// reply, if any.\n///\n/// TODO: port from {}.\npub fn on_command(command: &str, args: &str) -> Option<String> {{\n    let _ = args;\n    Some(format!(\"/{{command}} is not ported yet\"))\n}}\n",
+                "\n/// The player typed `/{{command}} {{args}}` for one of COMMANDS. Returns the chat\n/// reply, if any.\n///\n/// TODO: port from {}.\npub fn on_command(command: &str, args: &str, player: Option<Player>) -> Option<String> {{\n    let _ = (args, player);\n    Some(format!(\"/{{command}} is not ported yet\"))\n}}\n",
                 self.java_for("command")
             );
         }
         if self.uses("tick") {
             let _ = write!(
                 r,
-                "\n/// Once a client tick (20 a second).\n///\n/// TODO: port from {}.\npub fn tick() {{}}\n",
+                "\n/// Once a client tick (20 a second), with the player when in a world.\n///\n/// TODO: port from {}.\npub fn tick(player: Option<Player>) {{\n    let _ = player;\n}}\n",
                 self.java_for("tick")
             );
         }
         if self.uses("hud") {
             let _ = write!(
                 r,
-                "\n/// Lines of text for the mod's HUD box (top right); none hides it.\n///\n/// TODO: port from {}.\npub fn hud_lines() -> Vec<String> {{\n    Vec::new()\n}}\n",
+                "\n/// Lines of text for the mod's HUD box (top right), while in a world; none hides it.\n///\n/// TODO: port from {}.\npub fn hud_lines(player: Player) -> Vec<String> {{\n    let _ = player;\n    Vec::new()\n}}\n",
                 self.java_for("hud")
             );
         }
@@ -444,9 +574,10 @@ fn {id}_key(game: &mut crate::game::Game<'_>, key: &str, pressed: bool) {{
     if !game.native_on(m::ID) {{
         return;
     }}
+    {PLAYER}
     for (name, _, default) in m::KEYS {{
         if key == game.native_mod_key(m::ID, name, default) {{
-            m::on_key(name, pressed);
+            m::on_key(name, pressed, player);
         }}
     }}
 }}
@@ -467,7 +598,8 @@ fn {id}_command(game: &mut crate::game::Game<'_>, command: &str, ran: &mut bool)
         return;
     }}
     *ran = true;
-    if let Some(reply) = m::on_command(name, args.trim()) {{
+    {PLAYER}
+    if let Some(reply) = m::on_command(name, args.trim(), player) {{
         game.native_chat(&reply);
     }}
 }}
@@ -485,10 +617,14 @@ fn {id}_hud(
 ) {{
     use crate::game::{m} as m;
     use horizon_client::extras::Corner;
-    if !game.native_on(m::ID) || game.native_player().is_none() {{
+    if !game.native_on(m::ID) {{
         return;
     }}
-    let lines = m::hud_lines();
+    {PLAYER}
+    let Some(player) = player else {{
+        return;
+    }};
+    let lines = m::hud_lines(player);
     if lines.is_empty() {{
         return;
     }}
@@ -517,7 +653,8 @@ fn {id}_tick(game: &mut crate::game::Game<'_>) {{
     if !game.native_on(m::ID) || !game.native_window() {{
         return;
     }}
-    m::tick();
+    {PLAYER}
+    m::tick(player);
 }}
 "#
                 ),
@@ -593,6 +730,7 @@ fn {id}_click(game: &mut crate::game::Game<'_>, mod_id: &str, button: usize) {{
         p.push_str("## Files\n\n| File | What it is |\n| --- | --- |\n");
         p.push_str("| `Cargo.toml` | Runs the module's tests: `cargo test` |\n");
         p.push_str("| `compatibility.json` | The Minecraft version, hook points version and the Horizon commits the bundle targets |\n");
+        p.push_str("| `horizon-native.json` | The mod's registry manifest: it needs hook points version 1, so it builds on the Horizon the player plays |\n");
         let _ = writeln!(
             p,
             "| `mixins/{id}/horizon-mixin.toml` | The manifest: the mod, its module and one injection per hook |",
@@ -719,14 +857,56 @@ fn {id}_click(game: &mut crate::game::Game<'_>, mod_id: &str, button: usize) {{
             p,
             "\n## Build and test\n\n\
              1. `cargo test` in this folder runs the module's tests.\n\
-             2. Check it against Horizon with [horizon-mods](https://github.com/horizon-rust/horizon-mods) (on Windows, in WSL):\n   `python3 native/tools/native.py check /path/to/this/folder`\n\
-             3. Build a game with it: `horizon-launcher native-build mixins/{id} --trust-native-code`, then play the **Native mods** instance.\n\n\
-             `compatibility.json` names the commits Horizon's own native mods were tested on. Move them to a current Nightly when you test.\n",
+             2. Build it into Horizon with your Horizon launcher: `horizon-porter build . --trust-native-code` \
+             (or **Build and play** in the Horizon Porter app). It goes into its own instance, **{id} port**, so your \
+             other worlds never run it, and `--play` starts it when the build is done. The first build downloads \
+             Rust and takes several minutes; later ones are quicker. Native mods are not sandboxed: build only code \
+             you have read.\n\
+             3. Share it: `horizon-porter package .` writes `{id}-<version>.hnmod`, the file Horizon's mod registry takes.\n\n\
+             `horizon-native.json` says the mod needs hook points version 1 rather than one Horizon commit, so the \
+             launcher builds it on the Horizon the instance plays. A rebuild stays on that Horizon; \
+             `horizon-launcher native-build --update` moves an instance to a newer one.\n",
             id = self.id
         );
         p
     }
 }
+
+/// The player type of the generated module: Horizon's `NativePlayer`, as plain data,
+/// so runtime.rs compiles and tests on its own.
+const PLAYER_TYPE: &str = r#"
+/// The player, as Horizon's `native_player` gives it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Player {
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
+    /// Degrees; 0 faces south, 90 west.
+    pub yaw: f32,
+    pub pitch: f32,
+    /// `minecraft:overworld`, `minecraft:the_nether`, `minecraft:the_end`.
+    pub dimension: &'static str,
+}
+
+impl Player {
+    /// The direction the player faces, as Java's `Direction.fromYRot(yaw)`:
+    /// `south`, `west`, `north` or `east`.
+    pub fn facing(&self) -> &'static str {
+        let quarter = (f64::from(self.yaw) / 90.0).round() as i64;
+        ["south", "west", "north", "east"][quarter.rem_euclid(4) as usize]
+    }
+}
+"#;
+
+/// How a helper reads the player and turns it into the module's `Player`.
+const PLAYER: &str = "let player = game.native_player().map(|p| m::Player {
+        x: p.x,
+        y: p.y,
+        z: p.z,
+        yaw: p.yaw,
+        pitch: p.pitch,
+        dimension: p.dimension,
+    });";
 
 /// Each hook's helper parameters: (name, type, value in the hooked function). The
 /// same as Horizon's own native mods use.
@@ -803,6 +983,24 @@ mod tests {
         assert_eq!(sanitize_id("compass-hud"), "compass_hud");
         assert_eq!(sanitize_id("ModMenu"), "modmenu");
         assert_eq!(sanitize_id("2fast"), "mod_2fast");
+    }
+
+    #[test]
+    fn player_facing_matches_java() {
+        // The same arithmetic as the generated Player::facing.
+        let facing = |yaw: f32| {
+            let quarter = (f64::from(yaw) / 90.0).round() as i64;
+            ["south", "west", "north", "east"][quarter.rem_euclid(4) as usize]
+        };
+        assert_eq!(facing(0.0), "south");
+        assert_eq!(facing(90.0), "west");
+        assert_eq!(facing(-90.0), "east");
+        assert_eq!(facing(180.0), "north");
+        assert_eq!(facing(-180.0), "north");
+        assert_eq!(facing(44.0), "south");
+        assert_eq!(facing(46.0), "west");
+        assert_eq!(facing(359.0), "south");
+        assert!(PLAYER_TYPE.contains("let quarter = (f64::from(self.yaw) / 90.0).round() as i64;"));
     }
 
     #[test]

@@ -4,9 +4,10 @@ A tool for mod developers to port Minecraft Java Edition mods (Fabric, NeoForge,
 Forge; Minecraft 26.3) to [Horizon](https://github.com/horizon-rust/horizon), the
 Rust rewrite of Minecraft, as native Horizon mods.
 
-> **Status: early.** Scanning and reports work for any mod; porting works for client
-> mods (keys, commands, HUD, tick, settings), with the logic left to port by hand. The
-> plan is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and [docs/ROADMAP.md](docs/ROADMAP.md).
+> **Status: early.** Scanning and reports work for any mod. Porting works for client
+> mods (keys, commands, HUD, tick, settings), with the logic left to port by hand, and
+> a ported mod builds and plays in real Horizon through your Horizon launcher. The plan
+> is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and [docs/ROADMAP.md](docs/ROADMAP.md).
 > Not affiliated with Horizon, Mojang or Microsoft.
 
 ## Horizon Porter, the desktop app
@@ -14,8 +15,14 @@ Rust rewrite of Minecraft, as native Horizon mods.
 Drop a mod's source folder or `.jar` on the window. Horizon Porter reads it and shows
 the report: every Mixin member as a slot colored by its verdict, what the mod builds
 on, its registrations and resources. **Port to Horizon** writes the Horizon mod into a
-folder you choose, then opens it or its `PORTING.md` for you. **Save report** keeps
-the report as a page to share. Everything runs on your computer; nothing is uploaded.
+folder you choose, then opens it or its `PORTING.md` for you. **Build and play**
+compiles it into Horizon with your Horizon launcher, into an instance of its own, and
+**Play** starts it. **Save report** keeps the report as a page to share. Everything
+runs on your computer; nothing is uploaded.
+
+Building needs the [Horizon launcher](https://playhorizon.dev) installed and signed
+in. Native mods are not sandboxed, so Horizon Porter asks you to confirm you trust the
+code before every build, as the launcher does.
 
 Get the installer for your system from the
 [latest release](https://github.com/kevinbonomi2-bit/horizon-porter/releases/latest):
@@ -96,10 +103,25 @@ bundle) for a client mod:
   verdicts, and the other Horizon hooks the mod needs (screens, tooltips, field of view,
   chat...), mapped from the Fabric and NeoForge events it uses.
 
-`cargo test` works in the generated folder straight away. To build the game with it,
-use Horizon's tools (the steps are at the end of `PORTING.md`). `port` never
-overwrites a folder that has files unless you pass `--force`, and then only replaces
-its own files.
+The stubs get the player (position, yaw, pitch, dimension, and `facing()` as Java's
+`Direction.fromYRot`), so ported logic can use them. `cargo test` works in the
+generated folder straight away. `port` never overwrites a folder that has files unless
+you pass `--force`, and then only replaces its own files.
+
+### Building, playing and sharing it
+
+```
+horizon-porter build my-mod-horizon --trust-native-code --play
+horizon-porter package my-mod-horizon
+```
+
+`build` finds your Horizon launcher (or takes `--launcher PATH`) and runs its
+`native-build` into an instance of its own, **<mod id> port**, created the first time,
+so your other worlds never run the mod. It builds on the Horizon that instance plays:
+the generated `horizon-native.json` asks for hook points version 1 instead of pinning
+one Horizon commit. `--trust-native-code` is required every time, because native mods
+run unsandboxed: read the code first. `package` writes `<id>-<version>.hnmod`, the file
+Horizon's mod registry takes, packed the way Horizon's own mods are.
 
 The path is your mod's source folder (the Gradle project; multi-loader projects work)
 or a built `.jar`. The source gives the full picture. A jar gives classes, metadata and
@@ -139,7 +161,7 @@ crates/porter-map        Java → Horizon symbol and Mixin mappings
 crates/porter-mixin      Mixin translation
 crates/porter-content    data and assets → .hmod
 crates/porter-translate  Java → Rust code translation
-crates/porter-verify     builds and checks against Horizon
+crates/porter-verify     builds ported mods with the Horizon launcher
 app/                     Horizon Porter, the desktop app (Tauri; the page is in app/ui)
 modkit/                  the runtime ported mods build on
 docs/                    architecture, roadmap, the Create case study

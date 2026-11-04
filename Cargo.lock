@@ -1533,10 +1533,12 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 name = "horizon-porter-app"
 version = "0.2.0"
 dependencies = [
+ "anyhow",
  "porter-java",
  "porter-model",
  "porter-report",
  "porter-translate",
+ "porter-verify",
  "serde",
  "tauri",
  "tauri-build",
@@ -2704,6 +2706,7 @@ dependencies = [
  "porter-model",
  "porter-report",
  "porter-translate",
+ "porter-verify",
  "serde_json",
 ]
 
@@ -2769,13 +2772,16 @@ dependencies = [
  "porter-model",
  "serde_json",
  "toml 1.2.0+spec-1.1.0",
+ "zip",
 ]
 
 [[package]]
 name = "porter-verify"
 version = "0.2.0"
 dependencies = [
- "porter-model",
+ "anyhow",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

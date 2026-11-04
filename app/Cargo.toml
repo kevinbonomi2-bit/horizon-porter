@@ -14,10 +14,12 @@ path = "src/main.rs"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+anyhow = "1.0.104"
 porter-java = { path = "../crates/porter-java" }
 porter-model = { path = "../crates/porter-model" }
 porter-report = { path = "../crates/porter-report" }
 porter-translate = { path = "../crates/porter-translate" }
+porter-verify = { path = "../crates/porter-verify" }
 serde = { version = "1.0.229", features = ["derive"] }
 # custom-protocol serves the bundled ui/ folder; there is no dev server.
 tauri = { version = "2", features = ["custom-protocol"] }

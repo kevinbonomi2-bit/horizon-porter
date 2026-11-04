@@ -69,7 +69,14 @@ pub mod game {
             pub description: String,
             pub keys: Vec<[String; 3]>,
         }
-        pub struct NativePlayer;
+        pub struct NativePlayer {
+            pub x: f64,
+            pub y: f64,
+            pub z: f64,
+            pub yaw: f32,
+            pub pitch: f32,
+            pub dimension: &'static str,
+        }
 
         impl Game<'_> {
             pub fn native_on(&self, mod_id: &str) -> bool { true }

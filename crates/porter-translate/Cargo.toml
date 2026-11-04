@@ -11,7 +11,8 @@ anyhow = "1.0.104"
 porter-map = { path = "../porter-map" }
 porter-model = { path = "../porter-model" }
 serde_json = "1.0.154"
+toml = "1.2.0"
+zip = { version = "9.3.0", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 porter-java = { path = "../porter-java" }
-toml = "1.2.0"

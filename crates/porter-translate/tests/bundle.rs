@@ -57,6 +57,7 @@ fn wires_the_hooks_the_mod_uses() {
             "Cargo.toml",
             "PORTING.md",
             "compatibility.json",
+            "horizon-native.json",
             "mixins/compasshud/click.rs",
             "mixins/compasshud/command.rs",
             "mixins/compasshud/horizon-mixin.toml",
@@ -126,6 +127,66 @@ fn runtime_has_keys_with_their_labels() {
     let porting = &b.files["PORTING.md"];
     assert!(porting.contains("| `native_hud` | `hud_lines` | `net.compasshud.CompassHudClient` |"));
     assert!(porting.contains("- [ ] `net.compasshud.CompassRenderer`"));
+}
+
+#[test]
+fn declares_hooks_instead_of_pinning() {
+    let b = compass_bundle();
+    let native: serde_json::Value = serde_json::from_str(&b.files["horizon-native.json"]).unwrap();
+    assert_eq!(native["schema"], 1);
+    assert_eq!(native["id"], "compasshud");
+    assert_eq!(native["version"], "1.2.0");
+    assert_eq!(native["game"], "26.3");
+    assert_eq!(native["hooks"], 1);
+    assert_eq!(native["horizon"], bundle::HORIZON_REVISION);
+    // Keys sorted, as horizon-mods' packager writes them.
+    let keys: Vec<&str> = b.files["horizon-native.json"]
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix('"')?.split('"').next())
+        .collect();
+    let mut sorted = keys.clone();
+    sorted.sort();
+    assert_eq!(keys, sorted);
+}
+
+#[test]
+fn packages_a_deterministic_hnmod() {
+    let dir = std::env::temp_dir().join(format!("porter-package-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let b = compass_bundle();
+    bundle::write(&b, &dir.join("src"), false).unwrap();
+    std::fs::write(dir.join("src/LICENSE"), "MIT").unwrap();
+
+    let first = bundle::package(&dir.join("src"), &dir.join("out1")).unwrap();
+    let second = bundle::package(&dir.join("src"), &dir.join("out2")).unwrap();
+    assert_eq!(first.file_name().unwrap(), "compasshud-1.2.0.hnmod");
+    assert_eq!(
+        std::fs::read(&first).unwrap(),
+        std::fs::read(&second).unwrap()
+    );
+
+    let mut zip = zip::ZipArchive::new(std::fs::File::open(&first).unwrap()).unwrap();
+    let names: Vec<String> = (0..zip.len())
+        .map(|i| zip.by_index(i).unwrap().name().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        names,
+        vec![
+            "horizon-native.json",
+            "mixins/compasshud/LICENSE",
+            "mixins/compasshud/click.rs",
+            "mixins/compasshud/command.rs",
+            "mixins/compasshud/horizon-mixin.toml",
+            "mixins/compasshud/hud.rs",
+            "mixins/compasshud/key.rs",
+            "mixins/compasshud/list.rs",
+            "mixins/compasshud/runtime.rs",
+            "mixins/compasshud/settings.rs",
+            "mixins/compasshud/tick.rs",
+        ]
+    );
+    // PORTING.md, Cargo.toml and compatibility.json stay out of the .hnmod.
+    std::fs::remove_dir_all(&dir).ok();
 }
 
 #[test]

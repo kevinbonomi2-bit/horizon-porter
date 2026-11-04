@@ -59,8 +59,15 @@ function notice(kind, title, detail, actions = []) {
     el.hidden = true;
     return;
   }
-  el.className = `notice${kind === "bad" ? " bad" : ""}`;
-  el.append(icon(kind === "bad" ? "alert" : "check"));
+  el.className = `notice${kind === "bad" ? " bad" : ""}${kind === "busy" ? " busy" : ""}`;
+  if (kind === "busy") {
+    const spinner = document.createElement("span");
+    spinner.className = "spinner";
+    spinner.setAttribute("aria-hidden", "true");
+    el.append(spinner);
+  } else {
+    el.append(icon(kind === "bad" ? "alert" : "check"));
+  }
   const text = document.createElement("div");
   text.className = "notice-text";
   const t = document.createElement("p");
@@ -144,6 +151,7 @@ async function port() {
       notice("ok", `Wrote ${done.id}-horizon: ${wired}${left}`, done.out, [
         button("Open folder", () => openPath(done.out), "folder"),
         button("Open PORTING.md", () => openPath(done.porting)),
+        button("Build and play", () => build(done), "play"),
       ]);
     }
   } catch (e) {
@@ -154,6 +162,54 @@ async function port() {
     b.disabled = false;
   }
 }
+
+let building = false;
+
+/** Builds the ported mod into Horizon with the player's launcher, after they
+ * confirm they trust its code (asked in Rust, every time). */
+async function build(ported) {
+  if (building) return;
+  building = true;
+  $("port").disabled = true;
+  notice("busy", `Building ${ported.id}`, "Waiting for your answer");
+  try {
+    const built = await invoke("build");
+    if (built) {
+      notice("ok", `Built ${ported.id} into "${built.instance}"`, built.result, [
+        button("Open folder", () => openPath(ported.out), "folder"),
+        button("Play", play, "play"),
+      ]);
+    } else {
+      notice(null);
+    }
+  } catch (e) {
+    const text = String(e);
+    notice("bad", "The build failed", text.split("\n").filter(Boolean).slice(-1)[0] || text, [
+      button("Open folder", () => openPath(ported.out), "folder"),
+    ]);
+    $("notice").querySelector(".notice-detail").title = text;
+  } finally {
+    building = false;
+    $("port").disabled = false;
+  }
+}
+
+async function play() {
+  try {
+    await invoke("play");
+  } catch (e) {
+    notice("bad", "Could not start the game", String(e));
+  }
+}
+
+listen("build-progress", (e) => {
+  if (!building) return;
+  const detail = $("notice").querySelector(".notice-detail");
+  if (detail) {
+    detail.textContent = e.payload;
+    detail.title = e.payload;
+  }
+});
 
 $("pick-folder").addEventListener("click", () => pick(false));
 $("pick-jar").addEventListener("click", () => pick(true));

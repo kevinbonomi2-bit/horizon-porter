@@ -17,4 +17,5 @@ porter-java = { path = "../porter-java" }
 porter-model = { path = "../porter-model" }
 porter-report = { path = "../porter-report" }
 porter-translate = { path = "../porter-translate" }
+porter-verify = { path = "../porter-verify" }
 serde_json = "1.0.154"
