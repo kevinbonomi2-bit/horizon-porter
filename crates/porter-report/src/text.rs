@@ -1,4 +1,5 @@
-// Text output for `scan` (a summary) and `report` (the full breakdown).
+// Terminal text: the summary `scan` prints and the full breakdown `report` prints.
+// The helpers here are shared with the HTML page.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
@@ -35,14 +36,10 @@ pub fn summary(scan: &ModScan) -> String {
     }
     row(&mut out, "Mixins", &mixins);
     if !members.is_empty() {
-        let mut tally: BTreeMap<&str, usize> = BTreeMap::new();
-        for m in &members {
-            *tally.entry(m.verdict.name()).or_default() += 1;
-        }
-        let order = ["supported", "partial", "blocked", "not needed"];
-        let text = order
-            .iter()
-            .filter_map(|k| tally.get(k).map(|c| format!("{} {k}", n(*c))))
+        let text = verdict_tally(scan)
+            .into_iter()
+            .filter(|(_, c)| *c > 0)
+            .map(|(k, c)| format!("{} {k}", n(c)))
             .collect::<Vec<_>>()
             .join(" · ");
         row(&mut out, "", &text);
@@ -157,20 +154,7 @@ pub fn full(scan: &ModScan, all: bool, top: usize) -> String {
             let _ = writeln!(out, "  @{annotation:<24} {:>5}   {detail}", n(total));
         }
 
-        let own: BTreeSet<&str> = scan.classes.iter().map(|c| c.name.as_str()).collect();
-        let other_mod_targets: BTreeSet<&str> = scan
-            .mixins
-            .iter()
-            .flat_map(|m| &m.targets)
-            .filter(|t| {
-                !own.contains(t.as_str())
-                    && !matches!(
-                        SymbolOrigin::classify(t, |_| false),
-                        SymbolOrigin::Minecraft | SymbolOrigin::Jdk | SymbolOrigin::Platform
-                    )
-            })
-            .map(String::as_str)
-            .collect();
+        let other_mod_targets = other_mod_targets(scan);
         if !other_mod_targets.is_empty() {
             let _ = writeln!(
                 out,
@@ -310,15 +294,28 @@ pub fn full(scan: &ModScan, all: bool, top: usize) -> String {
     out
 }
 
-fn header(scan: &ModScan, out: &mut String) {
+/// What a report's header says about a mod.
+pub(crate) struct Facts {
+    /// `Create 6.0.11 (create)`.
+    pub title: String,
+    /// `NeoForge`, `Fabric + NeoForge`.
+    pub loaders: Option<String>,
+    pub minecraft: Option<String>,
+    pub licence: Option<String>,
+    /// `source tree` or `jar`.
+    pub input_kind: &'static str,
+    /// Mods it needs (not the game, the loader or its API).
+    pub dependencies: Vec<String>,
+}
+
+pub(crate) fn facts(scan: &ModScan) -> Facts {
     let main = scan
         .metadata
         .iter()
         .find(|m| m.name.is_some() || m.id.is_some());
     let title = match main {
         Some(m) => {
-            let name = m.name.clone().or(m.id.clone()).unwrap_or_default();
-            let mut t = name;
+            let mut t = m.name.clone().or(m.id.clone()).unwrap_or_default();
             // A version the build script computes stays a placeholder: leave it out.
             if let Some(v) = m.version.as_ref().filter(|v| !v.contains('$')) {
                 let _ = write!(t, " {v}");
@@ -331,37 +328,67 @@ fn header(scan: &ModScan, out: &mut String) {
         None => "Unknown mod".to_string(),
     };
     let loaders: BTreeSet<String> = scan.metadata.iter().map(|m| m.loader.to_string()).collect();
-    let mut facts = vec![title];
-    if !loaders.is_empty() {
-        facts.push(loaders.into_iter().collect::<Vec<_>>().join(" + "));
-    }
-    if let Some(mc) = scan.metadata.iter().find_map(|m| m.minecraft.clone()) {
-        facts.push(format!("Minecraft {mc}"));
-    }
-    if let Some(l) = scan.metadata.iter().find_map(|m| m.license.clone()) {
-        facts.push(format!("licence {l}"));
-    }
-    let _ = writeln!(out, "{}", facts.join(" · "));
-    let kind = match scan.input_kind {
-        InputKind::SourceTree => "source tree",
-        InputKind::Jar => "jar",
-    };
-    let _ = writeln!(out, "Scanned {} ({kind})\n", scan.input);
-    let deps: BTreeSet<&str> = scan
+    let dependencies: BTreeSet<String> = scan
         .metadata
         .iter()
-        .flat_map(|m| m.dependencies.iter().map(String::as_str))
+        .flat_map(|m| m.dependencies.iter().cloned())
         .collect();
-    if !deps.is_empty() {
-        row(
-            out,
-            "Needs mods",
-            &deps.into_iter().collect::<Vec<_>>().join(", "),
-        );
+    Facts {
+        title,
+        loaders: (!loaders.is_empty()).then(|| loaders.into_iter().collect::<Vec<_>>().join(" + ")),
+        minecraft: scan.metadata.iter().find_map(|m| m.minecraft.clone()),
+        licence: scan.metadata.iter().find_map(|m| m.license.clone()),
+        input_kind: match scan.input_kind {
+            InputKind::SourceTree => "source tree",
+            InputKind::Jar => "jar",
+        },
+        dependencies: dependencies.into_iter().collect(),
     }
 }
 
-fn registry_counts(scan: &ModScan) -> Vec<(String, usize)> {
+fn header(scan: &ModScan, out: &mut String) {
+    let f = facts(scan);
+    let mut line = vec![f.title];
+    line.extend(f.loaders);
+    line.extend(f.minecraft.map(|mc| format!("Minecraft {mc}")));
+    line.extend(f.licence.map(|l| format!("licence {l}")));
+    let _ = writeln!(out, "{}", line.join(" · "));
+    let _ = writeln!(out, "Scanned {} ({})\n", scan.input, f.input_kind);
+    if !f.dependencies.is_empty() {
+        row(out, "Needs mods", &f.dependencies.join(", "));
+    }
+}
+
+/// Mixin members per verdict, in report order.
+pub(crate) fn verdict_tally(scan: &ModScan) -> Vec<(&'static str, usize)> {
+    let mut tally: BTreeMap<&str, usize> = BTreeMap::new();
+    for m in scan.mixins.iter().flat_map(|m| &m.members) {
+        *tally.entry(m.verdict.name()).or_default() += 1;
+    }
+    ["supported", "partial", "blocked", "not needed"]
+        .into_iter()
+        .map(|k| (k, tally.get(k).copied().unwrap_or(0)))
+        .collect()
+}
+
+/// Mixin targets outside Minecraft and the mod itself: other mods or the loader.
+pub(crate) fn other_mod_targets(scan: &ModScan) -> BTreeSet<&str> {
+    let own: BTreeSet<&str> = scan.classes.iter().map(|c| c.name.as_str()).collect();
+    scan.mixins
+        .iter()
+        .flat_map(|m| &m.targets)
+        .filter(|t| {
+            !own.contains(t.as_str())
+                && !matches!(
+                    SymbolOrigin::classify(t, |_| false),
+                    SymbolOrigin::Minecraft | SymbolOrigin::Jdk | SymbolOrigin::Platform
+                )
+        })
+        .map(String::as_str)
+        .collect()
+}
+
+pub(crate) fn registry_counts(scan: &ModScan) -> Vec<(String, usize)> {
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
     for r in &scan.registrations {
         *counts.entry(r.registry.clone()).or_default() += 1;
@@ -373,7 +400,7 @@ fn registry_counts(scan: &ModScan) -> Vec<(String, usize)> {
 
 /// Third-party references grouped by package root (three segments), with how many
 /// of the mod's classes use each group.
-fn library_groups(scan: &ModScan) -> Vec<(String, usize)> {
+pub(crate) fn library_groups(scan: &ModScan) -> Vec<(String, usize)> {
     let Some(libs) = porter_java::reference_counts(scan).remove(&SymbolOrigin::Library) else {
         return Vec::new();
     };
@@ -396,7 +423,7 @@ fn library_groups(scan: &ModScan) -> Vec<(String, usize)> {
     v
 }
 
-fn minecraft_superclasses(scan: &ModScan) -> BTreeMap<String, usize> {
+pub(crate) fn minecraft_superclasses(scan: &ModScan) -> BTreeMap<String, usize> {
     let mut out: BTreeMap<String, usize> = BTreeMap::new();
     for class in &scan.classes {
         for parent in class.superclass.iter().chain(&class.interfaces) {
@@ -428,12 +455,12 @@ fn row(out: &mut String, label: &str, text: &str) {
 }
 
 /// `com.demo.mixin.LevelMixin` → `LevelMixin`.
-fn short(name: &str) -> &str {
+pub(crate) fn short(name: &str) -> &str {
     name.rsplit('.').next().unwrap_or(name)
 }
 
 /// 12345 → "12,345".
-fn n(value: usize) -> String {
+pub(crate) fn n(value: usize) -> String {
     let digits = value.to_string();
     let mut out = String::new();
     for (i, c) in digits.chars().enumerate() {

@@ -1,0 +1,11 @@
+[package]
+name = "porter-report"
+description = "Turns a mod scan into reports: terminal text and a shareable HTML page."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+porter-java = { path = "../porter-java" }
+porter-model = { path = "../porter-model" }

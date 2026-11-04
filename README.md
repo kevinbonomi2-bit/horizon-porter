@@ -55,7 +55,11 @@ horizon-porter scan path/to/your-mod              # one-screen summary
 horizon-porter scan path/to/your-mod --json scan.json
 horizon-porter report path/to/your-mod            # the full breakdown
 horizon-porter report path/to/your-mod --all      # every Mixin member, not only problems
+horizon-porter report path/to/your-mod --html report.html   # a page to open or share
 ```
+
+`--html` writes the whole report as a single self-contained page (no scripts, nothing
+loaded from elsewhere). Open it in a browser, attach it to an issue, or post it.
 
 The path is your mod's source folder (the Gradle project; multi-loader projects work)
 or a built `.jar`. The source gives the full picture. A jar gives classes, metadata and
@@ -83,6 +87,7 @@ cargo test
 
 ```
 crates/porter-cli        the horizon-porter command
+crates/porter-report     reports: terminal text and the HTML page
 crates/porter-model      shared types
 crates/porter-java       reads Java mods
 crates/porter-map        Java → Horizon symbol and Mixin mappings

@@ -1,7 +1,5 @@
 //! The `horizon-porter` command line.
 
-mod report;
-
 use std::fs;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -40,6 +38,9 @@ enum Command {
         /// How many entries to show in each ranked list
         #[arg(long, default_value_t = 25)]
         top: usize,
+        /// Write the report as a self-contained HTML page to this file instead
+        #[arg(long, value_name = "FILE")]
+        html: Option<PathBuf>,
     },
     /// Generate the Horizon bundle and content mod (not implemented yet)
     Port { path: PathBuf },
@@ -63,7 +64,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
     match cli.command {
         Command::Scan { path, json } => {
             let scan = porter_java::scan(&path)?;
-            print!("{}", report::summary(&scan));
+            print!("{}", porter_report::text_summary(&scan));
             if let Some(out) = json {
                 let text = serde_json::to_string_pretty(&scan)?;
                 fs::write(&out, text).with_context(|| format!("writing {}", out.display()))?;
@@ -71,9 +72,21 @@ fn run(cli: Cli) -> Result<ExitCode> {
             }
             Ok(ExitCode::SUCCESS)
         }
-        Command::Report { path, all, top } => {
+        Command::Report {
+            path,
+            all,
+            top,
+            html,
+        } => {
             let scan = porter_java::scan(&path)?;
-            print!("{}", report::full(&scan, all, top));
+            match html {
+                Some(out) => {
+                    fs::write(&out, porter_report::html(&scan))
+                        .with_context(|| format!("writing {}", out.display()))?;
+                    println!("Report written to {}", out.display());
+                }
+                None => print!("{}", porter_report::text_full(&scan, all, top)),
+            }
             Ok(ExitCode::SUCCESS)
         }
         Command::Port { .. } | Command::Check { .. } | Command::Status { .. } => {

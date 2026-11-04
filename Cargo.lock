@@ -284,6 +284,7 @@ dependencies = [
  "clap",
  "porter-java",
  "porter-model",
+ "porter-report",
  "serde_json",
 ]
 
@@ -328,6 +329,14 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "porter-report"
+version = "0.1.0"
+dependencies = [
+ "porter-java",
+ "porter-model",
 ]
 
 [[package]]
