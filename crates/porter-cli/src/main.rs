@@ -209,13 +209,14 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 "Building {} into the instance \"{}\" with {}. The first build downloads Rust and takes a while.",
                 id, instance.name, launcher.version
             );
-            let done = launcher.native_build(
+            // The launcher's own lines, its result last, already show as progress.
+            launcher.native_build(
                 &folder,
                 &instance,
                 porter_verify::Trust::given_by_player(),
                 |line| eprintln!("{line}"),
             )?;
-            println!("\n{done}");
+            println!();
             if play {
                 launcher.play(&instance)?;
                 println!("Starting \"{}\".", instance.name);
