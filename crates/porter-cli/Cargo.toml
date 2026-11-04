@@ -13,6 +13,6 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1.0.104"
 clap = { version = "4.6.7", features = ["derive"] }
-porter-java = { version = "0.0.1", path = "../porter-java" }
+porter-java = { path = "../porter-java" }
 porter-model = { path = "../porter-model" }
 serde_json = "1.0.154"
