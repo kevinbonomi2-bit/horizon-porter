@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Questions about Horizon itself
+    url: https://github.com/horizon-rust/horizon/issues
+    about: Horizon's hook points, native mods and the game belong in Horizon's repository

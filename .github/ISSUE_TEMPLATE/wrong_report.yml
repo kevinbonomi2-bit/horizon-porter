@@ -1,0 +1,31 @@
+name: A report is wrong
+description: A wrong Mixin verdict, a missed or extra registration, a wrong count or dependency
+labels: [accuracy]
+body:
+  - type: input
+    id: mod
+    attributes:
+      label: The mod
+      description: A link to its public source, and the commit or version you scanned
+    validations:
+      required: true
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What is wrong
+      options:
+        - A Mixin verdict
+        - Registrations (missed, extra or wrong id)
+        - Classes, references or libraries
+        - Metadata (name, version, licence, dependencies)
+        - Resources
+        - Something else
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: What the report says, and what is true
+      description: Name the class, Mixin or file, and paste the few lines of Java that show it
+    validations:
+      required: true

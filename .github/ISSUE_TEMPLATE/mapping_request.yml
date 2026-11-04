@@ -1,0 +1,23 @@
+name: Map a Java API to Horizon
+description: A Fabric, NeoForge or Forge API (event, callback, registry) the porter should map to a Horizon hook
+labels: [mapping]
+body:
+  - type: input
+    id: java
+    attributes:
+      label: Java API
+      description: Fully qualified class, and the method or event if it matters
+      placeholder: net.neoforged.neoforge.client.event.RenderGuiLayerEvent.Pre
+    validations:
+      required: true
+  - type: input
+    id: hook
+    attributes:
+      label: Horizon hook
+      description: The hook in Horizon's native-hooks.json that does the same job, if you know it
+      placeholder: gui_layer_pre
+  - type: textarea
+    id: why
+    attributes:
+      label: Mods that use it
+      description: Links to mods whose port would need this
