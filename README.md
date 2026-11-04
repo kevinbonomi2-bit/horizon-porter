@@ -26,6 +26,28 @@ and assets. horizon-porter is for the rest, **the code**:
 The goal is to make large mods (think Create) a realistic porting project, rather than
 a rewrite from scratch. It won't be one click, and the reports always say what is left.
 
+## Install
+
+Download the archive for your system from the
+[latest release](https://github.com/kevinbonomi2-bit/horizon-porter/releases/latest),
+extract it, and run `horizon-porter` from a terminal in that folder:
+
+| System | File |
+| --- | --- |
+| Windows | `horizon-porter-<version>-x86_64-pc-windows-msvc.zip` |
+| macOS (Apple Silicon) | `horizon-porter-<version>-aarch64-apple-darwin.tar.gz` |
+| macOS (Intel) | `horizon-porter-<version>-x86_64-apple-darwin.tar.gz` |
+| Linux | `horizon-porter-<version>-x86_64-unknown-linux-gnu.tar.gz` |
+
+The builds are not signed yet. On macOS, allow the first run in System Settings →
+Privacy & Security, or run `xattr -d com.apple.quarantine horizon-porter` once.
+
+With Rust installed, you can instead build and install it from source:
+
+```
+cargo install --git https://github.com/kevinbonomi2-bit/horizon-porter porter-cli
+```
+
 ## Usage
 
 ```
