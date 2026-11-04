@@ -1,1 +1,12 @@
-{}
+{
+  "type": "minecraft:crafting_shaped",
+  "pattern": ["CC", "CS"],
+  "key": {
+    "C": "minecraft:copper_ingot",
+    "S": "minecraft:stick"
+  },
+  "result": {
+    "id": "demo:crank",
+    "count": 1
+  }
+}

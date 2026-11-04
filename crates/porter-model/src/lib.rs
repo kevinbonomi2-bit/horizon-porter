@@ -254,6 +254,35 @@ pub struct ClassInfo {
     /// Source lines (0 for class files).
     pub lines: usize,
     pub methods: usize,
+    /// Its fields, from source scans.
+    #[serde(default)]
+    pub fields: Vec<FieldInfo>,
+    /// The names of its methods, from source scans.
+    #[serde(default)]
+    pub method_names: Vec<String>,
+    /// Values it writes to NBT (`tag.putFloat("Speed", speed)`), from source scans.
+    #[serde(default)]
+    pub saved: Vec<SavedValue>,
+}
+
+/// A field of a class.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FieldInfo {
+    pub name: String,
+    /// The type as written: `float`, `int`, `List<ItemStack>`.
+    pub ty: String,
+    pub is_static: bool,
+}
+
+/// A value a class writes to an NBT compound: `tag.putFloat("Speed", speed)`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SavedValue {
+    /// The compound key: `Speed`.
+    pub key: String,
+    /// The put method: `putFloat`, `putInt`, `putBoolean`...
+    pub method: String,
+    /// The value written, as written: usually a field name.
+    pub value: String,
 }
 
 /// A Mixin config file (`*.mixins.json`).
@@ -309,6 +338,14 @@ pub struct Registration {
     pub via: String,
     /// The class that registers it.
     pub class: String,
+    /// The class it creates, as written in the call (`CrankBlock` from
+    /// `CrankBlock::new` or `new CrankBlock(...)`), when there is one.
+    #[serde(default)]
+    pub creates: Option<String>,
+    /// The call's arguments as written, to read properties from
+    /// (`BlockBehaviour.Properties.ofFullCopy(Blocks.IRON_BLOCK).strength(3f)`).
+    #[serde(default)]
+    pub args: String,
 }
 
 /// Client features the porter can wire to Horizon's hook points.

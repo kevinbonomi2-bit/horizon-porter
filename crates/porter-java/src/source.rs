@@ -85,6 +85,9 @@ pub(crate) struct Member {
     pub is_method: bool,
     pub is_constructor: bool,
     pub annotations: Vec<Annotation>,
+    /// A field's type as written (empty for methods).
+    pub ty: String,
+    pub is_static: bool,
 }
 
 pub(crate) struct TypeDecl {
@@ -405,9 +408,10 @@ fn collect_members(body: Node, src: &str, out: &mut Vec<Member>) {
         match child.kind() {
             "enum_body_declarations" => collect_members(child, src, out),
             "method_declaration" | "constructor_declaration" => {
-                let annotations = named_children(child)
+                let modifiers = named_children(child)
                     .into_iter()
-                    .find(|c| c.kind() == "modifiers")
+                    .find(|c| c.kind() == "modifiers");
+                let annotations = modifiers
                     .map(|m| annotations_of(m, src))
                     .unwrap_or_default();
                 out.push(Member {
@@ -418,13 +422,21 @@ fn collect_members(body: Node, src: &str, out: &mut Vec<Member>) {
                     is_method: true,
                     is_constructor: child.kind() == "constructor_declaration",
                     annotations,
+                    ty: String::new(),
+                    is_static: modifiers.is_some_and(|m| has_word(&text(m), "static")),
                 });
             }
             "field_declaration" => {
-                let annotations = named_children(child)
+                let modifiers = named_children(child)
                     .into_iter()
-                    .find(|c| c.kind() == "modifiers")
+                    .find(|c| c.kind() == "modifiers");
+                let annotations = modifiers
                     .map(|m| annotations_of(m, src))
+                    .unwrap_or_default();
+                let is_static = modifiers.is_some_and(|m| has_word(&text(m), "static"));
+                let ty = child
+                    .child_by_field_name("type")
+                    .map(text)
                     .unwrap_or_default();
                 for declarator in named_children(child)
                     .into_iter()
@@ -438,12 +450,20 @@ fn collect_members(body: Node, src: &str, out: &mut Vec<Member>) {
                         is_method: false,
                         is_constructor: false,
                         annotations: annotations.clone(),
+                        ty: ty.clone(),
+                        is_static,
                     });
                 }
             }
             _ => {}
         }
     }
+}
+
+/// Whether `word` is one of the words in `text` (a modifiers list).
+fn has_word(text: &str, word: &str) -> bool {
+    text.split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|w| w == word)
 }
 
 fn annotations_of(modifiers: Node, src: &str) -> Vec<Annotation> {

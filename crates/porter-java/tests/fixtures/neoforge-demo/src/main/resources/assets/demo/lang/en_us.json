@@ -1,1 +1,7 @@
-{}
+{
+  "block.demo.crank": "Crank",
+  "block.demo.crank_2": "Spare crank",
+  "item.demo.handle": "Crank handle",
+  "item.demo.gear": "Gear",
+  "item.demo.axle": "Axle"
+}

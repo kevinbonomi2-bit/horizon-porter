@@ -137,6 +137,9 @@ pub(crate) fn scan(path: &Path) -> Result<ModScan> {
                 is_mixin: false,
                 lines: 0,
                 methods: c.methods,
+                fields: Vec::new(),
+                method_names: Vec::new(),
+                saved: Vec::new(),
             },
         );
     }

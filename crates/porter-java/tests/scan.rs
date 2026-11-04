@@ -146,9 +146,65 @@ fn scans_a_neoforge_source_tree() {
         ]
     );
 
+    // What each registration creates, and its arguments to read properties from.
+    let find = |registry: &str, id: &str| {
+        scan.registrations
+            .iter()
+            .find(|r| r.registry == registry && r.id.as_deref() == Some(id))
+            .unwrap()
+    };
+    let crank = find("block", "crank");
+    assert_eq!(crank.creates.as_deref(), Some("CrankBlock"));
+    assert!(crank.args.contains("ofFullCopy(Blocks.IRON_BLOCK)"));
+    assert_eq!(
+        find("block", "crank_2").creates.as_deref(),
+        Some("CrankBlock")
+    );
+    assert_eq!(
+        find("block_entity_type", "crank").creates.as_deref(),
+        Some("CrankBlockEntity")
+    );
+
+    // The block entity's fields, methods and saved values.
+    let be = scan
+        .classes
+        .iter()
+        .find(|c| c.name == "com.demo.block.CrankBlockEntity")
+        .unwrap();
+    let fields: Vec<(&str, &str, bool)> = be
+        .fields
+        .iter()
+        .map(|f| (f.name.as_str(), f.ty.as_str(), f.is_static))
+        .collect();
+    assert_eq!(
+        fields,
+        vec![
+            ("MAX_SPEED", "float", true),
+            ("speed", "float", false),
+            ("turns", "int", false),
+            ("powered", "boolean", false),
+            ("owner", "String", false),
+        ]
+    );
+    assert!(be.method_names.contains(&"tick".to_string()));
+    let saved: Vec<(&str, &str, &str)> = be
+        .saved
+        .iter()
+        .map(|s| (s.key.as_str(), s.method.as_str(), s.value.as_str()))
+        .collect();
+    assert_eq!(
+        saved,
+        vec![
+            ("Speed", "putFloat", "speed"),
+            ("Turns", "putInt", "turns"),
+            ("Powered", "putBoolean", "powered"),
+            ("Owner", "putString", "owner"),
+        ]
+    );
+
     // Resources from both resource roots.
     let r = &scan.resources;
-    assert_eq!(r.assets(), 3);
+    assert_eq!(r.assets(), 5);
     assert_eq!(r.data(), 2);
     assert_eq!(r.categories["data/tags/block"], 1);
     assert_eq!(r.namespaces, vec!["demo", "minecraft"]);

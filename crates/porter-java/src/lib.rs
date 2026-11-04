@@ -232,6 +232,23 @@ fn assemble(
                 is_mixin: mixin_annotation.is_some(),
                 lines: if file.types.len() == 1 { file.lines } else { 0 },
                 methods: t.methods,
+                fields: t
+                    .members
+                    .iter()
+                    .filter(|m| !m.is_method)
+                    .map(|m| porter_model::FieldInfo {
+                        name: m.name.clone(),
+                        ty: m.ty.clone(),
+                        is_static: m.is_static,
+                    })
+                    .collect(),
+                method_names: t
+                    .members
+                    .iter()
+                    .filter(|m| m.is_method && !m.is_constructor)
+                    .map(|m| m.name.clone())
+                    .collect(),
+                saved: saved_values(file, &t.name),
             });
         }
     }
@@ -671,6 +688,8 @@ fn registrations(parsed: &[(String, ParsedFile)]) -> Vec<Registration> {
                     id: d.id,
                     via: d.via.into(),
                     class,
+                    creates: created_class(&call.args),
+                    args: call.args.join(", "),
                 });
                 continue;
             }
@@ -691,6 +710,8 @@ fn registrations(parsed: &[(String, ParsedFile)]) -> Vec<Registration> {
                 id,
                 via: "helper method".into(),
                 class,
+                creates: created_class(&call.args),
+                args: call.args.join(", "),
             });
         }
     }
@@ -711,6 +732,63 @@ fn registrations(parsed: &[(String, ParsedFile)]) -> Vec<Registration> {
             id: None,
             via: "helper method".into(),
             class: qualify(package, class),
+            creates: None,
+            args: String::new(),
+        });
+    }
+    out
+}
+
+/// The class a registration creates, from its arguments: `CrankBlock` in
+/// `CrankBlock::new` or `() -> new CrankBlock(props)`. The first one wins, so
+/// `BlockEntityType.Builder.of(CrankBlockEntity::new, CRANK.get())` gives the
+/// block entity.
+fn created_class(args: &[String]) -> Option<String> {
+    let is_ident = |c: char| c.is_ascii_alphanumeric() || c == '_' || c == '$';
+    let text = args.join(", ");
+    let mut best: Option<(usize, String)> = None;
+    if let Some(at) = text.find("::new") {
+        let start = text[..at]
+            .rfind(|c: char| !is_ident(c) && c != '.')
+            .map_or(0, |p| p + 1);
+        let name = text[start..at].rsplit('.').next().unwrap_or("").to_string();
+        best = Some((at, name));
+    }
+    let mut from = 0;
+    while let Some(i) = text[from..].find("new ").map(|i| from + i) {
+        let word_start = i == 0 || !is_ident(text[..i].chars().last().unwrap_or(' '));
+        let after = &text[i + 4..];
+        let name: String = after
+            .chars()
+            .take_while(|c| is_ident(*c) || *c == '.')
+            .collect();
+        let simple = name.rsplit('.').next().unwrap_or("").to_string();
+        if word_start && simple.starts_with(|c: char| c.is_ascii_uppercase()) {
+            if best.as_ref().is_none_or(|(at, _)| i < *at) {
+                best = Some((i, simple));
+            }
+            break;
+        }
+        from = i + 4;
+    }
+    best.map(|(_, name)| name)
+        .filter(|n| n.starts_with(|c: char| c.is_ascii_uppercase()))
+}
+
+/// The values a class writes to NBT: `tag.putFloat("Speed", speed)`.
+fn saved_values(file: &ParsedFile, class: &str) -> Vec<porter_model::SavedValue> {
+    let mut out = Vec::new();
+    for call in file.calls.iter().filter(|c| c.enclosing == class) {
+        if !call.method.starts_with("put") || call.args.len() != 2 {
+            continue;
+        }
+        let Some(key) = call.literal_args.first().cloned().flatten() else {
+            continue;
+        };
+        out.push(porter_model::SavedValue {
+            key,
+            method: call.method.clone(),
+            value: call.args[1].trim().to_string(),
         });
     }
     out
