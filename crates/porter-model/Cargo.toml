@@ -1,0 +1,13 @@
+[package]
+name = "porter-model"
+description = "Shared types: the project model, symbols, verdicts and the state file."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
+
+[dev-dependencies]
+serde_json = "1.0.154"

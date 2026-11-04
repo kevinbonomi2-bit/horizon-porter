@@ -1,0 +1,10 @@
+[package]
+name = "porter-translate"
+description = "Translates Java classes to Rust modules: rule-based pass, then AI per method with a compile/fix loop."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+porter-model = { path = "../porter-model" }

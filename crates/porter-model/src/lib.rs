@@ -1,0 +1,381 @@
+//! Shared types: the project model, symbols, verdicts and the state file.
+//!
+//! Everything the other crates exchange lives here, so the scanner, the translator
+//! and the reports agree on one vocabulary. All of it serializes to JSON, which is
+//! what `horizon-porter scan --json` writes.
+
+use std::collections::BTreeMap;
+use std::fmt;
+
+use serde::{Deserialize, Serialize};
+
+/// The mod loader a Java mod was written for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Loader {
+    Fabric,
+    NeoForge,
+    Forge,
+}
+
+impl fmt::Display for Loader {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Loader::Fabric => "Fabric",
+            Loader::NeoForge => "NeoForge",
+            Loader::Forge => "Forge",
+        })
+    }
+}
+
+/// Where a class a mod refers to comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SymbolOrigin {
+    /// Minecraft itself (`net.minecraft.*`, `com.mojang.*`), mapped through Horizon's
+    /// port ledger.
+    Minecraft,
+    /// The loader's API (Fabric API, NeoForge, Forge), mapped to modkit.
+    LoaderApi,
+    /// The Mixin framework (Sponge Mixin, MixinExtras): its annotations become
+    /// horizon-mixins injections, not code.
+    MixinFramework,
+    /// Libraries that ship with Minecraft (Guava, fastutil, JOML, LWJGL, Gson, Netty,
+    /// logging). Most have a Rust counterpart; LWJGL means direct OpenGL calls.
+    Platform,
+    /// Another mod or library (Registrate, Flywheel...), mapped to a shim if one exists.
+    Library,
+    /// The mod's own code, translated alongside it.
+    Own,
+    /// The Java standard library, mapped to Rust's.
+    Jdk,
+}
+
+impl SymbolOrigin {
+    /// Classifies a fully qualified class name. `own` says whether the name is one of
+    /// the mod's own classes.
+    pub fn classify(fqcn: &str, own: impl Fn(&str) -> bool) -> SymbolOrigin {
+        const PREFIXES: &[(&str, SymbolOrigin)] = &[
+            ("net.minecraft.", SymbolOrigin::Minecraft),
+            ("com.mojang.", SymbolOrigin::Minecraft),
+            ("net.fabricmc.", SymbolOrigin::LoaderApi),
+            ("net.neoforged.", SymbolOrigin::LoaderApi),
+            ("net.minecraftforge.", SymbolOrigin::LoaderApi),
+            ("org.spongepowered.asm.", SymbolOrigin::MixinFramework),
+            ("com.llamalad7.mixinextras.", SymbolOrigin::MixinFramework),
+            // Before "javax.": JSR-305 annotations ship with Minecraft, not the JDK.
+            ("javax.annotation.", SymbolOrigin::Platform),
+            ("java.", SymbolOrigin::Jdk),
+            ("javax.", SymbolOrigin::Jdk),
+            ("jdk.", SymbolOrigin::Jdk),
+            ("sun.", SymbolOrigin::Jdk),
+            ("com.google.common.", SymbolOrigin::Platform),
+            ("com.google.gson.", SymbolOrigin::Platform),
+            ("it.unimi.dsi.fastutil.", SymbolOrigin::Platform),
+            ("org.joml.", SymbolOrigin::Platform),
+            ("org.lwjgl.", SymbolOrigin::Platform),
+            ("io.netty.", SymbolOrigin::Platform),
+            ("org.slf4j.", SymbolOrigin::Platform),
+            ("org.apache.logging.", SymbolOrigin::Platform),
+            ("org.apache.commons.", SymbolOrigin::Platform),
+            ("org.jetbrains.annotations.", SymbolOrigin::Platform),
+            ("joptsimple.", SymbolOrigin::Platform),
+            ("com.ibm.icu.", SymbolOrigin::Platform),
+            ("oshi.", SymbolOrigin::Platform),
+        ];
+        if own(fqcn) {
+            return SymbolOrigin::Own;
+        }
+        PREFIXES
+            .iter()
+            .find(|(prefix, _)| fqcn.starts_with(prefix))
+            .map(|&(_, origin)| origin)
+            .unwrap_or(SymbolOrigin::Library)
+    }
+
+    /// A short label for reports.
+    pub fn label(self) -> &'static str {
+        match self {
+            SymbolOrigin::Minecraft => "Minecraft",
+            SymbolOrigin::LoaderApi => "loader API",
+            SymbolOrigin::MixinFramework => "Mixin framework",
+            SymbolOrigin::Platform => "bundled libraries",
+            SymbolOrigin::Library => "other mods and libraries",
+            SymbolOrigin::Own => "own code",
+            SymbolOrigin::Jdk => "Java standard library",
+        }
+    }
+}
+
+/// The verdict for one item of a mod: a class, a Mixin, a registry entry or an asset.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "verdict", content = "note", rename_all = "snake_case")]
+pub enum Verdict {
+    /// Ported and compiling.
+    Ported,
+    /// Supported in principle by the target (Horizon, horizon-mixins, modkit); not
+    /// yet ported. The note says how.
+    Supported(String),
+    /// Ported or portable in part; the note says what is missing.
+    Partial(String),
+    /// Generated as a stub for a human to finish.
+    Stubbed(String),
+    /// Cannot be ported yet; the note names what is missing (a Horizon hook point,
+    /// a horizon-mixins feature, a library shim).
+    Blocked(String),
+    /// Not needed in Horizon (performance mods, loader glue).
+    NotNeeded(String),
+}
+
+impl Verdict {
+    /// A one-word name for counting and filtering.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Verdict::Ported => "ported",
+            Verdict::Supported(_) => "supported",
+            Verdict::Partial(_) => "partial",
+            Verdict::Stubbed(_) => "stubbed",
+            Verdict::Blocked(_) => "blocked",
+            Verdict::NotNeeded(_) => "not needed",
+        }
+    }
+
+    /// The note, if any.
+    pub fn note(&self) -> Option<&str> {
+        match self {
+            Verdict::Ported => None,
+            Verdict::Supported(n)
+            | Verdict::Partial(n)
+            | Verdict::Stubbed(n)
+            | Verdict::Blocked(n)
+            | Verdict::NotNeeded(n) => Some(n),
+        }
+    }
+}
+
+impl fmt::Display for Verdict {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.note() {
+            Some(note) => write!(f, "{}: {note}", self.name()),
+            None => f.write_str(self.name()),
+        }
+    }
+}
+
+/// Which side of the game code runs on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Side {
+    /// Both, or not known to be one side only.
+    #[default]
+    Common,
+    Client,
+    Server,
+}
+
+/// What was scanned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InputKind {
+    /// A source tree: the mod developer's Gradle project.
+    SourceTree,
+    /// A built jar. Class-level facts only; Mixin details need the source.
+    Jar,
+}
+
+/// Everything a scan found in one mod.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModScan {
+    /// The path that was scanned.
+    pub input: String,
+    pub input_kind: InputKind,
+    /// Each loader metadata file found. A multi-loader project has several.
+    pub metadata: Vec<ModMetadata>,
+    pub classes: Vec<ClassInfo>,
+    pub mixin_configs: Vec<MixinConfig>,
+    pub mixins: Vec<MixinClass>,
+    pub registrations: Vec<Registration>,
+    pub resources: ResourceSummary,
+    /// Jars bundled inside a jar (jar-in-jar), by path.
+    pub bundled_jars: Vec<String>,
+    /// Problems the scan hit but worked around, and things it could not read.
+    pub warnings: Vec<String>,
+}
+
+/// One loader metadata file: `fabric.mod.json`, `neoforge.mods.toml` or `mods.toml`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModMetadata {
+    pub loader: Loader,
+    /// Where it was found, relative to the input.
+    pub path: String,
+    pub id: Option<String>,
+    pub name: Option<String>,
+    pub version: Option<String>,
+    pub license: Option<String>,
+    /// The Minecraft version or range the mod declares.
+    pub minecraft: Option<String>,
+    /// Ids of the mods it depends on (not counting Minecraft, Java and the loader).
+    pub dependencies: Vec<String>,
+    /// Mixin config files it names.
+    pub mixin_configs: Vec<String>,
+}
+
+/// The kind of a Java type declaration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ClassKind {
+    Class,
+    Interface,
+    Enum,
+    Record,
+    Annotation,
+}
+
+/// One top-level class (or interface, enum, record) of the mod.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClassInfo {
+    /// Fully qualified name, such as `com.example.block.ShaftBlock`.
+    pub name: String,
+    pub kind: ClassKind,
+    /// Source file or class file, relative to the input.
+    pub path: String,
+    pub superclass: Option<String>,
+    pub interfaces: Vec<String>,
+    /// Classes from outside this file it refers to, fully qualified.
+    pub references: Vec<String>,
+    pub side: Side,
+    /// Whether it is a Mixin class.
+    pub is_mixin: bool,
+    /// Source lines (0 for class files).
+    pub lines: usize,
+    pub methods: usize,
+}
+
+/// A Mixin config file (`*.mixins.json`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MixinConfig {
+    pub path: String,
+    pub package: Option<String>,
+    /// Fully qualified Mixin class names, with the side the config lists them under.
+    pub mixins: Vec<(String, Side)>,
+    pub plugin: Option<String>,
+}
+
+/// A Mixin class and what it injects.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MixinClass {
+    pub name: String,
+    /// The classes it targets, fully qualified when they could be resolved.
+    pub targets: Vec<String>,
+    pub side: Side,
+    /// Interfaces the Mixin adds to its targets (`implements` on the Mixin class).
+    pub added_interfaces: Vec<String>,
+    pub members: Vec<MixinMember>,
+}
+
+/// One annotated member of a Mixin class.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MixinMember {
+    /// The Java member name in the Mixin class.
+    pub member: String,
+    /// The annotation, such as `Inject`, `ModifyArg`, `Shadow`, or `merged` for a
+    /// plain method added to the target.
+    pub annotation: String,
+    /// The target methods it names (`method = "tick"`), as written.
+    pub target_methods: Vec<String>,
+    /// The injection point (`HEAD`, `RETURN`, `INVOKE`...), if any.
+    pub at: Option<String>,
+    /// The `target` of the injection point, such as the call it selects.
+    pub at_target: Option<String>,
+    pub cancellable: bool,
+    /// The horizon-mixins kind this maps to, if there is one.
+    pub horizon_kind: Option<String>,
+    pub verdict: Verdict,
+}
+
+/// One registry entry the mod adds, as found in its code.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Registration {
+    /// The registry, normalized: `block`, `item`, `block_entity_type`, `entity_type`...
+    pub registry: String,
+    /// The id without namespace when it could be read, such as `shaft`.
+    pub id: Option<String>,
+    /// How it was registered: `DeferredRegister`, `Registry.register`, `Registrate`.
+    pub via: String,
+    /// The class that registers it.
+    pub class: String,
+}
+
+/// Counts of resource files: assets and data.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ResourceSummary {
+    /// Namespaces under `assets/` and `data/`.
+    pub namespaces: Vec<String>,
+    /// File counts by category, such as `assets/textures` or `data/recipe`.
+    pub categories: BTreeMap<String, usize>,
+    /// Where the files came from: `src/main/resources`, `src/generated/resources`...
+    pub roots: Vec<String>,
+}
+
+impl ResourceSummary {
+    /// Total files under `assets/`.
+    pub fn assets(&self) -> usize {
+        self.total("assets/")
+    }
+
+    /// Total files under `data/`.
+    pub fn data(&self) -> usize {
+        self.total("data/")
+    }
+
+    fn total(&self, prefix: &str) -> usize {
+        self.categories
+            .iter()
+            .filter(|(k, _)| k.starts_with(prefix))
+            .map(|(_, n)| n)
+            .sum()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classifies_origins() {
+        let own = |n: &str| n.starts_with("com.example.");
+        assert_eq!(
+            SymbolOrigin::classify("net.minecraft.world.level.Level", own),
+            SymbolOrigin::Minecraft
+        );
+        assert_eq!(
+            SymbolOrigin::classify("net.neoforged.bus.api.SubscribeEvent", own),
+            SymbolOrigin::LoaderApi
+        );
+        assert_eq!(
+            SymbolOrigin::classify("org.spongepowered.asm.mixin.Mixin", own),
+            SymbolOrigin::MixinFramework
+        );
+        assert_eq!(
+            SymbolOrigin::classify("com.example.Foo", own),
+            SymbolOrigin::Own
+        );
+        assert_eq!(
+            SymbolOrigin::classify("com.tterrag.registrate.Registrate", own),
+            SymbolOrigin::Library
+        );
+        assert_eq!(
+            SymbolOrigin::classify("java.util.List", own),
+            SymbolOrigin::Jdk
+        );
+    }
+
+    #[test]
+    fn verdict_json_shape() {
+        let v = Verdict::Blocked("no TAIL".into());
+        assert_eq!(
+            serde_json::to_string(&v).unwrap(),
+            r#"{"verdict":"blocked","note":"no TAIL"}"#
+        );
+    }
+}

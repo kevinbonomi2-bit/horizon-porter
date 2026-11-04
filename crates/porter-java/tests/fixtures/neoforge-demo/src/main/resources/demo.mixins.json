@@ -1,0 +1,7 @@
+{
+  "required": true,
+  "package": "com.demo.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": ["LevelMixin"],
+  "client": ["client.GuiMixin"]
+}

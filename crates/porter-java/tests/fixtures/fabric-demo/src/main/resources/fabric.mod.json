@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "fdemo",
+  "version": "${version}",
+  "name": "Fabric Demo",
+  "license": ["MIT", "CC0-1.0"],
+  "environment": "*",
+  "entrypoints": {
+    "main": ["net.fdemo.FabricDemo"],
+    "client": ["net.fdemo.client.FabricDemoClient"]
+  },
+  "mixins": ["fdemo.mixins.json"],
+  "depends": {
+    "fabricloader": ">=0.17",
+    "minecraft": "~26.3",
+    "fabric-api": "*",
+    "cloth-config": ">=20"
+  }
+}

@@ -1,0 +1,5 @@
+{
+  "package": "net.fdemo.mixin",
+  "mixins": ["PlayerAccessor"],
+  "client": []
+}

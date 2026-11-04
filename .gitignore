@@ -1,0 +1,6 @@
+/target
+# Horizon checkouts, prepared game files and ported output never belong in this repo.
+/.local
+/work
+*.hnmod
+*.hmod

@@ -1,0 +1,10 @@
+[package]
+name = "porter-mixin"
+description = "Turns @Mixin classes into horizon-mixins injections and helper files."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+porter-model = { path = "../porter-model" }

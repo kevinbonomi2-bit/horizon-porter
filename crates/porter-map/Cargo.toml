@@ -1,0 +1,10 @@
+[package]
+name = "porter-map"
+description = "The mapping database: Minecraft Java symbols to Horizon Rust paths, loader API to modkit, Sponge Mixin features to horizon-mixins kinds."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+porter-model = { path = "../porter-model" }

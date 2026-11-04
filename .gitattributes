@@ -1,0 +1,4 @@
+# LF on every platform, so files and test fixtures look the same everywhere.
+* text=auto eol=lf
+*.png binary
+*.jar binary

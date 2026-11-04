@@ -1,0 +1,10 @@
+[package]
+name = "porter-verify"
+description = "Runs Horizon's native mod checks and tests, and parses compiler diagnostics."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+porter-model = { path = "../porter-model" }

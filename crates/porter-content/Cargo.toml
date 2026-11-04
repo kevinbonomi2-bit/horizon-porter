@@ -1,0 +1,10 @@
+[package]
+name = "porter-content"
+description = "Carries a mod's data and assets over to a Horizon content mod (.hmod)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+porter-model = { path = "../porter-model" }
