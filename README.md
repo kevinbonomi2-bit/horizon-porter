@@ -4,9 +4,26 @@ A tool for mod developers to port Minecraft Java Edition mods (Fabric, NeoForge,
 Forge; Minecraft 26.3) to [Horizon](https://github.com/horizon-rust/horizon), the
 Rust rewrite of Minecraft, as native Horizon mods.
 
-> **Status: early.** The scanner works (`scan`, `report`); nothing ports yet. The plan
-> is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and [docs/ROADMAP.md](docs/ROADMAP.md).
+> **Status: early.** Scanning and reports work for any mod; porting works for client
+> mods (keys, commands, HUD, tick, settings), with the logic left to port by hand. The
+> plan is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and [docs/ROADMAP.md](docs/ROADMAP.md).
 > Not affiliated with Horizon, Mojang or Microsoft.
+
+## Horizon Porter, the desktop app
+
+Drop a mod's source folder or `.jar` on the window. Horizon Porter reads it and shows
+the report: every Mixin member as a slot colored by its verdict, what the mod builds
+on, its registrations and resources. **Port to Horizon** writes the Horizon mod into a
+folder you choose, then opens it or its `PORTING.md` for you. **Save report** keeps
+the report as a page to share. Everything runs on your computer; nothing is uploaded.
+
+Get the installer for your system from the
+[latest release](https://github.com/kevinbonomi2-bit/horizon-porter/releases/latest):
+`Horizon.Porter_<version>_x64-setup.exe` (Windows), `Horizon.Porter_<version>_<chip>.app.zip`
+(macOS: `aarch64` for Apple Silicon, `x86_64` for Intel) or
+`Horizon.Porter_<version>_amd64.deb` (Linux, needs WebKitGTK 4.1). The builds are not
+signed yet: Windows may show a SmartScreen warning (More info, then Run anyway), and
+on macOS run `xattr -dr com.apple.quarantine "Horizon Porter.app"` once after unzipping.
 
 ## What it does
 
@@ -26,9 +43,9 @@ and assets. horizon-porter is for the rest, **the code**:
 The goal is to make large mods (think Create) a realistic porting project, rather than
 a rewrite from scratch. It won't be one click, and the reports always say what is left.
 
-## Install
+## The command line
 
-Download the archive for your system from the
+Download the `horizon-porter` archive for your system from the
 [latest release](https://github.com/kevinbonomi2-bit/horizon-porter/releases/latest),
 extract it, and run `horizon-porter` from a terminal in that folder:
 
@@ -106,6 +123,11 @@ cargo test
 ./target/release/horizon-porter --help
 ```
 
+The desktop app (`app/`, built with [Tauri](https://tauri.app)) builds with
+`cargo build -p horizon-porter-app`. On Linux it needs WebKitGTK:
+`sudo apt install libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev`.
+Installers come from `npx @tauri-apps/cli@2 build` in `app/`.
+
 ## Layout
 
 ```
@@ -118,9 +140,20 @@ crates/porter-mixin      Mixin translation
 crates/porter-content    data and assets → .hmod
 crates/porter-translate  Java → Rust code translation
 crates/porter-verify     builds and checks against Horizon
+app/                     Horizon Porter, the desktop app (Tauri; the page is in app/ui)
 modkit/                  the runtime ported mods build on
 docs/                    architecture, roadmap, the Create case study
 ```
+
+## Design
+
+The desktop app and the HTML report were designed with two open design skills:
+[unslop](https://github.com/heydamir/unslop) by Damir Sokolovsky
+([@heydamir](https://x.com/heydamir)), CC BY 4.0, whose tokens (the graphite ramp,
+spacing, type and motion values) the stylesheets adapt; and
+[oil-ui](https://github.com/oil-oil/oil-ui) (MIT), whose process (one subject and one
+action per screen, structure before style, review from real screenshots) shaped the
+screens.
 
 ## Licence
 

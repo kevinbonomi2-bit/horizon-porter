@@ -1,0 +1,151 @@
+/* Horizon Porter. Direction: exact, workshop-like, unhurried; a smith's bench where
+   Java parts are reforged in Rust. Graphite surfaces, one ember accent for the main
+   action, inventory slots as the signature. Tokens after unslop (CC BY 4.0, Damir
+   Sokolovsky); process after oil-ui. */
+
+:root {
+  color-scheme: light dark;
+  --bg: #fafafa; --card: #ffffff; --raised: #f4f4f5; --sunk: #ececee;
+  --fg: #171717; --fg-2: #525252; --fg-3: #737373;
+  --line: rgba(23, 23, 23, 0.08); --line-strong: rgba(23, 23, 23, 0.16);
+  --accent: #b5482a; --on-accent: #ffffff;
+  --light: #171717; --on-light: #ffffff;
+  --ok: #16a34a; --bad: #dc2626;
+  --slot-hi: rgba(255, 255, 255, 0.7); --slot-lo: rgba(0, 0, 0, 0.10);
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --mono: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #141415; --card: #19191b; --raised: #232325; --sunk: #0f0f10;
+    --fg: #ededed; --fg-2: #a1a1a6; --fg-3: #85858b;
+    --line: rgba(237, 237, 237, 0.08); --line-strong: rgba(237, 237, 237, 0.16);
+    --accent: #e0714f; --on-accent: #141415;
+    --light: #ededed; --on-light: #141415;
+    --ok: #4cc38a; --bad: #e5484d;
+    --slot-hi: rgba(255, 255, 255, 0.05); --slot-lo: rgba(0, 0, 0, 0.55);
+  }
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0; display: grid; grid-template-rows: 56px 1fr; overflow: hidden;
+  background: var(--bg); color: var(--fg);
+  font: 14px/20px system-ui, -apple-system, "Segoe UI Variable", "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+[hidden] { display: none !important; }
+.mono { font-family: var(--mono); }
+
+/* Icons: one set, 16px, 1.5px stroke, the color of their text. */
+.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor;
+  stroke-width: 2.25; stroke-linecap: round; stroke-linejoin: round; }
+.i-lg { width: 20px; height: 20px; stroke-width: 1.8; }
+
+/* Top bar. */
+.bar {
+  display: flex; align-items: center; gap: 16px; padding: 0 16px 0 20px;
+  border-bottom: 1px solid var(--line); min-width: 0;
+}
+.brand { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 500; flex: none; }
+.mark { width: 16px; height: 16px; }
+.mark rect { fill: var(--accent); }
+.mark path { stroke: var(--bg); stroke-width: 1.6; fill: none; }
+.mod { display: flex; align-items: baseline; gap: 12px; min-width: 0; flex: 1;
+  padding-left: 16px; border-left: 1px solid var(--line); }
+.mod-title { font-size: 15px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mod-facts { color: var(--fg-3); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.actions { display: flex; gap: 8px; margin-left: auto; flex: none; }
+
+/* Buttons. */
+.btn {
+  display: inline-flex; align-items: center; gap: 8px; height: 32px; padding: 0 12px;
+  border-radius: 8px; border: 1px solid var(--line); background: var(--raised); color: var(--fg);
+  font: inherit; font-weight: 500; cursor: pointer; white-space: nowrap;
+  transition: background-color 150ms var(--ease), border-color 150ms var(--ease), transform 120ms var(--ease);
+}
+.btn:hover { border-color: var(--line-strong); }
+.btn:active { transform: scale(0.98); }
+.btn:focus-visible, .drop:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+.btn .i { color: var(--fg-2); }
+.btn.primary { background: var(--accent); color: var(--on-accent); border-color: transparent; }
+.btn.primary .i { color: currentColor; }
+.btn.primary:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 88%, var(--fg)); }
+.btn.light { background: var(--light); color: var(--on-light); border-color: transparent;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12); }
+.btn.light .i { color: currentColor; }
+.btn.light:hover { background: color-mix(in srgb, var(--light) 90%, var(--bg)); }
+.btn.icon-only { width: 32px; padding: 0; justify-content: center; background: transparent; border-color: transparent; }
+.btn.icon-only:hover { background: var(--raised); }
+.btn.busy { cursor: progress; }
+
+main { position: relative; min-height: 0; }
+
+/* Empty state: the drop slot is the one subject. */
+.welcome { height: 100%; overflow: auto; display: grid; align-items: center; padding: 32px; }
+.welcome-inner { width: 100%; max-width: 720px; margin: -40px auto 0; }
+h1 { font-size: 32px; line-height: 1.15; font-weight: 500; margin: 0 0 12px; letter-spacing: -0.01em; }
+.lede { font-size: 15px; line-height: 22px; color: var(--fg-2); max-width: 36rem; margin: 0 0 24px; }
+
+/* The signature: an empty inventory slot, darker at the top left. */
+.drop {
+  display: grid; place-items: center; height: 208px; border-radius: 12px; cursor: pointer;
+  background: var(--sunk); border: 1px solid var(--line);
+  box-shadow: inset 3px 3px 0 var(--slot-lo), inset -2px -2px 0 var(--slot-hi);
+  transition: border-color 150ms var(--ease), background-color 150ms var(--ease);
+}
+.drop:hover { border-color: var(--line-strong); }
+.drop-idle, .drop-busy { display: grid; justify-items: center; gap: 4px; text-align: center; padding: 0 24px; }
+.drop-idle .i { color: var(--fg-3); margin-bottom: 8px; transition: transform 200ms var(--ease); }
+.drop-title { margin: 0; font-size: 15px; font-weight: 500; }
+.drop-note { margin: 0; font-size: 13px; color: var(--fg-3); max-width: 520px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+body.hovering .drop { border-color: var(--accent); background: var(--raised); }
+body.hovering .drop-idle .i { color: var(--accent); transform: translateY(2px); }
+
+/* Reading is live, so its progress line may move. */
+.progress { width: 200px; height: 2px; margin-top: 16px; border-radius: 1px; overflow: hidden; background: var(--line); }
+.progress span { display: block; width: 40%; height: 100%; background: var(--fg-2);
+  animation: progress 1200ms var(--ease) infinite; }
+@keyframes progress { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
+
+.row { display: flex; align-items: center; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
+.note { color: var(--fg-3); font-size: 13px; margin-left: 8px; }
+.error { display: flex; gap: 8px; align-items: flex-start; margin: 16px 0 0; color: var(--fg-2); font-size: 13px; }
+.error .i { color: var(--bad); margin-top: 2px; }
+
+/* After a scan: the report fills the window. */
+.result { height: 100%; display: flex; flex-direction: column; animation: enter 360ms var(--ease) both; }
+@keyframes enter { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+#report { flex: 1; width: 100%; border: 0; background: var(--bg); }
+
+.notice {
+  display: flex; align-items: center; gap: 12px; margin: 16px 24px 0; padding: 12px 12px 12px 16px;
+  background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+  animation: enter 300ms var(--ease) both;
+}
+.notice > .i { color: var(--ok); }
+.notice.bad > .i { color: var(--bad); }
+.notice-text { min-width: 0; flex: 1; }
+.notice-title { margin: 0; font-weight: 500; }
+.notice-detail { margin: 0; color: var(--fg-3); font-size: 13px; font-family: var(--mono);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.notice-actions { display: flex; gap: 8px; flex: none; }
+
+.overlay {
+  position: absolute; inset: 0; display: none; place-items: center; pointer-events: none;
+  background: color-mix(in srgb, var(--bg) 82%, transparent);
+}
+.overlay p { margin: 0; padding: 12px 16px; border-radius: 12px; background: var(--card);
+  border: 1px solid var(--accent); font-weight: 500; }
+body.hovering .result:not([hidden]) .overlay { display: grid; }
+
+@media (max-width: 860px) {
+  .mod-facts { display: none; }
+  .btn#save { width: 32px; padding: 0; justify-content: center; font-size: 0; gap: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 1ms !important; transition-duration: 1ms !important; }
+}

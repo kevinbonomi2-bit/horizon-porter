@@ -46,6 +46,9 @@ scenarios we check.
   copies its real signatures. Still to do for M1: build a ported mod into Horizon with
   `native.py check` (it needs WSL on Windows) and play it, and port a real small mod
   end to end.
+- **Desktop app (2026-11-04):** Horizon Porter (`app/`, Tauri) wraps scan, report and
+  port in a drag-and-drop window, with installers for Windows, macOS and Linux in each
+  release. Designed with the unslop and oil-ui skills (see the README).
 - **Also found:** Horizon now has 427 versioned hook points (`native-hooks.json`) and
   159 helpers, far beyond the documented client set: blocks, block entities (with
   drawing helpers), entities, loot, players, screens and more. That makes M2 (content

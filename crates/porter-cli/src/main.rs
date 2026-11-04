@@ -41,6 +41,9 @@ enum Command {
         /// Write the report as a self-contained HTML page to this file instead
         #[arg(long, value_name = "FILE")]
         html: Option<PathBuf>,
+        /// With --html: the page the desktop app shows, without header and footer
+        #[arg(long, hide = true, requires = "html")]
+        embedded: bool,
     },
     /// Generate a Horizon native mod bundle for a client mod, with a porting checklist
     Port {
@@ -86,12 +89,17 @@ fn run(cli: Cli) -> Result<ExitCode> {
             all,
             top,
             html,
+            embedded,
         } => {
             let scan = porter_java::scan(&path)?;
             match html {
                 Some(out) => {
-                    fs::write(&out, porter_report::html(&scan))
-                        .with_context(|| format!("writing {}", out.display()))?;
+                    let page = if embedded {
+                        porter_report::html_embedded(&scan)
+                    } else {
+                        porter_report::html(&scan)
+                    };
+                    fs::write(&out, page).with_context(|| format!("writing {}", out.display()))?;
                     println!("Report written to {}", out.display());
                 }
                 None => print!("{}", porter_report::text_full(&scan, all, top)),

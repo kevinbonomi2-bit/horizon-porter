@@ -1,0 +1,183 @@
+// Horizon Porter's page. Commands run in Rust (src/main.rs); drops arrive as
+// "drop-hover" and "dropped" events. Text from mods is only ever set as textContent.
+
+const { invoke } = window.__TAURI__.core;
+const { listen } = window.__TAURI__.event;
+const $ = (id) => document.getElementById(id);
+
+let busy = false;
+
+function icon(name) {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("class", "i");
+  const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
+  use.setAttribute("href", `#i-${name}`);
+  svg.append(use);
+  return svg;
+}
+
+function button(label, onClick, iconName) {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "btn";
+  if (iconName) b.append(icon(iconName));
+  b.append(label);
+  b.addEventListener("click", onClick);
+  return b;
+}
+
+function showView(view) {
+  $("welcome").hidden = view !== "welcome";
+  $("result").hidden = view !== "result";
+  $("mod").hidden = view !== "result";
+  $("actions").hidden = view !== "result";
+}
+
+function setBusy(on, path) {
+  $("drop-idle").hidden = on;
+  $("drop-busy").hidden = !on;
+  $("drop").setAttribute("aria-busy", on ? "true" : "false");
+  for (const id of ["pick-folder", "pick-jar"]) $(id).disabled = on;
+  if (on) {
+    const name = path.split(/[\\/]/).filter(Boolean).pop() || path;
+    $("busy-title").textContent = `Reading ${name}`;
+    $("busy-path").textContent = path;
+  }
+}
+
+function welcomeError(message) {
+  const el = $("welcome-error");
+  el.hidden = !message;
+  el.querySelector("span").textContent = message || "";
+}
+
+/** A notice above the report: ok or bad, a title, a detail line and buttons. */
+function notice(kind, title, detail, actions = []) {
+  const el = $("notice");
+  el.replaceChildren();
+  if (!kind) {
+    el.hidden = true;
+    return;
+  }
+  el.className = `notice${kind === "bad" ? " bad" : ""}`;
+  el.append(icon(kind === "bad" ? "alert" : "check"));
+  const text = document.createElement("div");
+  text.className = "notice-text";
+  const t = document.createElement("p");
+  t.className = "notice-title";
+  t.textContent = title;
+  text.append(t);
+  if (detail) {
+    const d = document.createElement("p");
+    d.className = "notice-detail";
+    d.textContent = detail;
+    d.title = detail;
+    text.append(d);
+  }
+  el.append(text);
+  if (actions.length) {
+    const box = document.createElement("div");
+    box.className = "notice-actions";
+    box.append(...actions);
+    el.append(box);
+  }
+  el.hidden = false;
+}
+
+async function read(path) {
+  if (busy) return;
+  busy = true;
+  showView("welcome");
+  welcomeError(null);
+  setBusy(true, path);
+  try {
+    const view = await invoke("scan", { path });
+    $("mod-title").textContent = view.title;
+    $("mod-facts").textContent = view.facts.join(" · ");
+    const port = $("port");
+    port.disabled = view.isJar;
+    port.title = view.isJar ? "Porting needs the mod's source folder; a jar can only be read" : "";
+    $("report").srcdoc = view.report;
+    notice(null);
+    showView("result");
+  } catch (e) {
+    welcomeError(String(e));
+  } finally {
+    setBusy(false);
+    busy = false;
+  }
+}
+
+async function pick(jar) {
+  const path = await invoke("pick", { jar });
+  if (path) read(path);
+}
+
+async function openPath(path) {
+  try {
+    await invoke("open_path", { path });
+  } catch (e) {
+    notice("bad", "Could not open it", String(e));
+  }
+}
+
+async function saveReport() {
+  try {
+    const path = await invoke("save_report");
+    if (path) notice("ok", "Saved the report", path, [button("Open", () => openPath(path))]);
+  } catch (e) {
+    notice("bad", "Could not save the report", String(e));
+  }
+}
+
+async function port() {
+  const b = $("port");
+  const label = b.lastChild.previousSibling;
+  b.disabled = true;
+  b.classList.add("busy");
+  label.textContent = "Porting";
+  try {
+    const done = await invoke("port");
+    if (done) {
+      const wired = `${done.wired.length} hooks wired`;
+      const left = done.unwired.length ? `, ${done.unwired.length} to wire by hand` : "";
+      notice("ok", `Wrote ${done.id}-horizon: ${wired}${left}`, done.out, [
+        button("Open folder", () => openPath(done.out), "folder"),
+        button("Open PORTING.md", () => openPath(done.porting)),
+      ]);
+    }
+  } catch (e) {
+    notice("bad", "Could not port the mod", String(e));
+  } finally {
+    label.textContent = "Port to Horizon";
+    b.classList.remove("busy");
+    b.disabled = false;
+  }
+}
+
+$("pick-folder").addEventListener("click", () => pick(false));
+$("pick-jar").addEventListener("click", () => pick(true));
+$("drop").addEventListener("click", () => !busy && pick(false));
+$("drop").addEventListener("keydown", (e) => {
+  if ((e.key === "Enter" || e.key === " ") && !busy) {
+    e.preventDefault();
+    pick(false);
+  }
+});
+$("again").addEventListener("click", () => {
+  welcomeError(null);
+  showView("welcome");
+});
+$("save").addEventListener("click", saveReport);
+$("port").addEventListener("click", port);
+
+listen("drop-hover", (e) => {
+  document.body.classList.toggle("hovering", Boolean(e.payload));
+  $("drop-title").textContent = e.payload ? "Release to read the mod" : "Drop a folder or .jar";
+});
+listen("dropped", (e) => {
+  document.body.classList.remove("hovering");
+  $("drop-title").textContent = "Drop a folder or .jar";
+  const paths = e.payload || [];
+  if (paths.length) read(paths[0]);
+});

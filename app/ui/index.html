@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Horizon Porter</title>
+<link rel="stylesheet" href="style.css">
+<script src="app.js" defer></script>
+</head>
+<body>
+<!-- Icons: lucide (ISC). -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-drop" viewBox="0 0 24 24"><path d="M12 17V3"/><path d="m6 11 6 6 6-6"/><path d="M19 21H5"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/></symbol>
+  <symbol id="i-jar" viewBox="0 0 24 24"><path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z"/><path d="M12 22V12"/><path d="m3.3 7 7.7 4.73a2 2 0 0 0 2 0L20.7 7"/></symbol>
+  <symbol id="i-save" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/></symbol>
+  <symbol id="i-again" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></symbol>
+  <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></symbol>
+</svg>
+
+<header class="bar">
+  <div class="brand">
+    <svg class="mark" viewBox="0 0 16 16" aria-hidden="true"><rect x="1" y="1" width="14" height="14" rx="3"/><path d="M5 4.5v7M11 4.5v7M5 8h6"/></svg>
+    <span>Horizon Porter</span>
+  </div>
+  <div class="mod" id="mod" hidden>
+    <span class="mod-title" id="mod-title"></span>
+    <span class="mod-facts" id="mod-facts"></span>
+  </div>
+  <div class="actions" id="actions" hidden>
+    <button class="btn icon-only" id="again" type="button" title="Read another mod" aria-label="Read another mod"><svg class="i"><use href="#i-again"/></svg></button>
+    <button class="btn" id="save" type="button"><svg class="i"><use href="#i-save"/></svg>Save report</button>
+    <button class="btn primary" id="port" type="button">Port to Horizon<svg class="i"><use href="#i-arrow"/></svg></button>
+  </div>
+</header>
+
+<main>
+  <section class="welcome" id="welcome">
+    <div class="welcome-inner">
+      <h1>Port a Minecraft mod to Horizon</h1>
+      <p class="lede">Drop the mod's source folder or its jar. Horizon Porter reads it, shows what carries over and what is blocked, and writes the Horizon mod.</p>
+
+      <div class="drop" id="drop" tabindex="0" role="button" aria-label="Choose a mod's source folder">
+        <div class="drop-idle" id="drop-idle">
+          <svg class="i i-lg"><use href="#i-drop"/></svg>
+          <p class="drop-title" id="drop-title">Drop a folder or .jar</p>
+          <p class="drop-note">A source folder gives the full report and can be ported</p>
+        </div>
+        <div class="drop-busy" id="drop-busy" hidden>
+          <p class="drop-title" id="busy-title">Reading the mod</p>
+          <p class="drop-note mono" id="busy-path"></p>
+          <div class="progress" aria-hidden="true"><span></span></div>
+        </div>
+      </div>
+
+      <div class="row">
+        <button class="btn light" id="pick-folder" type="button"><svg class="i"><use href="#i-folder"/></svg>Choose folder</button>
+        <button class="btn" id="pick-jar" type="button"><svg class="i"><use href="#i-jar"/></svg>Choose .jar</button>
+        <span class="note">Runs on this computer. Nothing is uploaded.</span>
+      </div>
+      <p class="error" id="welcome-error" role="alert" hidden><svg class="i"><use href="#i-alert"/></svg><span></span></p>
+    </div>
+  </section>
+
+  <section class="result" id="result" hidden>
+    <div class="notice" id="notice" role="status" hidden></div>
+    <iframe id="report" title="Porting report" sandbox=""></iframe>
+    <div class="overlay" id="overlay" aria-hidden="true"><p>Release to read this mod instead</p></div>
+  </section>
+</main>
+</body>
+</html>

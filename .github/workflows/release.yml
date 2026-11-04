@@ -20,7 +20,7 @@ jobs:
         run: |
           gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft \
             --title "horizon-porter $GITHUB_REF_NAME" --generate-notes \
-            --notes "Download the archive for your system, extract it, and run \`horizon-porter scan <mod folder or jar>\`. See the README for details."
+            --notes "**Desktop app:** Horizon Porter's installer for your system (\`setup.exe\` on Windows, \`.app.zip\` on macOS, \`.deb\` on Linux). **Command line:** the \`horizon-porter\` archive for your system. See the README for details."
 
   build:
     name: Build (${{ matrix.target }})
@@ -78,9 +78,69 @@ jobs:
 
   # Publishes whatever was built, so one stuck runner does not hold the release back;
   # re-running a failed build job later uploads its archive to the same release.
+  app:
+    name: App (${{ matrix.target }})
+    needs: create
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            bundles: nsis
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            bundles: deb
+          - os: macos-15-intel
+            target: aarch64-apple-darwin
+            bundles: app
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            bundles: app
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add ${{ matrix.target }}
+
+      - name: Linux libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
+
+      - name: Bundle
+        working-directory: app
+        run: npx --yes @tauri-apps/cli@2 build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} --ci
+
+      - name: Upload
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          dir="target/${{ matrix.target }}/release/bundle"
+          files=()
+          case "$RUNNER_OS" in
+            Windows) for f in "$dir"/nsis/*.exe; do files+=("$f"); done ;;
+            Linux) for f in "$dir"/deb/*.deb; do files+=("$f"); done ;;
+            macOS)
+              app=$(ls -d "$dir"/macos/*.app | head -1)
+              zip="Horizon.Porter_${GITHUB_REF_NAME#v}_${{ matrix.target }}.app.zip"
+              ditto -c -k --keepParent "$app" "$zip"
+              files+=("$zip") ;;
+          esac
+          ls -l "${files[@]}"
+          gh release upload "$GITHUB_REF_NAME" "${files[@]}" --repo "$GITHUB_REPOSITORY" --clobber
+
   publish:
     name: Publish release
-    needs: build
+    needs: [build, app]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:

@@ -1,0 +1,25 @@
+[package]
+name = "horizon-porter-app"
+description = "Horizon Porter: drop a Minecraft Java mod, see what carries over to Horizon, and port it."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "horizon-porter-app"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+porter-java = { path = "../crates/porter-java" }
+porter-model = { path = "../crates/porter-model" }
+porter-report = { path = "../crates/porter-report" }
+porter-translate = { path = "../crates/porter-translate" }
+serde = { version = "1.0.229", features = ["derive"] }
+# custom-protocol serves the bundled ui/ folder; there is no dev server.
+tauri = { version = "2", features = ["custom-protocol"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
