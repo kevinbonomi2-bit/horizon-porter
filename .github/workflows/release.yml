@@ -33,11 +33,14 @@ jobs:
             target: x86_64-pc-windows-msvc
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-          - os: macos-latest
+          # Both Mac builds run on Intel runners (Apple Silicon runners are often
+          # short); the aarch64 build cross-compiles there.
+          - os: macos-15-intel
             target: aarch64-apple-darwin
-          - os: macos-latest
+          - os: macos-15-intel
             target: x86_64-apple-darwin
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
 
@@ -73,9 +76,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload "$GITHUB_REF_NAME" "$ASSET" --repo "$GITHUB_REPOSITORY" --clobber
 
+  # Publishes whatever was built, so one stuck runner does not hold the release back;
+  # re-running a failed build job later uploads its archive to the same release.
   publish:
     name: Publish release
     needs: build
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
       - name: Publish
