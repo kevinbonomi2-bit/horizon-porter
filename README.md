@@ -41,8 +41,8 @@ and assets. horizon-porter is for the rest, **the code**:
    each one depends on.
 2. **Report** what ports automatically, what needs a human, and what is blocked, such as
    a Horizon hook point that doesn't exist yet.
-3. **Port** it: a Horizon content mod for data and assets, and a native mod bundle for the
-   code. Mixins are translated to horizon-mixins, and API calls are mapped through
+3. **Port** it: a Horizon content mod for blocks, items, data and assets, and a native
+   mod bundle for the code, with block entities as saved state and hooks wired. Mixins are translated to horizon-mixins, and API calls are mapped through
    Horizon's port ledger and the modkit runtime. AI translates the method bodies that
    rules can't, and the Rust compiler checks every result.
 4. **Check** it against Horizon, and keep track of what is left, class by class.
@@ -85,7 +85,7 @@ horizon-porter report path/to/your-mod --html report.html   # a page to open or 
 `--html` writes the whole report as a single self-contained page (no scripts, nothing
 loaded from elsewhere). Open it in a browser, attach it to an issue, or post it.
 
-### Porting a client mod
+### Porting a mod
 
 ```
 horizon-porter port path/to/your-mod --out my-mod-horizon
@@ -108,6 +108,32 @@ The stubs get the player (position, yaw, pitch, dimension, and `facing()` as Jav
 generated folder straight away. `port` never overwrites a folder that has files unless
 you pass `--force`, and then only replaces its own files.
 
+### Porting blocks, items and block entities
+
+The same `port` command carries a mod's content over. For a mod that registers blocks
+and items it also writes `content/`, a Horizon content mod:
+
+- **`horizon-mod.toml`** and the Java mod's own assets and data (models, textures,
+  lang, recipes, loot tables, tags), in the namespaces Horizon accepts.
+- **A file per block**, copying a vanilla block (its template) and changing what the
+  Java code sets: `ofFullCopy(Blocks.IRON_BLOCK)` gives the template, `strength`,
+  `lightLevel`, `sound` and `requiresCorrectToolForDrops` give its properties, and
+  Registrate's builder chain is read the same way. A block with no vanilla block named
+  gets one from its class (`SlabBlock`, `DoorBlock`...) or from the state properties
+  its blockstate file uses (an `axis` block copies a log), and declares the state
+  properties its template lacks so its models still match.
+- **A file per item**, from `Item.Properties` (`stacksTo`, `rarity`, tools, food).
+
+Each **block entity** becomes a state struct in `runtime.rs`, saved with its block
+under the keys `saveAdditional` writes, plus a `tick_<name>` stub for its Java tick.
+Horizon's `native_block_entity` hooks give the blocks their block entity and run the
+tick on the server, saving what changed. Port the tick's body and the block works:
+`/data get block <x y z>` shows its saved values. `PORTING.md` lists every block's
+template and why, and anything left out.
+
+A mod that is only content (no client hooks, no block entities) gets `content/` alone:
+nothing to build or trust.
+
 ### Building, playing and sharing it
 
 ```
@@ -118,10 +144,15 @@ horizon-porter package my-mod-horizon
 `build` finds your Horizon launcher (or takes `--launcher PATH`) and runs its
 `native-build` into an instance of its own, **<mod id> port**, created the first time,
 so your other worlds never run the mod. It builds on the Horizon that instance plays:
-the generated `horizon-native.json` asks for hook points version 1 instead of pinning
-one Horizon commit. `--trust-native-code` is required every time, because native mods
-run unsandboxed: read the code first. `package` writes `<id>-<version>.hnmod`, the file
-Horizon's mod registry takes, packed the way Horizon's own mods are.
+the generated `horizon-native.json` asks for the hook points version it needs instead
+of pinning one Horizon commit. `--trust-native-code` is required every time, because
+native mods run unsandboxed: read the code first. `--play` starts the game with
+`content/` loaded as a development mod. A content mod alone needs no build or trust:
+`build --play` just plays it.
+
+`package` writes `<id>-<version>.hnmod`, the file Horizon's mod registry takes, packed
+the way Horizon's own mods are, and `<id>-<version>.hmod` from `content/`. Players put
+the `.hmod` in their game folder's `horizon-mods/` and turn it on in Options > Mods.
 
 The path is your mod's source folder (the Gradle project; multi-loader projects work)
 or a built `.jar`. The source gives the full picture. A jar gives classes, metadata and
@@ -159,8 +190,8 @@ crates/porter-model      shared types
 crates/porter-java       reads Java mods
 crates/porter-map        Java → Horizon symbol and Mixin mappings
 crates/porter-mixin      Mixin translation
-crates/porter-content    data and assets → .hmod
-crates/porter-translate  Java → Rust code translation
+crates/porter-content    blocks, items, data and assets → a content mod (.hmod)
+crates/porter-translate  Java → Rust: the native mod, block entities, PORTING.md
 crates/porter-verify     builds ported mods with the Horizon launcher
 app/                     Horizon Porter, the desktop app (Tauri; the page is in app/ui)
 modkit/                  the runtime ported mods build on

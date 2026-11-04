@@ -8,3 +8,4 @@ publish = false
 
 [dependencies]
 porter-model = { path = "../porter-model" }
+serde_json = "1.0.154"

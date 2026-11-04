@@ -48,6 +48,17 @@ scenarios we check.
   filled in, built with the launcher and played in Horizon (keys, HUD, command, the
   Options > Mods row). The helpers are also type-checked in CI against a mock of
   Horizon's hook API.
+- **M2, done (2026-11-04):** `port` also writes a content mod (`content/`): the Java
+  mod's assets and data, a block file per block (template from `ofFullCopy` /
+  `Properties.copy`, the block's class or its blockstate's properties; hardness,
+  resistance, light, sounds and tool from its properties, Registrate chains included;
+  declared state properties where the template lacks them) and an item file per item.
+  Block entities become state structs saved with their block under the Java keys, with
+  tick stubs, wired to `native_block_entity`, `native_block_entity_ticks` and
+  `native_block_entity_tick` (hook points version 129). `build --play` loads `content/`
+  as a dev mod, and `package` also writes the `.hmod`. On Create: 190 blocks, 84 items,
+  7,793 resource files and 114 block entity states, whose generated code compiles and
+  passes its tests. TESTED_LIVE
 - **Desktop app (2026-11-04):** Horizon Porter (`app/`, Tauri) wraps scan, report and
   port in a drag-and-drop window, with installers for Windows, macOS and Linux in each
   release. Designed with the unslop and oil-ui skills (see the README).
