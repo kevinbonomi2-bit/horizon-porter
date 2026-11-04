@@ -123,6 +123,9 @@ pub(crate) struct Call {
     pub enclosing: String,
     /// The method it is in, as an index into [`ParsedFile::methods`].
     pub in_method: Option<usize>,
+    /// The builder calls chained after it, as written: Registrate's
+    /// `.initialProperties(() -> Blocks.GOLD_ORE).properties(p -> p.strength(3f))`.
+    pub chain: String,
 }
 
 /// A method's name, parameter names and parameter types (as written).
@@ -606,10 +609,32 @@ fn call_at(
             .rfind(|n| n.kind() == "string_literal")
             .map(|n| unquote(&text(n)))
     });
+    // Walk up while this call is the receiver of another: `x.block(..).a(..).b()`.
+    let mut outer = node;
+    while let Some(parent) = outer.parent() {
+        if parent.kind() == "method_invocation"
+            && parent.child_by_field_name("object").map(|o| o.id()) == Some(outer.id())
+        {
+            outer = parent;
+        } else {
+            break;
+        }
+    }
+    let chain = if outer.id() == node.id() {
+        String::new()
+    } else {
+        let src_bytes = text(outer);
+        let own = text(node);
+        src_bytes
+            .strip_prefix(own.as_str())
+            .unwrap_or("")
+            .to_string()
+    };
     Some(Call {
         object,
         object_is_chain,
         method,
+        chain,
         args: args.iter().map(|a| text(*a)).collect(),
         literal_args,
         first_string,

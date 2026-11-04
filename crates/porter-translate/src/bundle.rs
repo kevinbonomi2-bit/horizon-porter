@@ -11,8 +11,13 @@ use std::fmt::Write;
 use std::fs;
 use std::path::Path;
 
+use std::path::PathBuf;
+
 use anyhow::{Context, Result, bail};
 use porter_model::{ModScan, Verdict};
+
+use crate::block_entity::{self, BlockEntity};
+use crate::content;
 
 /// The Horizon and horizon-mixins commits Horizon's own native mods were tested on
 /// (horizon-mods native/zoom, 2026-11). Update them to a current Nightly.
@@ -24,6 +29,16 @@ pub struct Bundle {
     /// The mod id used in Horizon: `a-z`, `0-9` and `_`.
     pub id: String,
     pub files: BTreeMap<String, String>,
+    /// Files copied from the Java mod (its resources), by path in the output folder.
+    pub copies: BTreeMap<String, PathBuf>,
+    /// Whether it has a native half (a horizon-mixins bundle). A mod with only blocks,
+    /// items and resources is a content mod alone, which needs no build.
+    pub native: bool,
+    /// The hook points version the native half needs.
+    pub hooks: u32,
+    /// The content mod under `content/`: its blocks, items and what was left out.
+    pub content: content::Content,
+    pub block_entities: Vec<BlockEntity>,
     /// Hooks wired completely, with the Java classes that need each.
     pub wired: BTreeMap<&'static str, BTreeSet<String>>,
     /// Hooks the mod needs that must be wired by hand.
@@ -117,6 +132,26 @@ pub fn generate(scan: &ModScan, lang: &Lang) -> Bundle {
         entry.1.insert("key input (no key bindings found to match)");
     }
 
+    // Blocks, items and resources: a content mod. Block entities: native hooks.
+    let content = content::generate(scan, &id, &java_id, &name, &version, &description);
+    let ns = content::namespace(&java_id, &id).to_string();
+    let block_entities = block_entity::find(scan, &ns);
+    let mut hooks = 1;
+    if !block_entities.is_empty() {
+        hooks = block_entity::HOOKS_VERSION;
+        let classes: BTreeSet<String> = block_entities
+            .iter()
+            .filter_map(|b| b.class.clone())
+            .collect();
+        wired.insert("block_entity", classes.clone());
+        if block_entities.iter().any(|b| b.ticks) {
+            wired.insert("block_entity_ticks", classes.clone());
+            wired.insert("block_entity_tick", classes);
+        }
+    }
+    // Only an Options > Mods row: the content mod is the whole port.
+    let native = content.is_empty() || wired.keys().any(|h| *h != "mods");
+
     let ctx = Ctx {
         id: &id,
         module: format!("ported_{id}"),
@@ -126,27 +161,55 @@ pub fn generate(scan: &ModScan, lang: &Lang) -> Bundle {
         scan,
         lang,
         wired: &wired,
+        hooks,
+        block_entities: &block_entities,
     };
     let mut files = BTreeMap::new();
-    let dir = format!("mixins/{id}");
-    files.insert("Cargo.toml".into(), ctx.cargo_toml());
-    files.insert("compatibility.json".into(), compatibility_json());
-    // Makes the folder an unpacked .hnmod that needs hook points version 1 instead
-    // of pinning a commit, so the launcher builds it on the Horizon the player plays.
-    files.insert(
-        "horizon-native.json".into(),
-        native_manifest(&id, &version, HORIZON_REVISION, HORIZON_MIXINS_REVISION),
-    );
-    files.insert(format!("{dir}/horizon-mixin.toml"), ctx.manifest());
-    files.insert(format!("{dir}/runtime.rs"), ctx.runtime());
-    for hook in wired.keys() {
-        let (file, body) = ctx.helper(hook);
-        files.insert(format!("{dir}/{file}"), body);
+    if native {
+        let dir = format!("mixins/{id}");
+        files.insert("Cargo.toml".into(), ctx.cargo_toml());
+        files.insert("compatibility.json".into(), compatibility_json(hooks));
+        // Makes the folder an unpacked .hnmod that needs a hook points version
+        // instead of pinning a commit, so the launcher builds it on the Horizon the
+        // player plays.
+        files.insert(
+            "horizon-native.json".into(),
+            native_manifest(
+                &id,
+                &version,
+                HORIZON_REVISION,
+                HORIZON_MIXINS_REVISION,
+                hooks,
+            ),
+        );
+        files.insert(format!("{dir}/horizon-mixin.toml"), ctx.manifest());
+        files.insert(format!("{dir}/runtime.rs"), ctx.runtime());
+        for hook in wired.keys() {
+            let (file, body) = ctx.helper(hook);
+            files.insert(format!("{dir}/{file}"), body);
+        }
     }
+    for (rel, text) in &content.files {
+        files.insert(format!("content/{rel}"), text.clone());
+    }
+    let copies = content
+        .copies
+        .iter()
+        .map(|(rel, src)| (format!("content/{rel}"), src.clone()))
+        .collect();
     let bundle = Bundle {
         id: id.clone(),
         files,
-        wired: wired.clone(),
+        copies,
+        native,
+        hooks,
+        content,
+        block_entities: block_entities.clone(),
+        wired: if native {
+            wired.clone()
+        } else {
+            BTreeMap::new()
+        },
         unwired,
     };
     let porting = ctx.porting_md(&bundle);
@@ -177,6 +240,14 @@ pub fn write(bundle: &Bundle, out: &Path, overwrite: bool) -> Result<()> {
         }
         fs::write(&path, content).with_context(|| format!("writing {}", path.display()))?;
     }
+    for (rel, src) in &bundle.copies {
+        let path = out.join(rel);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+        }
+        fs::copy(src, &path)
+            .with_context(|| format!("copying {} to {}", src.display(), path.display()))?;
+    }
     Ok(())
 }
 
@@ -198,19 +269,19 @@ pub fn sanitize_id(java_id: &str) -> String {
     id
 }
 
-fn compatibility_json() -> String {
+fn compatibility_json(hooks: u32) -> String {
     format!(
-        "{{\n  \"game\": \"26.3\",\n  \"hooks\": 1,\n  \"horizon_repository\": \"https://github.com/horizon-rust/horizon\",\n  \"horizon_revision\": \"{HORIZON_REVISION}\",\n  \"horizon_mixins_repository\": \"https://github.com/horizon-rust/horizon-mixins\",\n  \"horizon_mixins_revision\": \"{HORIZON_MIXINS_REVISION}\"\n}}\n"
+        "{{\n  \"game\": \"26.3\",\n  \"hooks\": {hooks},\n  \"horizon_repository\": \"https://github.com/horizon-rust/horizon\",\n  \"horizon_revision\": \"{HORIZON_REVISION}\",\n  \"horizon_mixins_repository\": \"https://github.com/horizon-rust/horizon-mixins\",\n  \"horizon_mixins_revision\": \"{HORIZON_MIXINS_REVISION}\"\n}}\n"
     )
 }
 
 /// `horizon-native.json`, as horizon-mods' `native.py package` writes it: schema 1,
 /// keys sorted, two-space indent. `horizon` is the commit the mod was tested on;
 /// `hooks` is the hook points version it needs.
-pub fn native_manifest(id: &str, version: &str, horizon: &str, mixins: &str) -> String {
+pub fn native_manifest(id: &str, version: &str, horizon: &str, mixins: &str, hooks: u32) -> String {
     let manifest = serde_json::json!({
         "game": "26.3",
-        "hooks": 1,
+        "hooks": hooks,
         "horizon": horizon,
         "id": id,
         "mixins": mixins,
@@ -224,8 +295,72 @@ pub fn native_manifest(id: &str, version: &str, horizon: &str, mixins: &str) -> 
 /// Packs a bundle folder (as `port` writes it, edited or not) into a `.hnmod`, the
 /// way horizon-mods' `native.py package` does: `horizon-native.json`, the `.rs` and
 /// `.toml` files under `mixins/<id>/` and the folder's LICENSE, sorted, with fixed
-/// timestamps so the same sources give the same file. Returns its path.
-pub fn package(dir: &Path, out_dir: &Path) -> Result<std::path::PathBuf> {
+/// timestamps so the same sources give the same file. The content mod under
+/// `content/`, if there is one, becomes a `.hmod` beside it. Returns their paths.
+pub fn package(dir: &Path, out_dir: &Path) -> Result<Vec<PathBuf>> {
+    let native = dir.join("mixins").is_dir();
+    let content = dir.join("content").join("horizon-mod.toml").is_file();
+    if !native && !content {
+        bail!(
+            "{} has neither a mixins/ folder nor content/horizon-mod.toml: is it a folder `port` wrote?",
+            dir.display()
+        );
+    }
+    let mut out = Vec::new();
+    if native {
+        out.push(package_native(dir, out_dir)?);
+    }
+    if content {
+        out.push(package_content(&dir.join("content"), out_dir)?);
+    }
+    Ok(out)
+}
+
+/// Packs a content mod folder (`horizon-mod.toml`, `assets/`, `data/`) into a `.hmod`.
+fn package_content(dir: &Path, out_dir: &Path) -> Result<PathBuf> {
+    let manifest: toml::Table = toml::from_str(&fs::read_to_string(dir.join("horizon-mod.toml"))?)
+        .with_context(|| format!("reading {}", dir.join("horizon-mod.toml").display()))?;
+    let field = |key: &str| {
+        manifest
+            .get(key)
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .with_context(|| format!("content/horizon-mod.toml has no {key}"))
+    };
+    let (id, version) = (field("id")?, field("version")?);
+    let mut files: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+    files.insert(
+        "horizon-mod.toml".into(),
+        fs::read(dir.join("horizon-mod.toml"))?,
+    );
+    for top in ["assets", "data"] {
+        let mut stack = vec![dir.join(top)];
+        while let Some(d) = stack.pop() {
+            let Ok(entries) = fs::read_dir(&d) else {
+                continue;
+            };
+            for entry in entries {
+                let path = entry?.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else {
+                    let rel = path
+                        .strip_prefix(dir)
+                        .unwrap_or(&path)
+                        .to_string_lossy()
+                        .replace('\\', "/");
+                    files.insert(rel, fs::read(&path)?);
+                }
+            }
+        }
+    }
+    let out = out_dir.join(format!("{id}-{version}.hmod"));
+    write_zip(&out, &files)?;
+    Ok(out)
+}
+
+/// Packs the native half into a `.hnmod`.
+fn package_native(dir: &Path, out_dir: &Path) -> Result<PathBuf> {
     let mixins = dir.join("mixins");
     let mut bundles = fs::read_dir(&mixins)
         .with_context(|| {
@@ -279,11 +414,16 @@ pub fn package(dir: &Path, out_dir: &Path) -> Result<std::path::PathBuf> {
         .get("horizon_mixins_revision")
         .and_then(|v| v.as_str())
         .unwrap_or(HORIZON_MIXINS_REVISION);
+    let hooks = compat
+        .get("hooks")
+        .and_then(|v| v.as_u64())
+        .and_then(|v| u32::try_from(v).ok())
+        .unwrap_or(1);
 
     let mut files: BTreeMap<String, Vec<u8>> = BTreeMap::new();
     files.insert(
         "horizon-native.json".into(),
-        native_manifest(id, version, pinned, mixins_rev).into_bytes(),
+        native_manifest(id, version, pinned, mixins_rev, hooks).into_bytes(),
     );
     let mut stack = vec![bundle.clone()];
     while let Some(d) = stack.pop() {
@@ -310,21 +450,30 @@ pub fn package(dir: &Path, out_dir: &Path) -> Result<std::path::PathBuf> {
             .or_insert(licence);
     }
 
-    fs::create_dir_all(out_dir)?;
     let out = out_dir.join(format!("{id}-{version}.hnmod"));
-    let mut zip = zip::ZipWriter::new(fs::File::create(&out)?);
+    write_zip(&out, &files)?;
+    Ok(out)
+}
+
+/// Writes `files` into a zip at `out`, sorted, with fixed times and modes, so the
+/// same files give the same zip.
+fn write_zip(out: &Path, files: &BTreeMap<String, Vec<u8>>) -> Result<()> {
+    if let Some(parent) = out.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut zip = zip::ZipWriter::new(fs::File::create(out)?);
     let time = zip::DateTime::from_date_and_time(2026, 1, 1, 0, 0, 0)
         .map_err(|e| anyhow::anyhow!("zip time: {e:?}"))?;
     let options = zip::write::SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Deflated)
         .last_modified_time(time)
         .unix_permissions(0o644);
-    for (name, content) in &files {
+    for (name, content) in files {
         zip.start_file(name.as_str(), options)?;
         std::io::Write::write_all(&mut zip, content)?;
     }
     zip.finish()?;
-    Ok(out)
+    Ok(())
 }
 
 struct Ctx<'a> {
@@ -336,6 +485,8 @@ struct Ctx<'a> {
     scan: &'a ModScan,
     lang: &'a Lang,
     wired: &'a BTreeMap<&'static str, BTreeSet<String>>,
+    hooks: u32,
+    block_entities: &'a [BlockEntity],
 }
 
 impl Ctx<'_> {
@@ -386,8 +537,8 @@ id = "{id}"
 version = "{version}"
 priority = 100
 
-# The commit it was made for. It uses only Horizon's native hook points (hooks 1 in
-# compatibility.json), so the launcher builds it on any Horizon that has them.
+# The commit it was made for. It uses only Horizon's native hook points (hooks {hooks}
+# in compatibility.json), so the launcher builds it on any Horizon that has them.
 [compatibility]
 horizon_revision = "{HORIZON_REVISION}"
 
@@ -403,6 +554,7 @@ source = "runtime.rs"
             id = self.id,
             version = self.version,
             module = self.module,
+            hooks = self.hooks,
         );
         for hook in self.wired.keys() {
             let (file, _) = self.helper(hook);
@@ -522,6 +674,10 @@ pub const DESCRIPTION: &str = "{description}";
             );
         }
 
+        if !self.block_entities.is_empty() {
+            r.push_str(&block_entity::runtime(self.block_entities));
+        }
+
         r.push_str(
             r#"
 #[cfg(test)]
@@ -533,9 +689,10 @@ mod tests {
             assert!(default.starts_with("key.keyboard.") || default.starts_with("key.mouse."));
         }
     }
-}
 "#,
         );
+        r.push_str(&block_entity::runtime_tests(self.block_entities));
+        r.push_str("}\n");
         r
     }
 
@@ -710,12 +867,214 @@ fn {id}_click(game: &mut crate::game::Game<'_>, mod_id: &str, button: usize) {{
 "#
                 ),
             ),
+            "block_entity" => (
+                "block_entity.rs",
+                format!(
+                    r#"// {name}'s blocks get their block entity, with their state's defaults saved.
+fn {id}_block_entity(block: &str, entity: &mut Option<(String, horizon_world::nbt::Compound)>) {{
+    use crate::game::{m} as m;
+    use horizon_world::nbt::Tag;
+    if entity.is_some() {{
+        return;
+    }}
+    let Some((_, id, _)) = m::BLOCK_ENTITIES.iter().find(|(b, _, _)| *b == block) else {{
+        return;
+    }};
+    let mut nbt = horizon_world::nbt::Compound::new();
+    for (key, value) in m::block_entity_defaults(id) {{
+        let tag = {to_tag};
+        nbt.insert(key.into(), tag);
+    }}
+    *entity = Some(((*id).into(), nbt));
+}}
+"#,
+                    to_tag = block_entity::TO_TAG,
+                ),
+            ),
+            "block_entity_ticks" => (
+                "block_entity_ticks.rs",
+                format!(
+                    r#"// Which of {name}'s block entities tick.
+fn {id}_block_entity_ticks(block: &str, ticks: &mut bool) {{
+    use crate::game::{m} as m;
+    if m::BLOCK_ENTITIES.iter().any(|(b, _, t)| *b == block && *t) {{
+        *ticks = true;
+    }}
+}}
+"#
+                ),
+            ),
+            "block_entity_tick" => (
+                "block_entity_tick.rs",
+                format!(
+                    r#"// A server tick of one of {name}'s block entities: runs its tick on the state
+// saved with it, and saves what changed.
+fn {id}_block_entity_tick(pos: [i32; 3], entity: &mut horizon_client::containers::ModBlockEntity) {{
+    use crate::game::{m} as m;
+    use horizon_world::nbt::{{JavaString, Tag}};
+    if !m::BLOCK_ENTITIES.iter().any(|(_, id, _)| *id == entity.id) {{
+        return;
+    }}
+    let changed = {{
+        let nbt = &entity.nbt;
+        m::tick_block_entity(&entity.id, pos, |key| {{
+            let tag = nbt.get(&JavaString::from(key))?;
+            {from_tag}
+        }})
+    }};
+    // Only a change touches the entity: each write marks it for saving and sending.
+    if let Some(values) = changed {{
+        for (key, value) in values {{
+            let tag = {to_tag};
+            entity.nbt.insert(key.into(), tag);
+        }}
+    }}
+}}
+"#,
+                    from_tag = block_entity::FROM_TAG,
+                    to_tag = block_entity::TO_TAG,
+                ),
+            ),
             other => unreachable!("no helper for hook {other}"),
         }
     }
 
+    /// PORTING.md's sections on the content mod and the block entities.
+    fn content_md(&self, bundle: &Bundle) -> String {
+        let mut p = String::new();
+        let c = &bundle.content;
+        if !c.is_empty() {
+            let _ = write!(
+                p,
+                "\n## Content\n\n`content/` is a Horizon content mod: `horizon-mod.toml`, the Java mod's own \
+                 assets and data ({} files), and a file for each block and item. Each copies a vanilla block or \
+                 item (its template) and changes what the Java code sets: check the template fits, since it \
+                 decides the block's shape, states and behaviour.\n",
+                c.copies.len()
+            );
+            if !c.blocks.is_empty() {
+                p.push_str(
+                    "\n| Block | Template | Why | Properties |\n| --- | --- | --- | --- |\n",
+                );
+                for b in &c.blocks {
+                    let props = if b.properties.is_empty() {
+                        "-".to_string()
+                    } else {
+                        b.properties
+                            .iter()
+                            .map(|(k, v)| format!("`{k}` {v}"))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    };
+                    let _ = writeln!(
+                        p,
+                        "| `{}` | `{}` | {} | {props} |",
+                        b.name, b.template, b.template_from
+                    );
+                }
+            }
+            if !c.items.is_empty() {
+                p.push_str("\n| Item | Template |\n| --- | --- |\n");
+                for i in &c.items {
+                    let _ = writeln!(
+                        p,
+                        "| `{}` | `{}` |",
+                        i.name,
+                        i.json["template"].as_str().unwrap_or("-")
+                    );
+                }
+            }
+            if !c.skipped.is_empty() {
+                p.push_str("\nLeft out:\n\n");
+                for s in &c.skipped {
+                    let _ = writeln!(p, "- {s}");
+                }
+            }
+        } else if !self.scan.registrations.is_empty() {
+            let _ = write!(
+                p,
+                "\n## Content\n\nThe mod registers {} entries, but none of them is a block or item the porter could \
+                 read an id for, and it has no resources to carry over.\n",
+                self.scan.registrations.len()
+            );
+        }
+        if !self.block_entities.is_empty() {
+            let _ = write!(
+                p,
+                "\n## Block entities\n\nEach block entity type is a state struct in `mixins/{id}/runtime.rs`, saved \
+                 with its block: the fields `saveAdditional` writes, under the same keys, and the other plain \
+                 fields, so they last from tick to tick. `native_block_entity` gives the blocks their block entity \
+                 (it needs hook points version {hooks}), and on the server `native_block_entity_tick` runs the \
+                 `tick_` function for each one, 20 times a second, and saves what it changed. \
+                 `/data get block <x y z>` shows the saved values.\n\n\
+                 | Block entity | Blocks | Java class | State | Ticks |\n| --- | --- | --- | --- | --- |\n",
+                id = self.id,
+                hooks = self.hooks,
+            );
+            for be in self.block_entities {
+                let _ = writeln!(
+                    p,
+                    "| `{}` | {} | {} | `{}` ({} fields) | {} |",
+                    be.id,
+                    be.blocks
+                        .iter()
+                        .map(|b| format!("`{b}`"))
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    be.class
+                        .as_deref()
+                        .map_or("not found".to_string(), |c| format!("`{c}`")),
+                    be.rust,
+                    be.fields.len(),
+                    if be.ticks {
+                        format!("`tick_{}`", be.snake)
+                    } else {
+                        "no".into()
+                    }
+                );
+            }
+            let left: Vec<_> = self
+                .block_entities
+                .iter()
+                .flat_map(|b| b.left_out.iter().map(move |l| (b, l)))
+                .collect();
+            if !left.is_empty() {
+                p.push_str("\nLeft out of the states, to port by hand:\n\n");
+                for (b, l) in left {
+                    let _ = writeln!(p, "- `{}`: {l}", b.rust);
+                }
+            }
+            if self.block_entities.iter().any(|b| b.blocks.is_empty()) {
+                p.push_str("\nA block entity with no blocks was registered for blocks the porter could not match: add them to `BLOCK_ENTITIES`.\n");
+            }
+        }
+        p
+    }
+
     fn porting_md(&self, bundle: &Bundle) -> String {
         let scan = self.scan;
+        if !bundle.native {
+            let mut p = format!(
+                "# Porting {name} to Horizon\n\nGenerated by horizon-porter {tool} from `{input}`.\n\n\
+                 Everything the porter found in this mod is content: blocks, items and resources, with no code \
+                 that needs Horizon's hooks. `content/` is the whole port, a Horizon content mod, and it needs \
+                 no build.\n",
+                name = self.name,
+                tool = env!("CARGO_PKG_VERSION"),
+                input = scan.input,
+            );
+            p.push_str(&self.content_md(bundle));
+            let _ = write!(
+                p,
+                "\n## Play and share\n\n\
+                 1. `horizon-porter build . --play` (or **Play** in the Horizon Porter app) starts Horizon in its own \
+                 instance, **{id} port**, with `content/` loaded as a development mod.\n\
+                 2. `horizon-porter package .` writes `{id}-<version>.hmod`, the file players add on the launcher's \
+                 Mods page.\n",
+                id = self.id
+            );
+            return p;
+        }
         let mut p = format!(
             "# Porting {name} to Horizon\n\nGenerated by horizon-porter {tool} from `{input}`.\n\n\
              This folder is a Horizon native mod: a [horizon-mixins](https://github.com/horizon-rust/horizon-mixins) \
@@ -730,7 +1089,14 @@ fn {id}_click(game: &mut crate::game::Game<'_>, mod_id: &str, button: usize) {{
         p.push_str("## Files\n\n| File | What it is |\n| --- | --- |\n");
         p.push_str("| `Cargo.toml` | Runs the module's tests: `cargo test` |\n");
         p.push_str("| `compatibility.json` | The Minecraft version, hook points version and the Horizon commits the bundle targets |\n");
-        p.push_str("| `horizon-native.json` | The mod's registry manifest: it needs hook points version 1, so it builds on the Horizon the player plays |\n");
+        let _ = writeln!(
+            p,
+            "| `horizon-native.json` | The mod's registry manifest: it needs hook points version {}, so it builds on the Horizon the player plays |",
+            self.hooks
+        );
+        if !bundle.content.is_empty() {
+            p.push_str("| `content/` | The content mod: blocks, items and the Java mod's assets and data |\n");
+        }
         let _ = writeln!(
             p,
             "| `mixins/{id}/horizon-mixin.toml` | The manifest: the mod, its module and one injection per hook |",
@@ -762,6 +1128,9 @@ fn {id}_click(game: &mut crate::game::Game<'_>, mod_id: &str, button: usize) {{
                 "wheel" => "`on_wheel`",
                 "settings" => "`settings_buttons`",
                 "settings_click" => "`settings_click`",
+                "block_entity" => "`BLOCK_ENTITIES`, `block_entity_defaults`",
+                "block_entity_ticks" => "`BLOCK_ENTITIES`",
+                "block_entity_tick" => "`tick_block_entity`",
                 _ => "",
             };
             let java = if classes.is_empty() {
@@ -821,13 +1190,7 @@ fn {id}_click(game: &mut crate::game::Game<'_>, mod_id: &str, button: usize) {{
             }
         }
 
-        if !scan.registrations.is_empty() {
-            let _ = write!(
-                p,
-                "\n## Content\n\nThe mod registers {} entries (blocks, items and more). A client port does not cover them: the data and assets carry over through Horizon's content-mod path (the launcher's Mods page), and blocks or items with behaviour of their own need modkit (milestone M2).\n",
-                scan.registrations.len()
-            );
-        }
+        p.push_str(&self.content_md(bundle));
 
         p.push_str("\n## Every Java class\n\n");
         for class in &scan.classes {
@@ -862,11 +1225,21 @@ fn {id}_click(game: &mut crate::game::Game<'_>, mod_id: &str, button: usize) {{
              other worlds never run it, and `--play` starts it when the build is done. The first build downloads \
              Rust and takes several minutes; later ones are quicker. Native mods are not sandboxed: build only code \
              you have read.\n\
-             3. Share it: `horizon-porter package .` writes `{id}-<version>.hnmod`, the file Horizon's mod registry takes.\n\n\
-             `horizon-native.json` says the mod needs hook points version 1 rather than one Horizon commit, so the \
+             3. Share it: `horizon-porter package .` writes `{id}-<version>.hnmod`, the file Horizon's mod registry takes{hmod}.\n\n\
+             `horizon-native.json` says the mod needs hook points version {hooks} rather than one Horizon commit, so the \
              launcher builds it on the Horizon the instance plays. A rebuild stays on that Horizon; \
              `horizon-launcher native-build --update` moves an instance to a newer one.\n",
-            id = self.id
+            id = self.id,
+            hooks = self.hooks,
+            hmod = if bundle.content.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    ", and `{}-<version>.hmod` from `content/`, which players add on the launcher's Mods page. \
+                     The game loads both; `build --play` loads `content/` as a development mod",
+                    self.id
+                )
+            },
         );
         p
     }
@@ -948,6 +1321,26 @@ fn bindings(hook: &str) -> &'static [(&'static str, &'static str, &'static str)]
             GAME,
             ("mod_id", "&str", "mod_id"),
             ("button", "usize", "button"),
+        ],
+        "block_entity" => &[
+            ("block", "&str", "block"),
+            (
+                "entity",
+                "&mut Option<(String, horizon_world::nbt::Compound)>",
+                "&mut *entity",
+            ),
+        ],
+        "block_entity_ticks" => &[
+            ("block", "&str", "block"),
+            ("ticks", "&mut bool", "&mut *ticks"),
+        ],
+        "block_entity_tick" => &[
+            ("pos", "[i32; 3]", "pos"),
+            (
+                "entity",
+                "&mut horizon_client::containers::ModBlockEntity",
+                "&mut *entity",
+            ),
         ],
         _ => &[],
     }

@@ -31,10 +31,86 @@ const HOOKS: &[(&str, &str)] = &[
         "native_settings_click",
         "&mut self, mod_id: &str, button: usize",
     ),
+    (
+        "native_block_entity",
+        "&mut self, block: &str, entity: &mut Option<(String, Compound)>",
+    ),
+    (
+        "native_block_entity_ticks",
+        "&self, block: &str, ticks: &mut bool",
+    ),
+    (
+        "native_block_entity_tick",
+        "&mut self, pos: [i32; 3], entity: &mut ModBlockEntity",
+    ),
 ];
 
 const MOCK_LIB: &str = r#"
 extern crate self as horizon_client;
+
+// horizon-world's nbt module, as Horizon has it (crates/horizon-world/src/nbt.rs).
+pub mod horizon_world {
+    pub mod nbt {
+        use std::collections::BTreeMap;
+        #[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+        pub struct JavaString(pub Vec<u16>);
+        impl From<&str> for JavaString {
+            fn from(value: &str) -> Self {
+                Self(value.encode_utf16().collect())
+            }
+        }
+        impl JavaString {
+            pub fn to_string_lossy(&self) -> String {
+                String::from_utf16_lossy(&self.0)
+            }
+        }
+        pub type Compound = BTreeMap<JavaString, Tag>;
+        #[derive(Clone, Debug, PartialEq)]
+        pub enum Tag {
+            End,
+            Byte(i8),
+            Short(i16),
+            Int(i32),
+            Long(i64),
+            Float(u32),
+            Double(u64),
+            ByteArray(Vec<u8>),
+            String(JavaString),
+            List(Vec<Tag>),
+            Compound(Compound),
+            IntArray(Vec<i32>),
+            LongArray(Vec<i64>),
+        }
+    }
+}
+
+// horizon-client's containers module: ModBlockEntity derefs to its fields, and
+// each mutable access counts as a change.
+pub mod containers {
+    pub struct ItemStack;
+    pub struct ModBlockEntityFields {
+        pub id: String,
+        pub nbt: crate::horizon_world::nbt::Compound,
+        pub items: Vec<Option<ItemStack>>,
+        pub data: Vec<i32>,
+    }
+    pub struct ModBlockEntity {
+        fields: ModBlockEntityFields,
+        pub changes: u64,
+    }
+    impl std::ops::Deref for ModBlockEntity {
+        type Target = ModBlockEntityFields;
+        fn deref(&self) -> &ModBlockEntityFields {
+            &self.fields
+        }
+    }
+    impl std::ops::DerefMut for ModBlockEntity {
+        fn deref_mut(&mut self) -> &mut ModBlockEntityFields {
+            self.changes += 1;
+            &mut self.fields
+        }
+    }
+}
 
 pub mod hud {
     pub struct HudBatch;
@@ -60,8 +136,13 @@ pub mod game {
     pub mod native_hooks {
         #![allow(unused_variables, dead_code)]
         use super::Game;
+        use crate::containers::ModBlockEntity;
         use crate::extras_hud::Corners;
+        use crate::horizon_world::nbt::Compound;
         use crate::hud::HudBatch;
+        // In Horizon, horizon_world is a dependency: helpers name it by its crate path.
+        #[allow(unused_imports)]
+        use crate::horizon_world;
 
         pub struct NativeMod {
             pub id: String,
@@ -121,12 +202,29 @@ fn helpers_compile_against_horizon_api() {
         "{:?}",
         b.wired.keys()
     );
+    compiles_against_the_mock(&b, "client");
+}
 
+#[test]
+fn block_entity_helpers_compile_against_horizon_api() {
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../porter-java/tests/fixtures/neoforge-demo");
+    let scan = porter_java::scan(&path).unwrap();
+    let lang = bundle::load_lang(&scan);
+    let b = bundle::generate(&scan, &lang);
+    for hook in ["block_entity", "block_entity_ticks", "block_entity_tick"] {
+        assert!(b.wired.contains_key(hook), "{hook}");
+    }
+    compiles_against_the_mock(&b, "blocks");
+}
+
+/// Splices the bundle's helpers into the mock's hooks and runs `cargo check` on it.
+fn compiles_against_the_mock(b: &bundle::Bundle, name: &str) {
     let dir: PathBuf =
-        std::env::temp_dir().join(format!("porter-horizon-mock-{}", std::process::id()));
+        std::env::temp_dir().join(format!("porter-horizon-mock-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     let bundle_dir = dir.join("bundle");
-    bundle::write(&b, &bundle_dir, false).unwrap();
+    bundle::write(b, &bundle_dir, false).unwrap();
     let mixins = bundle_dir.join("mixins").join(&b.id);
 
     let manifest: toml::Table =

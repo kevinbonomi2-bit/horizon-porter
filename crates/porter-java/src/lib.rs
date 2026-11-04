@@ -683,13 +683,19 @@ fn registrations(parsed: &[(String, ParsedFile)]) -> Vec<Registration> {
                 if d.id.is_none() && passes_param(call.args.get(d.id_arg)) {
                     continue;
                 }
+                // Registrate sets a block's properties in the chain after the call.
+                let mut args = call.args.join(", ");
+                if d.via == "Registrate" && !call.chain.is_empty() {
+                    args.push(' ');
+                    args.push_str(&call.chain);
+                }
                 out.push(Registration {
                     registry: d.registry,
                     id: d.id,
                     via: d.via.into(),
                     class,
                     creates: created_class(&call.args),
-                    args: call.args.join(", "),
+                    args,
                 });
                 continue;
             }

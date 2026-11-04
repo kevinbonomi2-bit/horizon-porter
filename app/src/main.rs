@@ -29,7 +29,8 @@ struct Ported(Mutex<Option<(String, PathBuf)>>);
 #[derive(Default)]
 struct Horizon {
     launcher: Mutex<Option<Launcher>>,
-    built: Mutex<Option<porter_verify::Instance>>,
+    /// The instance built last, and the content mod folder it plays with.
+    built: Mutex<Option<(porter_verify::Instance, Option<PathBuf>)>>,
 }
 
 #[derive(Serialize)]
@@ -56,8 +57,13 @@ struct PortView {
     id: String,
     out: String,
     porting: String,
+    /// Whether it has a native half to build; a content mod alone just plays.
+    native: bool,
     wired: Vec<String>,
     unwired: Vec<String>,
+    blocks: usize,
+    items: usize,
+    block_entities: usize,
 }
 
 fn message(e: impl Display) -> String {
@@ -193,12 +199,16 @@ async fn port(app: AppHandle, current: State<'_, Current>) -> Result<Option<Port
         id: bundle.id.clone(),
         out: out.display().to_string(),
         porting: out.join("PORTING.md").display().to_string(),
+        native: bundle.native,
         wired: bundle.wired.keys().map(|h| format!("native_{h}")).collect(),
         unwired: bundle
             .unwired
             .keys()
             .map(|h| format!("native_{h}"))
             .collect(),
+        blocks: bundle.content.blocks.len(),
+        items: bundle.content.items.len(),
+        block_entities: bundle.block_entities.len(),
     }))
 }
 
@@ -278,6 +288,25 @@ async fn build(app: AppHandle, ported: State<'_, Ported>) -> Result<Option<Build
         .map_err(message)?
         .clone()
         .ok_or_else(|| "Port a mod first".to_string())?;
+    let port = porter_verify::Port::read(&out).map_err(|e| format!("{e:#}"))?;
+    let Some(folder) = port.native.clone() else {
+        // A content mod alone: nothing to build or trust, it plays as it is.
+        let Some(launcher) = launcher(&app)? else {
+            return Ok(None);
+        };
+        let instance = tauri::async_runtime::spawn_blocking(move || {
+            launcher.ensure_instance(&format!("{id} port"))
+        })
+        .await
+        .map_err(message)?
+        .map_err(|e| format!("{e:#}"))?;
+        let name = instance.name.clone();
+        *app.state::<Horizon>().built.lock().map_err(message)? = Some((instance, port.content));
+        return Ok(Some(BuildView {
+            instance: name,
+            result: "A content mod: nothing to build. Play loads it from content/.".into(),
+        }));
+    };
     // Native code is the player's decision: ask every time, in plain words.
     let trusted = app
         .dialog()
@@ -302,7 +331,6 @@ async fn build(app: AppHandle, ported: State<'_, Ported>) -> Result<Option<Build
     let events = app.clone();
     let (instance, result) = tauri::async_runtime::spawn_blocking(move || {
         let instance = launcher.ensure_instance(&format!("{id} port"))?;
-        let folder = porter_verify::build_folder(&out)?;
         let _ = events.emit(
             "build-progress",
             format!(
@@ -320,17 +348,17 @@ async fn build(app: AppHandle, ported: State<'_, Ported>) -> Result<Option<Build
     .map_err(message)?
     .map_err(|e| format!("{e:#}"))?;
     let name = instance.name.clone();
-    *app.state::<Horizon>().built.lock().map_err(message)? = Some(instance);
+    *app.state::<Horizon>().built.lock().map_err(message)? = Some((instance, port.content));
     Ok(Some(BuildView {
         instance: name,
         result,
     }))
 }
 
-/// Starts the instance built last.
+/// Starts the instance built last, with the port's content mod loaded.
 #[tauri::command]
 fn play(app: AppHandle) -> Result<(), String> {
-    let instance = app
+    let (instance, content) = app
         .state::<Horizon>()
         .built
         .lock()
@@ -338,7 +366,10 @@ fn play(app: AppHandle) -> Result<(), String> {
         .clone()
         .ok_or_else(|| "Build the mod first".to_string())?;
     let launcher = launcher(&app)?.ok_or_else(|| "No Horizon launcher".to_string())?;
-    launcher.play(&instance).map_err(|e| format!("{e:#}"))
+    let dev_mods: Vec<&std::path::Path> = content.as_deref().into_iter().collect();
+    launcher
+        .play(&instance, &dev_mods)
+        .map_err(|e| format!("{e:#}"))
 }
 
 fn main() {

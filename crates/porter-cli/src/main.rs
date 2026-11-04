@@ -66,40 +66,23 @@ enum Command {
         /// The Horizon launcher (default: found on PATH and in its usual places)
         #[arg(long, value_name = "PATH")]
         launcher: Option<PathBuf>,
-        /// You read the mod's Rust code and trust it with full access to this computer
+        /// You read the mod's Rust code and trust it with full access to this computer (not needed for a content mod alone)
         #[arg(long)]
         trust_native_code: bool,
         /// Start the instance when the build is done
         #[arg(long)]
         play: bool,
     },
-    /// Pack a ported mod into a .hnmod to share or publish
+    /// Pack a ported mod into a .hnmod (its native half) and a .hmod (its content) to share or publish
     Package {
         /// The folder `port` wrote
         path: PathBuf,
-        /// Where to write the .hnmod (default: the folder itself)
+        /// Where to write them (default: the folder itself)
         #[arg(long, value_name = "DIR")]
         out: Option<PathBuf>,
     },
     /// Show the port's progress, class by class (not implemented yet)
     Status { path: PathBuf },
-}
-
-/// The mod id of a folder `port` wrote: the name of its single `mixins/<id>/`.
-fn mod_id(dir: &std::path::Path) -> Result<String> {
-    let folder = porter_verify::build_folder(dir)?;
-    let bundle = if folder == dir {
-        fs::read_dir(dir.join("mixins"))?
-            .filter_map(|e| e.ok().map(|e| e.path()))
-            .find(|p| p.join("horizon-mixin.toml").is_file())
-            .with_context(|| format!("{} has no bundle under mixins/", dir.display()))?
-    } else {
-        folder
-    };
-    Ok(bundle
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default())
 }
 
 fn main() -> ExitCode {
@@ -154,11 +137,38 @@ fn run(cli: Cli) -> Result<ExitCode> {
             let lang = porter_translate::bundle::load_lang(&scan);
             let bundle = porter_translate::bundle::generate(&scan, &lang);
             porter_translate::bundle::write(&bundle, &out, force)?;
-            println!(
-                "Wrote a Horizon native mod bundle for `{}` to {}\n",
-                bundle.id,
-                out.display()
-            );
+            let what = match (bundle.native, bundle.content.is_empty()) {
+                (true, true) => "a Horizon native mod",
+                (true, false) => "a Horizon native mod and content mod",
+                _ => "a Horizon content mod",
+            };
+            println!("Wrote {what} for `{}` to {}\n", bundle.id, out.display());
+            let c = &bundle.content;
+            if !c.is_empty() {
+                println!(
+                    "Content: {} blocks, {} items, {} resource files (content/)",
+                    c.blocks.len(),
+                    c.items.len(),
+                    c.copies.len()
+                );
+            }
+            if !bundle.block_entities.is_empty() {
+                println!(
+                    "Block entities: {}",
+                    bundle
+                        .block_entities
+                        .iter()
+                        .map(|b| format!("{} ({} saved fields)", b.id, b.fields.len()))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+            }
+            if !bundle.native {
+                println!(
+                    "Next: play it with horizon-porter build --play; PORTING.md lists what was carried."
+                );
+                return Ok(ExitCode::SUCCESS);
+            }
             println!(
                 "Wired hooks: {}",
                 bundle
@@ -192,9 +202,9 @@ fn run(cli: Cli) -> Result<ExitCode> {
             trust_native_code,
             play,
         } => {
-            let folder = porter_verify::build_folder(&path)?;
-            let id = mod_id(&path)?;
-            if !trust_native_code {
+            let port = porter_verify::Port::read(&path)?;
+            let id = port.id.clone();
+            if port.native.is_some() && !trust_native_code {
                 eprintln!(
                     "Native mods are not sandboxed: this compiles the Rust in {} into Horizon, and it runs with your rights.\n\
                      Read it, and if you trust it, run this again with --trust-native-code.",
@@ -205,21 +215,38 @@ fn run(cli: Cli) -> Result<ExitCode> {
             let launcher = porter_verify::Launcher::find(launcher.as_deref())?;
             let name = instance.unwrap_or_else(|| format!("{id} port"));
             let instance = launcher.ensure_instance(&name)?;
-            println!(
-                "Building {} into the instance \"{}\" with {}. The first build downloads Rust and takes a while.",
-                id, instance.name, launcher.version
-            );
-            // The launcher's own lines, its result last, already show as progress.
-            launcher.native_build(
-                &folder,
-                &instance,
-                porter_verify::Trust::given_by_player(),
-                |line| eprintln!("{line}"),
-            )?;
-            println!();
+            if let Some(folder) = &port.native {
+                println!(
+                    "Building {} into the instance \"{}\" with {}. The first build downloads Rust and takes a while.",
+                    id, instance.name, launcher.version
+                );
+                // The launcher's own lines, its result last, already show as progress.
+                launcher.native_build(
+                    folder,
+                    &instance,
+                    porter_verify::Trust::given_by_player(),
+                    |line| eprintln!("{line}"),
+                )?;
+                println!();
+            } else {
+                println!(
+                    "{id} is a content mod: nothing to build. It plays in the instance \"{}\".",
+                    instance.name
+                );
+            }
+            let dev_mods: Vec<&std::path::Path> = port.content.as_deref().into_iter().collect();
             if play {
-                launcher.play(&instance)?;
+                launcher.play(&instance, &dev_mods)?;
                 println!("Starting \"{}\".", instance.name);
+                if port.content.is_some() {
+                    println!(
+                        "Its blocks and items load from content/: restart the game after editing it."
+                    );
+                }
+            } else if port.content.is_some() {
+                println!(
+                    "Play it: run horizon-porter build again with --play, which loads content/ too.",
+                );
             } else {
                 println!(
                     "Play it: pick \"{}\" in the launcher, or run horizon-porter build again with --play.",
@@ -230,8 +257,9 @@ fn run(cli: Cli) -> Result<ExitCode> {
         }
         Command::Package { path, out } => {
             let out_dir = out.unwrap_or_else(|| path.clone());
-            let file = porter_translate::bundle::package(&path, &out_dir)?;
-            println!("Packed {}", file.display());
+            for file in porter_translate::bundle::package(&path, &out_dir)? {
+                println!("Packed {}", file.display());
+            }
             Ok(ExitCode::SUCCESS)
         }
         Command::Status { .. } => {

@@ -146,12 +146,18 @@ async function port() {
   try {
     const done = await invoke("port");
     if (done) {
-      const wired = `${done.wired.length} hooks wired`;
-      const left = done.unwired.length ? `, ${done.unwired.length} to wire by hand` : "";
-      notice("ok", `Wrote ${done.id}-horizon: ${wired}${left}`, done.out, [
+      const parts = [];
+      if (done.blocks) parts.push(count(done.blocks, "block"));
+      if (done.items) parts.push(count(done.items, "item"));
+      if (done.blockEntities) parts.push(count(done.blockEntities, "block entity", "block entities"));
+      if (done.native) {
+        parts.push(`${done.wired.length} hooks wired`);
+        if (done.unwired.length) parts.push(`${done.unwired.length} to wire by hand`);
+      }
+      notice("ok", `Wrote ${done.id}-horizon: ${parts.join(", ")}`, done.out, [
         button("Open folder", () => openPath(done.out), "folder"),
         button("Open PORTING.md", () => openPath(done.porting)),
-        button("Build and play", () => build(done), "play"),
+        button(done.native ? "Build and play" : "Play", () => build(done), "play"),
       ]);
     }
   } catch (e) {
@@ -163,6 +169,11 @@ async function port() {
   }
 }
 
+/** "3 blocks", "1 block". */
+function count(n, one, many = `${one}s`) {
+  return `${n} ${n === 1 ? one : many}`;
+}
+
 let building = false;
 
 /** Builds the ported mod into Horizon with the player's launcher, after they
@@ -171,10 +182,18 @@ async function build(ported) {
   if (building) return;
   building = true;
   $("port").disabled = true;
-  notice("busy", `Building ${ported.id}`, "Waiting for your answer");
+  notice("busy", ported.native ? `Building ${ported.id}` : `Starting ${ported.id}`,
+    ported.native ? "Waiting for your answer" : "Finding the Horizon launcher");
   try {
     const built = await invoke("build");
-    if (built) {
+    if (built && !ported.native) {
+      // Nothing to build: play straight away.
+      notice("ok", `${ported.id} plays in "${built.instance}"`, built.result, [
+        button("Open folder", () => openPath(ported.out), "folder"),
+        button("Play again", play, "play"),
+      ]);
+      await play();
+    } else if (built) {
       notice("ok", `Built ${ported.id} into "${built.instance}"`, built.result, [
         button("Open folder", () => openPath(ported.out), "folder"),
         button("Play", play, "play"),

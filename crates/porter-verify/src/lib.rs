@@ -160,10 +160,15 @@ impl Launcher {
 
     /// Starts `instance` in the background (`play --instance`); the launcher plays it
     /// with the signed-in account.
-    pub fn play(&self, instance: &Instance) -> Result<()> {
-        command(&self.path)
-            .args(["play", "--instance", &instance.id])
-            .stdin(Stdio::null())
+    /// Starts the game in `instance`, with each of `dev_mods` (a content mod folder or
+    /// `.hmod`) loaded and turned on, as `cargo horizon-mod run` does.
+    pub fn play(&self, instance: &Instance, dev_mods: &[&Path]) -> Result<()> {
+        let mut cmd = command(&self.path);
+        cmd.args(["play", "--instance", &instance.id]);
+        for m in dev_mods {
+            cmd.args(["--arg", "--dev-mod", "--arg"]).arg(m);
+        }
+        cmd.stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
@@ -206,6 +211,63 @@ pub fn build_folder(dir: &Path) -> Result<PathBuf> {
     match bundles.as_slice() {
         [one] => Ok(one.clone()),
         _ => bail!("{} should hold one bundle under mixins/", dir.display()),
+    }
+}
+
+/// A folder `port` wrote: its native half, its content half, or both.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Port {
+    pub id: String,
+    /// The folder to give `native-build`, when it has a native half.
+    pub native: Option<PathBuf>,
+    /// The content mod folder (`content/`), when it has one.
+    pub content: Option<PathBuf>,
+}
+
+impl Port {
+    pub fn read(dir: &Path) -> Result<Port> {
+        let content_dir = dir.join("content");
+        let content = content_dir
+            .join("horizon-mod.toml")
+            .is_file()
+            .then_some(content_dir);
+        let native = if dir.join("mixins").is_dir() || dir.join("horizon-native.json").is_file() {
+            Some(build_folder(dir)?)
+        } else {
+            None
+        };
+        let id = if let Some(folder) = &native {
+            let bundle = if folder == dir {
+                std::fs::read_dir(dir.join("mixins"))?
+                    .filter_map(|e| e.ok().map(|e| e.path()))
+                    .find(|p| p.join("horizon-mixin.toml").is_file())
+                    .with_context(|| format!("{} has no bundle under mixins/", dir.display()))?
+            } else {
+                folder.clone()
+            };
+            bundle
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        } else if let Some(content) = &content {
+            let text = std::fs::read_to_string(content.join("horizon-mod.toml"))?;
+            text.lines()
+                .filter_map(|l| l.trim().strip_prefix("id"))
+                .filter_map(|l| l.trim_start().strip_prefix('='))
+                .map(|v| v.trim().trim_matches('"').to_string())
+                .next()
+                .context("content/horizon-mod.toml has no id")?
+        } else {
+            bail!(
+                "{} is not a folder `port` wrote: it has neither mixins/ nor content/",
+                dir.display()
+            );
+        };
+        Ok(Port {
+            id,
+            native,
+            content,
+        })
     }
 }
 

@@ -157,8 +157,15 @@ fn packages_a_deterministic_hnmod() {
     bundle::write(&b, &dir.join("src"), false).unwrap();
     std::fs::write(dir.join("src/LICENSE"), "MIT").unwrap();
 
-    let first = bundle::package(&dir.join("src"), &dir.join("out1")).unwrap();
-    let second = bundle::package(&dir.join("src"), &dir.join("out2")).unwrap();
+    // A client mod has no content: one .hnmod, no .hmod.
+    let [first] = bundle::package(&dir.join("src"), &dir.join("out1"))
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let [second] = bundle::package(&dir.join("src"), &dir.join("out2"))
+        .unwrap()
+        .try_into()
+        .unwrap();
     assert_eq!(first.file_name().unwrap(), "compasshud-1.2.0.hnmod");
     assert_eq!(
         std::fs::read(&first).unwrap(),
