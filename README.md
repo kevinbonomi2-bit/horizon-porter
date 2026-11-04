@@ -138,6 +138,7 @@ nothing to build or trust.
 
 ```
 horizon-porter build my-mod-horizon --trust-native-code --play
+horizon-porter play my-mod-horizon        # play the last build again, no rebuild
 horizon-porter package my-mod-horizon
 ```
 

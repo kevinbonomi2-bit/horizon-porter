@@ -73,6 +73,17 @@ enum Command {
         #[arg(long)]
         play: bool,
     },
+    /// Play a ported mod in its instance, with its content loaded, without building it again
+    Play {
+        /// The folder `port` wrote
+        path: PathBuf,
+        /// The instance to play (default: "<mod id> port")
+        #[arg(long)]
+        instance: Option<String>,
+        /// The Horizon launcher (default: found on PATH and in its usual places)
+        #[arg(long, value_name = "PATH")]
+        launcher: Option<PathBuf>,
+    },
     /// Pack a ported mod into a .hnmod (its native half) and a .hmod (its content) to share or publish
     Package {
         /// The folder `port` wrote
@@ -245,12 +256,33 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 }
             } else if port.content.is_some() {
                 println!(
-                    "Play it: run horizon-porter build again with --play, which loads content/ too.",
+                    "Play it: horizon-porter play {}, which loads content/ too.",
+                    path.display()
                 );
             } else {
                 println!(
-                    "Play it: pick \"{}\" in the launcher, or run horizon-porter build again with --play.",
+                    "Play it: horizon-porter play {}, or pick \"{}\" in the launcher.",
+                    path.display(),
                     instance.name
+                );
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Play {
+            path,
+            instance,
+            launcher,
+        } => {
+            let port = porter_verify::Port::read(&path)?;
+            let launcher = porter_verify::Launcher::find(launcher.as_deref())?;
+            let name = instance.unwrap_or_else(|| format!("{} port", port.id));
+            let instance = launcher.ensure_instance(&name)?;
+            let dev_mods: Vec<&std::path::Path> = port.content.as_deref().into_iter().collect();
+            launcher.play(&instance, &dev_mods)?;
+            println!("Starting \"{}\".", instance.name);
+            if port.native.is_some() {
+                println!(
+                    "It plays the last build: run horizon-porter build after changing the Rust."
                 );
             }
             Ok(ExitCode::SUCCESS)
