@@ -22,6 +22,7 @@
   <symbol id="i-settings" viewBox="0 0 24 24"><path d="M10 5H3"/><path d="M12 19H3"/><path d="M14 3v4"/><path d="M16 17v4"/><path d="M21 12h-9"/><path d="M21 19h-5"/><path d="M21 5h-7"/><path d="M8 10v4"/><path d="M8 12H3"/></symbol>
   <symbol id="i-code" viewBox="0 0 24 24"><path d="m18 16 4-4-4-4"/><path d="m6 8-4 4 4 4"/><path d="m14.5 4-5 16"/></symbol>
   <symbol id="i-key" viewBox="0 0 24 24"><path d="m15.5 7.5 2.3 2.3a1 1 0 0 0 1.4 0l2.1-2.1a1 1 0 0 0 0-1.4L19 4"/><path d="m21 2-9.6 9.6"/><circle cx="7.5" cy="15.5" r="5.5"/></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></symbol>
   <symbol id="i-plus" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="M12 5v14"/></symbol>
   <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></symbol>
 </svg>
@@ -37,10 +38,16 @@
   </div>
   <div class="actions" id="actions" hidden>
     <button class="btn icon-only" id="again" type="button" title="Read another mod" aria-label="Read another mod"><svg class="i"><use href="#i-again"/></svg></button>
-    <button class="btn" id="save" type="button"><svg class="i"><use href="#i-save"/></svg>Save report</button>
-    <button class="btn primary" id="port" type="button">Port to Horizon<svg class="i"><use href="#i-arrow"/></svg></button>
+    <div class="menu-wrap">
+      <button class="btn icon-only" id="more" type="button" title="More" aria-label="More" aria-haspopup="menu" aria-expanded="false"><svg class="i"><use href="#i-more"/></svg></button>
+      <div class="menu" id="more-menu" role="menu" hidden>
+        <button type="button" role="menuitem" id="m-save"><svg class="i"><use href="#i-save"/></svg>Save the report</button>
+        <button type="button" role="menuitem" id="m-folder"><svg class="i"><use href="#i-folder"/></svg>Port to a folder (for mod developers)</button>
+        <button type="button" role="menuitem" id="m-settings"><svg class="i"><use href="#i-settings"/></svg>Translation settings</button>
+      </div>
+    </div>
+    <button class="btn primary" id="go" type="button">Make it work in Horizon<svg class="i"><use href="#i-arrow"/></svg></button>
   </div>
-  <button class="btn icon-only settings" id="open-settings" type="button" title="Translation settings" aria-label="Translation settings"><svg class="i"><use href="#i-settings"/></svg></button>
 </header>
 
 <main>
@@ -78,19 +85,21 @@
   </section>
 </main>
 
-<dialog class="sheet" id="install" aria-labelledby="install-title">
+<dialog class="sheet" id="go-sheet" aria-labelledby="go-title">
   <form method="dialog" class="sheet-inner">
     <div class="sheet-head">
-      <h2 id="install-title">Add to my Horizon</h2>
+      <h2 id="go-title">Make it work in Horizon</h2>
       <button class="btn icon-only" value="close" aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button>
     </div>
-    <p class="sheet-lede">The mod goes into the instance you choose, beside its other mods, and is turned on in Options &gt; Mods. Its code is built with theirs, as the launcher does for any native mod.</p>
-    <fieldset class="choices" id="targets">
-      <legend>Instance</legend>
-    </fieldset>
+    <dl class="summary">
+      <div><dt>Carries over</dt><dd id="go-carries"></dd></div>
+      <div id="go-code-row"><dt>Its code</dt><dd><span id="go-code"></span> <button class="link" type="button" id="go-change">Change</button></dd></div>
+      <div><dt>Add it to</dt><dd><select id="go-target" aria-label="Instance"></select></dd></div>
+    </dl>
+    <p class="trust" id="go-trust"><svg class="i"><use href="#i-alert"/></svg><span>Its code is compiled into Horizon and runs with your rights on this computer, like any native mod. Only do this for mods you trust.</span></p>
     <div class="sheet-foot">
       <button class="btn" value="close">Cancel</button>
-      <button class="btn primary" type="button" id="install-go"><svg class="i"><use href="#i-plus"/></svg>Add</button>
+      <button class="btn primary" type="button" id="go-run"></button>
     </div>
   </form>
 </dialog>

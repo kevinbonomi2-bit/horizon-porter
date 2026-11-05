@@ -14,17 +14,20 @@ Rust rewrite of Minecraft, as native Horizon mods.
 
 Drop a mod's source folder or `.jar` on the window. Horizon Porter reads it and shows
 the report: every Mixin member as a slot colored by its verdict, what the mod builds
-on, its registrations and resources. **Port to Horizon** writes the Horizon mod into
-`Documents\Horizon Porter\<mod>-horizon` (**Change folder** puts it elsewhere).
-**Translate with AI** ports the functions it left, showing the cost before it starts and
-each function as it goes. **Try it** compiles the mod alone into a test instance of its
-own and plays it. **Add to my Horizon** puts it into the instance you play, beside your
-other mods and modpacks, turns it on in Options > Mods, and builds that instance's
-native mods together, as the launcher does for any native mod. **Save report** keeps the report as a page
-to share. Reading, porting and building run on your computer; only translating with
-Claude sends anything out (each function's code, to api.anthropic.com).
+on, its registrations and resources. Then one button, **Make it work in Horizon**, shows
+a short summary: what carries over, who translates its code and what that costs, and
+which of your Horizon instances it goes in (the one the launcher's Play starts, unless
+you pick another). Say yes once, and it ports the mod, translates its code, adds it to
+that instance beside your other mods and modpacks, turned on in Options > Mods, builds
+the instance's native mods together, and ends on **Play**. A mod that is only content
+(blocks, items, recipes) needs no translation or build: it is just added.
 
-**Translation settings** (the sliders at the top right) choose who translates: Claude
+The **⋯** menu has the rest: **Save the report**, **Port to a folder** (for mod
+developers, who read and edit the code), and **Translation settings**. Reading,
+porting and building run on your computer; only translating with Claude sends anything
+out (each function's code, to api.anthropic.com).
+
+**Translation settings** (in the ⋯ menu, or **Change** on the summary) choose who translates: Claude
 Haiku 5.5 (the default, about $0.20 for a mod the size of Create), Sonnet 5.5, Opus 5.5,
 or a model on your own computer through [Ollama](https://ollama.com), which is free
 and sends nothing anywhere. Your Claude API key goes in the system's credential store

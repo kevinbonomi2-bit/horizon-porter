@@ -1,11 +1,19 @@
 // Horizon Porter's page. Commands run in Rust (src/main.rs); drops arrive as
 // "drop-hover" and "dropped" events. Text from mods is only ever set as textContent.
+//
+// The flow a player sees: drop a mod, read the report, press "Make it work in
+// Horizon", check one summary (what carries over, who translates its code and for
+// how much, which instance it goes in) and say yes once. The app then ports,
+// translates, adds and builds by itself, and ends on Play.
 
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 const $ = (id) => document.getElementById(id);
 
-let busy = false;
+let busy = false; // reading a mod
+let running = null; // "port" | "translate" | "add" | "build" while making it work
+let modName = "";
+let isJar = false;
 
 function icon(name) {
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -51,13 +59,22 @@ function welcomeError(message) {
   el.querySelector("span").textContent = message || "";
 }
 
+/** "3 blocks", "1 block". */
+function count(n, one, many = `${one}s`) {
+  return `${n} ${n === 1 ? one : many}`;
+}
+
+/** "about $0.19", "under a cent". */
+function dollars(n) {
+  if (n == null) return "";
+  return n < 0.01 ? "under a cent" : `about $${n.toFixed(2)}`;
+}
+
 let ticking = null;
 
 /** "1:05" from seconds. */
 function clock(secs) {
-  const m = Math.floor(secs / 60);
-  const s = String(secs % 60).padStart(2, "0");
-  return `${m}:${s}`;
+  return `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}`;
 }
 
 /** A launcher progress line without its own clock: "[ 3:47] Compiling" → "Compiling". */
@@ -65,8 +82,8 @@ function progressText(line) {
   return line.replace(/^\[\s*\d+:\d\d\]\s*/, "");
 }
 
-/** A notice above the report: ok or bad, a title, a detail line and buttons. A busy
- * notice counts the seconds since it opened. */
+/** A notice above the report: ok, bad or busy, a title, a detail line and buttons.
+ * A busy notice counts the seconds since it opened. */
 function notice(kind, title, detail, actions = []) {
   const el = $("notice");
   clearInterval(ticking);
@@ -119,8 +136,16 @@ function notice(kind, title, detail, actions = []) {
   el.hidden = false;
 }
 
+function setDetail(text, full) {
+  const detail = $("notice").querySelector(".notice-detail");
+  if (detail) {
+    detail.textContent = text;
+    detail.title = full || text;
+  }
+}
+
 async function read(path) {
-  if (busy) return;
+  if (busy || running) return;
   busy = true;
   showView("welcome");
   welcomeError(null);
@@ -129,9 +154,13 @@ async function read(path) {
     const view = await invoke("scan", { path });
     $("mod-title").textContent = view.title;
     $("mod-facts").textContent = view.facts.join(" · ");
-    const port = $("port");
-    port.disabled = view.isJar;
-    port.title = view.isJar ? "Porting needs the mod's source folder; a jar can only be read" : "";
+    // "Demo Machines 0.3.0 (demo)" → "Demo Machines".
+    modName = view.title.replace(/\s*\([^)]*\)\s*$/, "").replace(/\s+v?\d[\w.+-]*$/, "") || view.title;
+    isJar = view.isJar;
+    const go = $("go");
+    go.disabled = isJar;
+    go.title = isJar ? "Making a jar work needs the mod's source folder for now: the report is what a jar gives" : "";
+    $("m-folder").disabled = isJar;
     $("report").srcdoc = view.report;
     notice(null);
     showView("result");
@@ -165,217 +194,216 @@ async function saveReport() {
   }
 }
 
-async function port(choose = false) {
-  const b = $("port");
-  const label = b.lastChild.previousSibling;
-  b.disabled = true;
-  b.classList.add("busy");
-  label.textContent = "Porting";
+/* ---- Make it work in Horizon ---- */
+
+let plan = null; // { ported, estimate, targets } while the summary is open
+
+/** Ports the mod (quickly, into Documents/Horizon Porter), then shows what making
+ * it work takes, for one yes. */
+async function makeItWork() {
+  if (running || busy || isJar) return;
+  closeMenu();
+  running = "port";
+  $("go").disabled = true;
+  notice("busy", `Getting ${modName} ready`, "Porting the mod");
   try {
-    const done = await invoke("port", { choose });
-    if (done) {
-      const parts = [];
-      if (done.blocks) parts.push(count(done.blocks, "block"));
-      if (done.items) parts.push(count(done.items, "item"));
-      if (done.blockEntities) parts.push(count(done.blockEntities, "block entity", "block entities"));
-      if (done.native) {
-        parts.push(`${done.wired.length} hooks wired`);
-        if (done.stubbed.length) parts.push(`${done.stubbed.length} to port into`);
-        if (done.unwired.length) parts.push(`${done.unwired.length} to wire by hand`);
-      }
-      lastPort = done;
-      const actions = [
-        button("Open folder", () => openPath(done.out), "folder"),
-        button("Change folder", () => port(true)),
-      ];
-      if (done.native) actions.push(button("Translate with AI", () => estimate(done), "code", "primary"));
-      actions.push(button("Try it", () => build(done), "play"));
-      actions.push(button("Add to my Horizon", () => chooseInstance(done), "plus", done.native ? "" : "primary"));
-      notice("ok", `Wrote ${done.id}-horizon: ${parts.join(", ")}`, done.out, actions);
-    }
-  } catch (e) {
-    notice("bad", "Could not port the mod", String(e));
-  } finally {
-    label.textContent = "Port to Horizon";
-    b.classList.remove("busy");
-    b.disabled = false;
-  }
-}
-
-/** "3 blocks", "1 block". */
-function count(n, one, many = `${one}s`) {
-  return `${n} ${n === 1 ? one : many}`;
-}
-
-let building = false;
-let translating = false;
-let lastPort = null;
-
-/** "$0.19", "under a cent". */
-function dollars(n) {
-  if (n == null) return "";
-  return n < 0.01 ? "under a cent" : `about $${n.toFixed(2)}`;
-}
-
-/** What translating the ported mod would take, then a button to start. */
-async function estimate(ported) {
-  if (translating || building) return;
-  notice("busy", "Counting what is left to port", ported.out);
-  try {
-    const est = await invoke("translate_estimate");
-    if (!est.functions) {
-      notice("ok", "Nothing left to translate", "Every function is ported", [
-        button("Build and play", () => build(ported), "play", "primary"),
-      ]);
+    const ported = await invoke("port", { choose: false });
+    if (!ported) {
+      notice(null);
       return;
     }
-    const what = `${count(est.functions, "function")} to translate with ${est.model}`;
-    if (est.blocker) {
-      notice("bad", what, est.blocker, [button("Translation settings", openSettings, "settings")]);
-      return;
-    }
-    const cost = est.local ? "Free: it runs on this computer" : `${dollars(est.dollars)} for one try each (a fix costs a little more)`;
-    notice("ok", what, cost, [
-      button("Settings", openSettings, "settings"),
-      button("Translate", () => translate(ported), "code", "primary"),
+    setDetail("Counting what is left to port and finding your Horizon");
+    const [estimate, targets] = await Promise.all([
+      ported.native ? invoke("translate_estimate") : Promise.resolve(null),
+      invoke("install_targets"),
     ]);
+    if (!targets.length) throw "No Horizon instance found: open the Horizon launcher once to make one";
+    plan = { ported, estimate, targets };
+    notice(null);
+    renderSummary();
+    $("go-sheet").showModal();
   } catch (e) {
-    notice("bad", "Could not count what is left", String(e));
-  }
-}
-
-/** Translates with the chosen model; progress arrives as "translate-progress". */
-async function translate(ported) {
-  if (translating || building) return;
-  translating = true;
-  $("port").disabled = true;
-  notice("busy", `Translating ${ported.id}`, "Starting");
-  try {
-    const r = await invoke("translate");
-    const done = r.ported + r.unchecked;
-    const parts = [];
-    if (r.ported) parts.push(`${r.ported} compiled and tested`);
-    if (r.unchecked) parts.push(`${r.unchecked} checked when you build`);
-    if (r.failed.length) parts.push(`${r.failed.length} left as they were`);
-    if (r.inputTokens) parts.push(`${r.inputTokens.toLocaleString()} tokens in, ${r.outputTokens.toLocaleString()} out`);
-    notice(r.failed.length && !done ? "bad" : "ok", `Ported ${count(done, "function")}`, parts.join(" · "), [
-      button("Open folder", () => openPath(ported.out), "folder"),
-      button("Try it", () => build(ported), "play"),
-      button("Add to my Horizon", () => chooseInstance(ported), "plus", "primary"),
-    ]);
-    if (r.failed.length) $("notice").querySelector(".notice-detail").title = r.failed.join("\n");
-  } catch (e) {
-    notice("bad", "Translation stopped", String(e), [button("Translation settings", openSettings, "settings")]);
+    notice("bad", `Could not get ${modName} ready`, String(e));
   } finally {
-    translating = false;
-    $("port").disabled = false;
+    running = null;
+    $("go").disabled = isJar;
   }
 }
 
-listen("translate-progress", (e) => {
-  if (!translating) return;
-  const detail = $("notice").querySelector(".notice-detail");
-  if (detail) {
-    detail.textContent = e.payload;
-    detail.title = e.payload;
-  }
-});
+function renderSummary() {
+  const { ported, estimate, targets } = plan;
+  $("go-title").textContent = `Make ${modName} work in Horizon`;
 
-/* Add to my Horizon: pick an instance, install the packaged mod there, then build
-   the instance's native mods together. */
-let installing = null;
+  const carries = [];
+  if (ported.blocks) carries.push(count(ported.blocks, "block"));
+  if (ported.items) carries.push(count(ported.items, "item"));
+  if (ported.blockEntities) carries.push(count(ported.blockEntities, "block entity", "block entities"));
+  if (ported.native) carries.push("its code");
+  $("go-carries").textContent = carries.length ? carries.join(", ") : "Its settings row in Options > Mods";
 
-async function chooseInstance(ported) {
-  if (building || translating) return;
-  installing = ported;
-  const box = $("targets");
-  box.querySelectorAll(".choice, .field-note").forEach((c) => c.remove());
-  let targets = [];
-  try {
-    targets = await invoke("install_targets");
-  } catch (e) {
-    notice("bad", "Could not list your Horizon instances", String(e));
-    return;
+  const row = $("go-code-row");
+  const code = $("go-code");
+  const change = $("go-change");
+  row.hidden = !ported.native;
+  code.className = "";
+  let blocked = false;
+  if (ported.native) {
+    if (!estimate || !estimate.functions) {
+      code.textContent = "Already ported";
+      change.hidden = true;
+    } else if (estimate.blocker) {
+      code.textContent = "Needs your Claude API key, or a model on this computer";
+      code.className = "warn";
+      change.textContent = "Set up";
+      change.hidden = false;
+      blocked = true;
+    } else {
+      const cost = estimate.local ? "free, on this computer" : dollars(estimate.dollars);
+      code.textContent = `${count(estimate.functions, "function")} to translate with ${estimate.model}, ${cost}`;
+      change.textContent = "Change";
+      change.hidden = false;
+    }
   }
+
+  const select = $("go-target");
+  const keep = select.value;
+  select.replaceChildren();
   for (const t of targets) {
-    const label = document.createElement("label");
-    label.className = "choice";
-    const input = document.createElement("input");
-    input.type = "radio";
-    input.name = "target";
-    input.value = t.id;
-    input.checked = t.selected;
-    const name = document.createElement("span");
-    name.className = "choice-name";
-    name.textContent = t.name;
-    const note = document.createElement("span");
-    note.className = "choice-note";
-    note.textContent = t.selected ? "The launcher's Play starts this one" : t.id.endsWith("-port") ? "A test instance Horizon Porter made" : "";
-    label.append(input, name);
-    if (note.textContent) label.append(note);
-    box.append(label);
+    const opt = document.createElement("option");
+    opt.value = t.id;
+    opt.textContent = t.selected ? `${t.name} (the one Play starts)` : t.name;
+    opt.selected = keep ? keep === t.id : t.selected;
+    select.append(opt);
   }
-  if (!box.querySelector("input:checked") && box.querySelector("input")) box.querySelector("input").checked = true;
-  $("install").showModal();
+
+  $("go-trust").hidden = !ported.native;
+  const run = $("go-run");
+  run.textContent = ported.native ? "I trust it: make it work" : "Add to Horizon";
+  run.disabled = blocked;
 }
 
-$("install-go").addEventListener("click", async () => {
-  const picked = $("targets").querySelector("input:checked");
-  $("install").close();
-  if (!picked || !installing) return;
-  const ported = installing;
-  notice("busy", `Adding ${ported.id}`, "Packing the mod");
+/** Translates, adds and builds: the player said yes on the summary. */
+async function run() {
+  const { ported, estimate } = plan;
+  const id = $("go-target").value;
+  const instanceName = plan.targets.find((t) => t.id === id)?.name || id;
+  $("go-sheet").close();
+  $("go").disabled = true;
+  let translated = null;
   try {
-    const r = await invoke("install_port", { id: picked.value });
-    if (r.needsBuild) {
-      notice("ok", `Added ${ported.id} to "${r.instance}"`, "Its code is built with the instance's other native mods before it plays", [
-        button("Open folder", () => openPath(ported.out), "folder"),
-        button(`Build "${r.instance}"`, () => buildInstance(r), "play", "primary"),
-      ]);
-    } else {
-      notice("ok", `Added ${ported.id} to "${r.instance}"`, "Turned on: it loads the next time the instance starts", [
-        button("Play", () => playInstance(r), "play", "primary"),
-      ]);
+    if (ported.native && estimate && estimate.functions && !estimate.blocker) {
+      running = "translate";
+      notice("busy", `Translating ${modName}'s code`, "Starting");
+      translated = await invoke("translate");
     }
-  } catch (e) {
-    notice("bad", "Could not add the mod", String(e));
-  }
-});
-
-async function buildInstance(r) {
-  if (building || translating) return;
-  building = true;
-  $("port").disabled = true;
-  notice("busy", `Building "${r.instance}"`, "Waiting for your answer");
-  try {
-    const result = await invoke("build_installed", { id: r.instanceId });
-    if (result) {
-      notice("ok", `Built "${r.instance}"`, result, [button("Play", () => playInstance(r), "play", "primary")]);
-    } else {
-      notice("ok", `Added to "${r.instance}", not built yet`, "Build it here or from the launcher's Mods page when you are ready", [
-        button(`Build "${r.instance}"`, () => buildInstance(r), "play", "primary"),
-      ]);
+    running = "add";
+    notice("busy", `Adding ${modName} to "${instanceName}"`, "Packing the mod");
+    const added = await invoke("install_port", { id });
+    if (added.needsBuild) {
+      running = "build";
+      notice("busy", `Building "${added.instance}"`, "Starting");
+      await invoke("build_installed", { id, trusted: true });
     }
+    const facts = [];
+    if (translated) {
+      const done = translated.ported + translated.unchecked;
+      if (done) facts.push(`${count(done, "function")} translated`);
+      if (translated.failed.length) facts.push(`${translated.failed.length} still to port by hand (PORTING.md)`);
+    }
+    facts.push("turned on in Options > Mods");
+    const actions = [];
+    if (translated && translated.failed.length) actions.push(button("Open PORTING.md", () => openPath(ported.porting)));
+    actions.push(button("Play", () => playInstance(added), "play", "primary"));
+    notice("ok", `${modName} is in "${added.instance}"`, facts.join(" · "), actions);
   } catch (e) {
     const text = String(e);
-    notice("bad", "The build failed", text.split("\n").filter(Boolean).slice(-1)[0] || text);
-    $("notice").querySelector(".notice-detail").title = text;
+    const what = { translate: "Translation stopped", add: "Could not add the mod", build: "The build failed" }[running] || "It stopped";
+    notice("bad", what, text.split("\n").filter(Boolean).slice(-1)[0] || text, [
+      button("Open folder", () => openPath(ported.out), "folder"),
+      button("Try again", makeItWork, "again", "primary"),
+    ]);
+    setDetail(text.split("\n").filter(Boolean).slice(-1)[0] || text, text);
   } finally {
-    building = false;
-    $("port").disabled = false;
+    running = null;
+    $("go").disabled = isJar;
   }
 }
 
-async function playInstance(r) {
+async function playInstance(added) {
   try {
-    await invoke("play_installed", { id: r.instanceId });
+    await invoke("play_installed", { id: added.instanceId });
   } catch (e) {
     notice("bad", "Could not start the game", String(e));
   }
 }
 
-/* Translation settings. The key goes to Rust once, into the credential store, and
-   never comes back: the page only learns whether one is saved. */
+listen("translate-progress", (e) => {
+  if (running !== "translate") return;
+  const line = e.payload.trim();
+  const step = line.match(/^\[(\d+)\/(\d+)\]\s+(\S+)/);
+  if (step) setDetail(`Function ${step[1]} of ${step[2]}: ${step[3]}`, line);
+  else if (line.startsWith("attempt")) setDetail("Fixing what the compiler found", line);
+});
+listen("build-progress", (e) => {
+  if (running === "build") setDetail(progressText(e.payload), e.payload);
+});
+
+/** Port to a folder: for mod developers, who port, then read and edit the code. */
+async function portToFolder() {
+  if (running || isJar) return;
+  closeMenu();
+  running = "port";
+  try {
+    const done = await invoke("port", { choose: true });
+    if (done) {
+      notice("ok", `Wrote ${done.id}-horizon`, done.out, [
+        button("Open folder", () => openPath(done.out), "folder"),
+        button("Open PORTING.md", () => openPath(done.porting)),
+      ]);
+    }
+  } catch (e) {
+    notice("bad", "Could not port the mod", String(e));
+  } finally {
+    running = null;
+  }
+}
+
+/* ---- The More menu ---- */
+
+function closeMenu() {
+  $("more-menu").hidden = true;
+  $("more").setAttribute("aria-expanded", "false");
+}
+
+$("more").addEventListener("click", (e) => {
+  e.stopPropagation();
+  const menu = $("more-menu");
+  menu.hidden = !menu.hidden;
+  $("more").setAttribute("aria-expanded", String(!menu.hidden));
+  if (!menu.hidden) menu.querySelector("button:not(:disabled)")?.focus();
+});
+document.addEventListener("click", (e) => {
+  if (!$("more-menu").hidden && !e.target.closest(".menu-wrap")) closeMenu();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !$("more-menu").hidden) {
+    closeMenu();
+    $("more").focus();
+  }
+});
+$("m-save").addEventListener("click", () => {
+  closeMenu();
+  saveReport();
+});
+$("m-folder").addEventListener("click", portToFolder);
+$("m-settings").addEventListener("click", () => {
+  closeMenu();
+  openSettings();
+});
+
+/* ---- Translation settings. The key goes to Rust once, into the credential store,
+   and never comes back: the page only learns whether one is saved. ---- */
+
 let settings = null;
 
 async function openSettings() {
@@ -453,7 +481,6 @@ async function choose(provider, model, quiet) {
   }
 }
 
-$("open-settings").addEventListener("click", openSettings);
 $("local-refresh").addEventListener("click", renderLocal);
 $("local-model").addEventListener("change", (e) => choose("ollama", e.target.value, true));
 $("key-save").addEventListener("click", async () => {
@@ -482,67 +509,24 @@ $("key-forget").addEventListener("click", async () => {
     $("key-note").textContent = String(e);
   }
 });
-$("settings").addEventListener("close", () => {
+$("settings").addEventListener("close", async () => {
   $("key-input").value = "";
-  // Back to the estimate, which may have been waiting on a key.
-  if (lastPort && !translating && !building && $("notice").classList.contains("bad")) estimate(lastPort);
-});
-
-/** Builds the ported mod into Horizon with the player's launcher, after they
- * confirm they trust its code (asked in Rust, every time). */
-async function build(ported) {
-  if (building || translating) return;
-  building = true;
-  $("port").disabled = true;
-  notice("busy", ported.native ? `Building ${ported.id}` : `Starting ${ported.id}`,
-    ported.native ? "Waiting for your answer" : "Finding the Horizon launcher");
-  try {
-    const built = await invoke("build");
-    if (built && !ported.native) {
-      // Nothing to build: play straight away.
-      notice("ok", `${ported.id} plays in "${built.instance}"`, built.result, [
-        button("Open folder", () => openPath(ported.out), "folder"),
-        button("Play again", play, "play"),
-      ]);
-      await play();
-    } else if (built) {
-      notice("ok", `Built ${ported.id} into "${built.instance}"`, built.result, [
-        button("Open folder", () => openPath(ported.out), "folder"),
-        button("Play", play, "play"),
-        button("Add to my Horizon", () => chooseInstance(ported), "plus"),
-      ]);
-    } else {
-      notice(null);
+  // Back on the summary: the model, its price or the missing key may have changed.
+  if (plan && $("go-sheet").open && plan.ported.native) {
+    try {
+      plan.estimate = await invoke("translate_estimate");
+      renderSummary();
+    } catch {
+      /* the summary keeps what it showed */
     }
-  } catch (e) {
-    const text = String(e);
-    notice("bad", "The build failed", text.split("\n").filter(Boolean).slice(-1)[0] || text, [
-      button("Open folder", () => openPath(ported.out), "folder"),
-    ]);
-    $("notice").querySelector(".notice-detail").title = text;
-  } finally {
-    building = false;
-    $("port").disabled = false;
-  }
-}
-
-async function play() {
-  try {
-    await invoke("play");
-  } catch (e) {
-    notice("bad", "Could not start the game", String(e));
-  }
-}
-
-listen("build-progress", (e) => {
-  if (!building) return;
-  const detail = $("notice").querySelector(".notice-detail");
-  if (detail) {
-    detail.textContent = progressText(e.payload);
-    detail.title = e.payload;
   }
 });
 
+/* ---- Wiring ---- */
+
+$("go").addEventListener("click", makeItWork);
+$("go-run").addEventListener("click", run);
+$("go-change").addEventListener("click", openSettings);
 $("pick-folder").addEventListener("click", () => pick(false));
 $("pick-jar").addEventListener("click", () => pick(true));
 $("drop").addEventListener("click", () => !busy && pick(false));
@@ -553,11 +537,10 @@ $("drop").addEventListener("keydown", (e) => {
   }
 });
 $("again").addEventListener("click", () => {
+  if (running) return;
   welcomeError(null);
   showView("welcome");
 });
-$("save").addEventListener("click", saveReport);
-$("port").addEventListener("click", () => port(false));
 
 listen("drop-hover", (e) => {
   document.body.classList.toggle("hovering", Boolean(e.payload));

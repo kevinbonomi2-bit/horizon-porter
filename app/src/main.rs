@@ -197,7 +197,9 @@ async fn port(
     let has_files = std::fs::read_dir(&out)
         .map(|mut d| d.next().is_some())
         .unwrap_or(false);
-    if has_files {
+    // In the porter's own folder, porting again just refreshes the generated files
+    // (ported functions are kept); a folder the player chose is asked about.
+    if has_files && choose.unwrap_or(false) {
         let replace = app
             .dialog()
             .message(format!(

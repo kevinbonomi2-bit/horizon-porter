@@ -110,11 +110,16 @@ pub async fn install_port(
 }
 
 /// Builds every native mod in the instance `id` together, after the player says
-/// they trust the code. Progress arrives as "build-progress" events.
+/// they trust the code: `trusted` when they just did, on the page's "I trust it"
+/// button; else the app asks. Progress arrives as "build-progress" events.
 #[tauri::command]
-pub async fn build_installed(app: AppHandle, id: String) -> Result<Option<String>, String> {
+pub async fn build_installed(
+    app: AppHandle,
+    id: String,
+    trusted: Option<bool>,
+) -> Result<Option<String>, String> {
     let instance = find_instance(&app, &id).await?;
-    let trusted = app
+    let trusted = trusted == Some(true) || app
         .dialog()
         .message(format!(
             "Building compiles the Rust code of every native mod in \"{}\" into Horizon, this port's \
