@@ -618,3 +618,21 @@ fn reads_network_messages_and_config() {
     );
     assert_eq!(scan.config[2].values, ["SILENT", "QUIET", "LOUD"]);
 }
+
+#[test]
+fn reads_registrations_through_a_generic_wrapper() {
+    let scan = porter_java::scan(&fixture("neoforge-wrapper-demo")).unwrap();
+    let mut got: Vec<(&str, &str)> = scan
+        .registrations
+        .iter()
+        .filter_map(|r| Some((r.registry.as_str(), r.id.as_deref()?)))
+        .collect();
+    got.sort();
+    got.dedup();
+    assert_eq!(
+        got,
+        [("block", "crate"), ("item", "key")],
+        "{:#?}",
+        scan.registrations
+    );
+}

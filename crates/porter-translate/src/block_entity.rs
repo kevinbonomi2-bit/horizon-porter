@@ -206,10 +206,16 @@ pub fn find(scan: &ModScan, ns: &str) -> Vec<BlockEntity> {
 
 /// Fills in the state fields and whether it ticks, from the Java class.
 fn state_of(class: &ClassInfo, be: &mut BlockEntity) {
-    be.ticks = class
-        .method_names
-        .iter()
-        .any(|m| m.to_ascii_lowercase().contains("tick"));
+    // A tick method (`tick`, `serverTick`), `updateServer` and the like, or a
+    // ticking interface of the mod's own (`TickerUtil.TickableServer`).
+    be.ticks = class.method_names.iter().any(|m| {
+        let m = m.to_ascii_lowercase();
+        m.contains("tick") || m == "updateserver" || m == "serverupdate"
+    }) || class.interfaces.iter().any(|i| {
+        i.rsplit(['.', '$'])
+            .next()
+            .is_some_and(|s| s.contains("Tick"))
+    });
     let mut names = BTreeSet::new();
     // What saveAdditional writes, in its order.
     for saved in &class.saved {

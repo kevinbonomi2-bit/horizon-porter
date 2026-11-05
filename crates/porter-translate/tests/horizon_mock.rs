@@ -561,3 +561,16 @@ fn compiles_against_the_mock(b: &bundle::Bundle, name: &str) {
     assert!(!stderr.contains("warning"), "{stderr}");
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// Any mod's helpers against the mock: `PORTER_MOD=<source folder or jar>` and
+/// `cargo test -p porter-translate --test horizon_mock -- --ignored any_mod`. For
+/// trying a real mod's port before building Horizon with it.
+#[test]
+#[ignore]
+fn any_mod_helpers_compile_against_horizon_api() {
+    let path = std::env::var("PORTER_MOD").expect("PORTER_MOD names the mod to port");
+    let scan = porter_java::scan(Path::new(&path)).unwrap();
+    let lang = bundle::load_lang(&scan);
+    let b = bundle::generate(&scan, &lang);
+    compiles_against_the_mock(&b, "any");
+}

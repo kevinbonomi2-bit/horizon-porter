@@ -172,9 +172,11 @@ pub fn net_runtime(messages: &[Message]) -> String {
             }
             let _ = writeln!(r, "    pub {field}: {},", ty.rust());
         }
+        // A message without fields reads and writes nothing.
+        let mutable = if m.fields.is_empty() { "" } else { "mut " };
         let _ = write!(
             r,
-            "}}\n\nimpl Payload for {name} {{\n    const CHANNEL: &'static str = \"{channel}\";\n\n    fn encode(&self) -> Vec<u8> {{\n        let mut w = Writer::default();\n",
+            "}}\n\nimpl Payload for {name} {{\n    const CHANNEL: &'static str = \"{channel}\";\n\n    fn encode(&self) -> Vec<u8> {{\n        let {mutable}w = Writer::default();\n",
             name = m.name,
             channel = m.channel
         );
@@ -187,7 +189,7 @@ pub fn net_runtime(messages: &[Message]) -> String {
         }
         let _ = write!(
             r,
-            "        w.0\n    }}\n\n    fn decode(data: &[u8]) -> Option<Self> {{\n        let mut r = Reader(data);\n        let msg = {name} {{\n",
+            "        w.0\n    }}\n\n    fn decode(data: &[u8]) -> Option<Self> {{\n        let {mutable}r = Reader(data);\n        let msg = {name} {{\n",
             name = m.name
         );
         for (field, ty, _) in &m.fields {

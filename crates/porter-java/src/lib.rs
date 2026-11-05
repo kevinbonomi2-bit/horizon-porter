@@ -838,6 +838,76 @@ fn registrations(parsed: &[(String, ParsedFile)]) -> Vec<Registration> {
             });
         }
     }
+    // 3. A mod's own wrapper the steps above can't follow (a generic
+    //    `GameRegistry<T>` around a DeferredRegister, as multi-loader mods have):
+    //    `blockWithItem("trim", TrimBlock::new, ...)` registers what `TrimBlock` is,
+    //    judged by the vanilla class it extends.
+    let supers: HashMap<&str, &str> = parsed
+        .iter()
+        .flat_map(|(_, f)| f.types.iter())
+        .filter_map(|t| {
+            let sup = t.superclass.as_deref()?;
+            let sup = sup.split('<').next().unwrap_or(sup);
+            Some((t.name.as_str(), sup.rsplit('.').next().unwrap_or(sup)))
+        })
+        .collect();
+    let kind_of = |class: &str| -> Option<&'static str> {
+        let mut name = class;
+        for _ in 0..12 {
+            match supers.get(name) {
+                Some(sup) if *sup != name => name = sup,
+                _ => break,
+            }
+        }
+        if name.ends_with("BlockEntity") {
+            Some("block_entity_type")
+        } else if name.ends_with("Block") {
+            Some("block")
+        } else if name.ends_with("Item") {
+            Some("item")
+        } else if name.ends_with("ContainerMenu") || name == "AbstractContainerMenu" {
+            Some("menu")
+        } else {
+            None
+        }
+    };
+    let mut inferred = Vec::new();
+    for (_, file) in parsed {
+        for call in &file.calls {
+            let Some(id) = call.first_string.clone() else {
+                continue;
+            };
+            // An unqualified call to a method of the mod's own, not a registry's.
+            let own = call.object.is_empty()
+                && file.methods.iter().any(|m| m.name == call.method)
+                && !helpers.contains_key(&(call.enclosing.clone(), call.method.clone()));
+            if !own || !valid_id(&id) {
+                continue;
+            }
+            let Some(creates) = created_class(&call.args) else {
+                continue;
+            };
+            let Some(registry) = kind_of(&creates) else {
+                continue;
+            };
+            let known = out.iter().chain(inferred.iter()).any(|r: &Registration| {
+                r.registry == registry && r.id.as_deref() == Some(id.as_str())
+            });
+            if known {
+                continue;
+            }
+            inferred.push(Registration {
+                registry: registry.into(),
+                id: Some(id),
+                via: "helper method".into(),
+                class: qualify(&file.package, &call.enclosing),
+                creates: Some(creates),
+                args: call.args.join(", "),
+            });
+        }
+    }
+    out.extend(inferred);
+
     // A helper nobody calls with an id still registers something.
     let mut unused: Vec<_> = helpers
         .iter()
@@ -860,6 +930,14 @@ fn registrations(parsed: &[(String, ParsedFile)]) -> Vec<Registration> {
         });
     }
     out
+}
+
+/// A registry path as ids have them: `inventory_connector`, `block/shaft`.
+fn valid_id(id: &str) -> bool {
+    !id.is_empty()
+        && id
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || "_-./".contains(c))
 }
 
 /// The class a registration creates, from its arguments: `CrankBlock` in
