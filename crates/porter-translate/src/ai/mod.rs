@@ -415,6 +415,7 @@ fn prompt(dir: &Path, scan: &ModScan, unit: &Unit) -> Result<Prompt> {
     // The Java it names.
     let mut java_chars = 0;
     let mut sent = Vec::new();
+    let mut java_text = String::new();
     for name in &unit.java {
         let Some(class) = find_class(scan, name) else {
             out.notes.push(format!("no Java source found for {name}"));
@@ -443,6 +444,7 @@ fn prompt(dir: &Path, scan: &ModScan, unit: &Unit) -> Result<Prompt> {
             class.name, class.path
         );
         sent.push(class.name.clone());
+        java_text.push_str(&source);
     }
     if sent.is_empty() {
         let _ = writeln!(
@@ -464,7 +466,7 @@ fn prompt(dir: &Path, scan: &ModScan, unit: &Unit) -> Result<Prompt> {
                 p,
                 "The module it is in, `{}` (the parts this function can use):\n\n```rust\n{}```\n",
                 unit.file,
-                module_context(&file, &stub, &unit.function)
+                module_context(&file, &stub, &unit.function, &java_text)
             );
             let _ = writeln!(
                 p,
@@ -486,7 +488,7 @@ fn prompt(dir: &Path, scan: &ModScan, unit: &Unit) -> Result<Prompt> {
                 let _ = writeln!(
                     p,
                     "The mod's own module, `{runtime}` (`crate::game::{module}` in the game), which the helper may call (the parts it can use):\n\n```rust\n{}```\n",
-                    module_context(&rt, &stub, "")
+                    module_context(&rt, &stub, "", &java_text)
                 );
             }
         }
@@ -497,7 +499,7 @@ fn prompt(dir: &Path, scan: &ModScan, unit: &Unit) -> Result<Prompt> {
 /// The parts of a mod's module a function can use: everything but the other block
 /// entities' state structs and tick stubs (a mod like Create has a hundred), and
 /// the module's tests.
-fn module_context(module: &str, stub: &str, function: &str) -> String {
+fn module_context(module: &str, stub: &str, function: &str, java: &str) -> String {
     // The state structs: `pub struct Crank` under "The state of a ...".
     let mut states = Vec::new();
     let mut prev_state_doc = false;
@@ -555,7 +557,17 @@ fn module_context(module: &str, stub: &str, function: &str) -> String {
         let other_tick = first_code.starts_with("pub fn tick_")
             && !first_code.starts_with(&format!("pub fn {function}("))
             && first_code != "pub fn tick_block_entity(";
-        if other_state || other_tick {
+        // A Java class's statics, when the Java sent with this function never names it.
+        let unused_statics = chunk
+            .strip_prefix("/// `")
+            .and_then(|r| r.split_once("`'s static fields."))
+            .is_some_and(|(class, _)| {
+                let simple = class.rsplit('.').next().unwrap_or(class);
+                !java
+                    .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+                    .any(|w| w == simple)
+            });
+        if other_state || other_tick || unused_statics {
             continue;
         }
         out.push_str(chunk.trim_end_matches('\n'));

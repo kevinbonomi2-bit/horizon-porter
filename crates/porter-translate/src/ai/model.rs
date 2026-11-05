@@ -7,8 +7,23 @@ use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
 
-/// The default model: Claude Opus 5.5.
-pub const DEFAULT_MODEL: &str = "claude-opus-5-5";
+/// The default model: Claude Haiku 5.5, the cheapest Claude ($0.10 per million
+/// input tokens, $0.50 per million output). The compile-and-fix loop catches what
+/// it gets wrong in runtime.rs; `--model claude-sonnet-5-5` or `claude-opus-5-5`
+/// for harder mods.
+pub const DEFAULT_MODEL: &str = "claude-haiku-5-5";
+
+/// Dollars per million input and output tokens, for the estimate.
+pub fn price(model: &str) -> Option<(f64, f64)> {
+    Some(match model {
+        "claude-haiku-5-5" => (0.10, 0.50),
+        "claude-sonnet-5-5" | "claude-sonnet-5" => (2.0, 10.0),
+        "claude-opus-5-5" => (4.0, 20.0),
+        "claude-opus-5" | "claude-opus-4-8" | "claude-opus-4-7" => (5.0, 25.0),
+        "claude-fable-5-1" | "claude-fable-5" => (10.0, 50.0),
+        _ => return None,
+    })
+}
 
 /// An answer, with what it cost when the provider says.
 #[derive(Debug, Clone, Default)]
@@ -30,7 +45,8 @@ pub trait Model {
 /// Claude through the Messages API.
 pub struct Anthropic {
     pub model: String,
-    pub effort: String,
+    /// How hard it thinks; the model's own default when none.
+    pub effort: Option<String>,
     auth: Auth,
 }
 
@@ -63,7 +79,7 @@ impl Anthropic {
         };
         Ok(Anthropic {
             model: model.unwrap_or(DEFAULT_MODEL).to_string(),
-            effort: effort.unwrap_or("high").to_string(),
+            effort: effort.map(str::to_string),
             auth,
         })
     }
@@ -113,8 +129,10 @@ impl Model for Anthropic {
             "max_tokens": 16000,
             "system": system,
             "messages": [{ "role": "user", "content": content }],
-            "output_config": { "effort": self.effort },
         });
+        if let Some(effort) = &self.effort {
+            body["output_config"] = serde_json::json!({ "effort": effort });
+        }
         let mut betas: Vec<&str> = Vec::new();
         if self.has_fallback() {
             // When a safety classifier declines, the server retries on a model
@@ -318,7 +336,111 @@ fn run(mut cmd: Command, input: &str) -> Result<String> {
     Ok(out)
 }
 
-/// The model `--ai` names: `anthropic` (the default), `claude-code`, or a command.
+/// A model running on this computer through Ollama (ollama.com): free, and
+/// nothing leaves the computer. `OLLAMA_HOST` names another server.
+pub struct Ollama {
+    pub model: String,
+    host: String,
+}
+
+impl Ollama {
+    pub fn new(model: Option<&str>) -> Result<Ollama> {
+        let host = std::env::var("OLLAMA_HOST")
+            .ok()
+            .filter(|h| !h.is_empty())
+            .map(|h| {
+                if h.starts_with("http") {
+                    h
+                } else {
+                    format!("http://{h}")
+                }
+            })
+            .unwrap_or_else(|| "http://localhost:11434".into());
+        let Some(model) = model else {
+            let installed = ollama_models(&host)
+                .map(|m| {
+                    if m.is_empty() {
+                        "none yet: `ollama pull <model>` gets one".to_string()
+                    } else {
+                        m.join(", ")
+                    }
+                })
+                .unwrap_or_else(|e| format!("could not ask Ollama at {host}: {e:#}"));
+            bail!("name the local model with --model (installed: {installed})");
+        };
+        Ok(Ollama {
+            model: model.to_string(),
+            host,
+        })
+    }
+}
+
+/// The models an Ollama server has.
+fn ollama_models(host: &str) -> Result<Vec<String>> {
+    let json: serde_json::Value = ureq::get(&format!("{host}/api/tags"))
+        .call()
+        .context("is Ollama running?")?
+        .body_mut()
+        .read_json()?;
+    Ok(json["models"]
+        .as_array()
+        .map(|m| {
+            m.iter()
+                .filter_map(|x| x["name"].as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default())
+}
+
+impl Model for Ollama {
+    fn name(&self) -> String {
+        format!("{} (local)", self.model)
+    }
+
+    fn complete(&self, system: &str, shared: &str, prompt: &str) -> Result<Reply> {
+        let agent = ureq::Agent::config_builder()
+            .http_status_as_error(false)
+            .timeout_global(Some(std::time::Duration::from_secs(1800)))
+            .build()
+            .new_agent();
+        let body = serde_json::json!({
+            "model": self.model,
+            "stream": false,
+            "messages": [
+                { "role": "system", "content": system },
+                { "role": "user", "content": join(shared, prompt) },
+            ],
+            // Room for a whole mod class and the module around it.
+            "options": { "num_ctx": 32768 },
+        });
+        let mut resp = agent
+            .post(&format!("{}/api/chat", self.host))
+            .send_json(&body)
+            .with_context(|| format!("calling Ollama at {} (is it running?)", self.host))?;
+        let status = resp.status().as_u16();
+        let json: serde_json::Value = resp
+            .body_mut()
+            .read_json()
+            .context("reading Ollama's answer")?;
+        if status != 200 {
+            bail!(
+                "Ollama refused the request ({status}): {}",
+                json["error"].as_str().unwrap_or("no message")
+            );
+        }
+        Ok(Reply {
+            text: json["message"]["content"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
+            input_tokens: json["prompt_eval_count"].as_u64().unwrap_or(0),
+            output_tokens: json["eval_count"].as_u64().unwrap_or(0),
+        })
+    }
+}
+
+/// The model `--ai` names: `anthropic` (the default), `ollama` (local, free),
+/// `claude-code`, or a command.
 pub fn from_choice(
     choice: &str,
     model: Option<&str>,
@@ -326,6 +448,7 @@ pub fn from_choice(
 ) -> Result<Box<dyn Model>> {
     Ok(match choice {
         "anthropic" | "claude" | "api" => Box::new(Anthropic::from_env(model, effort)?),
+        "ollama" | "local" => Box::new(Ollama::new(model)?),
         "claude-code" => Box::new(ClaudeCode {
             model: model.map(str::to_string),
         }),

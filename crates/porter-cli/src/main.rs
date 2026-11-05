@@ -77,14 +77,16 @@ enum Command {
     Translate {
         /// The folder `port` wrote
         path: PathBuf,
-        /// The model: `anthropic` (Claude through the API: ANTHROPIC_API_KEY or `ant auth login`),
-        /// `claude-code` (your `claude` command), or a command that reads the prompt on stdin
+        /// Who translates: `anthropic` (Claude through the API: ANTHROPIC_API_KEY or `ant auth login`),
+        /// `ollama` (a model on this computer, free: needs Ollama and --model), `claude-code` (your
+        /// `claude` command), or a command that reads the prompt on stdin
         #[arg(long, default_value = "anthropic")]
         ai: String,
-        /// The model's name (default: claude-opus-5-5 for `anthropic`)
+        /// The model (`anthropic`: claude-haiku-5-5 by default, the cheapest; claude-sonnet-5-5 or
+        /// claude-opus-5-5 for harder mods. `ollama`: an installed model, such as a coding model)
         #[arg(long)]
         model: Option<String>,
-        /// How hard the model thinks: low, medium, high, xhigh or max (`anthropic`; default high)
+        /// How hard the model thinks: low, medium, high, xhigh or max (`anthropic`; default: the model's)
         #[arg(long)]
         effort: Option<String>,
         /// Only functions whose name contains this
@@ -389,6 +391,26 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 plan.len(),
                 thousands(tokens)
             );
+            // About a thousand tokens come back per function.
+            let output = plan.len() * 1000;
+            match ai.as_str() {
+                "anthropic" | "claude" | "api" => {
+                    let name = model
+                        .clone()
+                        .unwrap_or_else(|| porter_translate::ai::model::DEFAULT_MODEL.into());
+                    if let Some((input_price, output_price)) =
+                        porter_translate::ai::model::price(&name)
+                    {
+                        let dollars =
+                            tokens as f64 / 1e6 * input_price + output as f64 / 1e6 * output_price;
+                        println!(
+                            "With {name}: about ${dollars:.2} (${input_price:.2} and ${output_price:.2} per million tokens in and out). Free on your own computer with --ai ollama."
+                        );
+                    }
+                }
+                "ollama" | "local" => println!("On your computer with Ollama: free."),
+                _ => {}
+            }
             if dry_run {
                 for o in &plan {
                     if let porter_translate::ai::Status::Planned { prompt_chars } = o.status {

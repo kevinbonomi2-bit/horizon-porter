@@ -340,7 +340,11 @@ mod tests {
             Some("\"steadyview\"")
         );
         assert_eq!(
-            literal(Kind::Text, r#""\n§7(Hidden)""#).as_deref(),
+            literal(
+                Kind::Text,
+                &format!("\"{bs}n{bs}u00A77(Hidden)\"", bs = '\\')
+            )
+            .as_deref(),
             Some(r#""\n\u{00A7}7(Hidden)""#)
         );
         assert_eq!(literal(Kind::Text, r#""a\012""#), None);
