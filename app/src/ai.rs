@@ -240,7 +240,7 @@ pub async fn translate_estimate(
             .map_err(message)?
         {
             Err(_) => Some("Ollama isn't running on this computer".to_string()),
-            Ok(models) if !models.iter().any(|m| *m == model) => {
+            Ok(models) if !models.contains(&model) => {
                 Some(format!("Ollama doesn't have the model {model}"))
             }
             Ok(_) => None,
