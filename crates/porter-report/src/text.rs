@@ -310,9 +310,8 @@ pub(crate) struct Facts {
 
 pub(crate) fn facts(scan: &ModScan) -> Facts {
     let main = scan
-        .metadata
-        .iter()
-        .find(|m| m.name.is_some() || m.id.is_some());
+        .main_metadata()
+        .filter(|m| m.name.is_some() || m.id.is_some());
     let title = match main {
         Some(m) => {
             let mut t = m.name.clone().or(m.id.clone()).unwrap_or_default();

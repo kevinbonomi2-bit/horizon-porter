@@ -205,6 +205,36 @@ pub struct ModScan {
     pub warnings: Vec<String>,
 }
 
+/// The metadata of the mod itself, when a project or jar has several (a mod's own
+/// modules, `c2me-base` beside `c2me`; a multi-loader project's loaders).
+impl ModScan {
+    pub fn main_metadata(&self) -> Option<&ModMetadata> {
+        let named: Vec<&ModMetadata> = self.metadata.iter().filter(|m| m.id.is_some()).collect();
+        // The id the others extend (`c2me` for `c2me-base`), else the main source
+        // set's, else the first.
+        let prefix_of_others = named.iter().copied().find(|m| {
+            let id = m.id.as_deref().unwrap_or_default();
+            named.len() > 1
+                && named.iter().all(|o| {
+                    let other = o.id.as_deref().unwrap_or_default();
+                    other == id
+                        || other
+                            .strip_prefix(id)
+                            .is_some_and(|rest| rest.starts_with(['-', '_', '.']))
+                })
+        });
+        prefix_of_others
+            .or_else(|| {
+                named
+                    .iter()
+                    .copied()
+                    .find(|m| m.path.replace('\\', "/").contains("src/main/"))
+            })
+            .or_else(|| named.first().copied())
+            .or_else(|| self.metadata.first())
+    }
+}
+
 /// One loader metadata file: `fabric.mod.json`, `neoforge.mods.toml` or `mods.toml`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModMetadata {

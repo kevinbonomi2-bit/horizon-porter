@@ -2964,9 +2964,11 @@ dependencies = [
  "porter-model",
  "serde",
  "serde_json",
+ "sha2",
  "toml 1.2.0+spec-1.1.0",
  "tree-sitter",
  "tree-sitter-java",
+ "ureq",
  "zip",
 ]
 

@@ -104,7 +104,16 @@ loaded from elsewhere). Open it in a browser, attach it to an issue, or post it.
 
 ```
 horizon-porter port path/to/your-mod --out my-mod-horizon
+horizon-porter port some-mod-1.0.jar --out some-mod-horizon      # a jar works too
 ```
+
+A jar is decompiled into a source tree first, with
+[Vineflower](https://github.com/Vineflower/vineflower) (Apache-2.0) on the Java
+runtime the Horizon launcher keeps (else `JAVA_HOME` or `java`). Vineflower is
+downloaded once from Maven Central and checked against its published SHA-256. The
+mod's own modules nested in the jar (jar-in-jar, `c2me-base` inside `c2me`) are
+decompiled with it, and bundled libraries left out. Each jar is decompiled once and
+kept, so porting it again is instant. Port only mods whose licence allows it.
 
 `port` writes a Horizon native mod (a [horizon-mixins](https://github.com/horizon-rust/horizon-mixins)
 bundle) for a client mod:
@@ -241,8 +250,8 @@ the way Horizon's own mods are, and `<id>-<version>.hmod` from `content/`. Playe
 the `.hmod` in their game folder's `horizon-mods/` and turn it on in Options > Mods.
 
 The path is your mod's source folder (the Gradle project; multi-loader projects work)
-or a built `.jar`. The source gives the full picture. A jar gives classes, metadata and
-resources, but not Mixin details or registrations.
+or a built `.jar`. `scan` and `report` read a jar's classes as they are, quickly;
+`port` decompiles it first (below), and a decompiled jar gives the full picture too.
 
 `scan` tells you what the mod is made of: classes, Mixins and their verdicts, registry
 entries, resources, and what it depends on (Minecraft, the loader API, other mods).

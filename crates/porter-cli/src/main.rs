@@ -47,7 +47,7 @@ enum Command {
     },
     /// Generate a Horizon native mod bundle for a client mod, with a porting checklist
     Port {
-        /// The mod's source directory (a Gradle project)
+        /// The mod's source directory (a Gradle project), or its .jar (decompiled first)
         path: PathBuf,
         /// The folder to write the bundle into (empty or new)
         #[arg(long, value_name = "DIR")]
@@ -203,10 +203,23 @@ fn run(cli: Cli) -> Result<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
         Command::Port { path, out, force } => {
-            if !path.is_dir() {
-                anyhow::bail!("port needs the mod's source folder, not a jar");
-            }
-            let scan = porter_java::scan(&path)?;
+            // A jar is decompiled into a source tree first (once; it is kept).
+            let source = if path.is_dir() {
+                path.clone()
+            } else {
+                let dir = porter_java::decompile::decompile(
+                    &path,
+                    &porter_java::decompile::cache_dir(),
+                    |line| eprintln!("{line}"),
+                )?;
+                println!(
+                    "Porting the source decompiled from {} ({})",
+                    path.display(),
+                    dir.display()
+                );
+                dir
+            };
+            let scan = porter_java::scan(&source)?;
             let lang = porter_translate::bundle::load_lang(&scan);
             let bundle = porter_translate::bundle::generate_with(
                 &scan,

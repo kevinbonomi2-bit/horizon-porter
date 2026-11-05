@@ -91,7 +91,7 @@ pub fn generate(scan: &ModScan, lang: &Lang) -> Bundle {
 /// [`generate`], reading a Horizon source checkout (`horizon`) to point each Mixin
 /// no hook stands for at the Horizon functions that port its target.
 pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bundle {
-    let meta = scan.metadata.iter().find(|m| m.id.is_some());
+    let meta = scan.main_metadata().filter(|m| m.id.is_some());
     let java_id = meta
         .and_then(|m| m.id.clone())
         .unwrap_or_else(|| "ported".into());

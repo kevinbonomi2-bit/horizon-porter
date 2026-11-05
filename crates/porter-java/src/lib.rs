@@ -5,6 +5,7 @@
 //! resource it found, with what each one depends on.
 
 mod classfile;
+pub mod decompile;
 mod jar;
 mod metadata;
 mod mixin;

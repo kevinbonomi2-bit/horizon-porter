@@ -163,9 +163,8 @@ async function read(path) {
     modName = view.title.replace(/\s*\([^)]*\)\s*$/, "").replace(/\s+v?\d[\w.+-]*$/, "") || view.title;
     isJar = view.isJar;
     const go = $("go");
-    go.disabled = isJar;
-    go.title = isJar ? "Making a jar work needs the mod's source folder for now: the report is what a jar gives" : "";
-    $("m-folder").disabled = isJar;
+    go.disabled = false;
+    go.title = isJar ? "The jar is decompiled into source first (once), then ported" : "";
     $("report").srcdoc = view.report;
     notice(null);
     showView("result");
@@ -206,11 +205,11 @@ let plan = null; // { ported, estimate, targets } while the summary is open
 /** Ports the mod (quickly, into Documents/Horizon Porter), then shows what making
  * it work takes, for one yes. */
 async function makeItWork() {
-  if (running || busy || isJar) return;
+  if (running || busy) return;
   closeMenu();
   running = "port";
   $("go").disabled = true;
-  notice("busy", `Getting ${modName} ready`, "Porting the mod");
+  notice("busy", `Getting ${modName} ready`, isJar ? "Reading the jar" : "Porting the mod");
   try {
     const ported = await invoke("port", { choose: false });
     if (!ported) {
@@ -231,7 +230,7 @@ async function makeItWork() {
     notice("bad", `Could not get ${modName} ready`, String(e));
   } finally {
     running = null;
-    $("go").disabled = isJar;
+    $("go").disabled = false;
   }
 }
 
@@ -331,7 +330,7 @@ async function run(skip) {
     setDetail(text.split("\n").filter(Boolean).slice(-1)[0] || text, text);
   } finally {
     running = null;
-    $("go").disabled = isJar;
+    $("go").disabled = false;
   }
 }
 
@@ -402,7 +401,7 @@ async function translateNow(ported, added) {
     ]);
   } finally {
     running = null;
-    $("go").disabled = isJar;
+    $("go").disabled = false;
   }
 }
 
@@ -414,6 +413,9 @@ async function playInstance(added) {
   }
 }
 
+listen("port-progress", (e) => {
+  if (running === "port") setDetail(e.payload);
+});
 listen("translate-progress", (e) => {
   if (running !== "translate") return;
   const line = e.payload.trim();
@@ -427,7 +429,7 @@ listen("build-progress", (e) => {
 
 /** Port to a folder: for mod developers, who port, then read and edit the code. */
 async function portToFolder() {
-  if (running || isJar) return;
+  if (running) return;
   closeMenu();
   running = "port";
   try {

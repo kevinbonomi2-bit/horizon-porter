@@ -114,9 +114,8 @@ async fn pick(app: AppHandle, jar: bool) -> Option<String> {
 }
 
 fn mod_id(scan: &ModScan) -> String {
-    scan.metadata
-        .iter()
-        .find_map(|m| m.id.clone())
+    scan.main_metadata()
+        .and_then(|m| m.id.clone())
         .unwrap_or_else(|| "mod".into())
 }
 
@@ -166,11 +165,27 @@ async fn port(
         .map_err(message)?
         .clone()
         .ok_or_else(|| "Scan a mod first".to_string())?;
-    if scan.input_kind == InputKind::Jar {
-        return Err(
-            "Porting needs the mod's source folder. A jar can be scanned, not ported.".into(),
-        );
-    }
+    // A jar is decompiled into a source tree first (once: it is kept), then ported
+    // like a mod's own source folder.
+    let scan = if scan.input_kind == InputKind::Jar {
+        let jar = PathBuf::from(&scan.input);
+        let cache = app
+            .path()
+            .app_cache_dir()
+            .unwrap_or_else(|_| porter_java::decompile::cache_dir());
+        let events = app.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            let dir = porter_java::decompile::decompile(&jar, &cache, |line| {
+                let _ = events.emit("port-progress", line.to_string());
+            })?;
+            porter_java::scan(&dir)
+        })
+        .await
+        .map_err(message)?
+        .map_err(|e| format!("{e:#}"))?
+    } else {
+        scan
+    };
     let parent = if choose.unwrap_or(false) {
         let Some(dir) = app
             .dialog()
