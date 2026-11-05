@@ -469,6 +469,14 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 count(&|s| *s == Status::Unchecked),
                 count(&|s| matches!(s, Status::Failed(_)))
             );
+            if let Some(why) = out.iter().find_map(|o| match &o.status {
+                Status::NoAnswer(why) => Some(why.clone()),
+                _ => None,
+            }) {
+                println!(
+                    "It stopped because the model gave no answer: {why}\nThe functions after it are untouched: run translate again once that is fixed."
+                );
+            }
             if input_tokens > 0 {
                 println!(
                     "Tokens: {} in, {} out.",

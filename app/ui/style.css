@@ -10,7 +10,7 @@
   --line: rgba(23, 23, 23, 0.08); --line-strong: rgba(23, 23, 23, 0.16);
   --accent: #b5482a; --on-accent: #ffffff;
   --light: #171717; --on-light: #ffffff;
-  --ok: #16a34a; --bad: #dc2626;
+  --ok: #16a34a; --bad: #dc2626; --warn: #b45309;
   --slot-hi: rgba(255, 255, 255, 0.7); --slot-lo: rgba(0, 0, 0, 0.10);
   --ease: cubic-bezier(0.22, 1, 0.36, 1);
   --mono: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, monospace;
@@ -22,7 +22,7 @@
     --line: rgba(237, 237, 237, 0.08); --line-strong: rgba(237, 237, 237, 0.16);
     --accent: #e0714f; --on-accent: #141415;
     --light: #ededed; --on-light: #141415;
-    --ok: #4cc38a; --bad: #e5484d;
+    --ok: #4cc38a; --bad: #e5484d; --warn: #f5a524;
     --slot-hi: rgba(255, 255, 255, 0.05); --slot-lo: rgba(0, 0, 0, 0.55);
   }
 }
@@ -129,6 +129,7 @@ body.hovering .drop-idle .i { color: var(--accent); transform: translateY(2px); 
 }
 .notice > .i { color: var(--ok); }
 .notice.bad > .i { color: var(--bad); }
+.notice.warn > .i { color: var(--warn); }
 /* A build is live, so its indicator turns. */
 .spinner { width: 16px; height: 16px; flex: none; border-radius: 50%;
   border: 2px solid var(--line-strong); border-top-color: var(--fg-2);
@@ -172,7 +173,14 @@ h2 { font-size: 18px; line-height: 24px; font-weight: 500; margin: 0; }
 .summary select { width: 100%; height: 32px; padding: 0 8px; border-radius: 8px; font: inherit;
   border: 1px solid var(--line-strong); background: var(--sunk); color: var(--fg); }
 .summary select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.summary .warn { color: var(--bad); }
+.callout { display: flex; gap: 12px; align-items: flex-start; padding: 12px; border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent);
+  background: color-mix(in srgb, var(--warn) 8%, var(--card)); }
+.callout .i { color: var(--warn); margin-top: 2px; }
+.callout p { margin: 0; }
+.callout-title { font-weight: 500; }
+.callout-text { color: var(--fg-2); font-size: 13px; line-height: 20px; margin-top: 4px !important; }
+.summary .warn { color: var(--warn); }
 .trust { display: flex; gap: 8px; align-items: flex-start; margin: 0; color: var(--fg-2); font-size: 13px; line-height: 20px; }
 .trust .i { color: var(--fg-3); margin-top: 2px; }
 .link { border: 0; padding: 0; background: none; color: var(--fg-2); font: inherit; text-decoration: underline;

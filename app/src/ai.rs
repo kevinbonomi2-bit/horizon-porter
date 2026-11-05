@@ -233,11 +233,22 @@ pub async fn translate_estimate(
     .map_err(|e| format!("{e:#}"))?;
     let local = choice.provider == "ollama";
     let blocker = if local {
-        None
+        // Ollama answers only when it runs here and has the model.
+        let model = choice.model.clone();
+        match tauri::async_runtime::spawn_blocking(model::local_models)
+            .await
+            .map_err(message)?
+        {
+            Err(_) => Some("Ollama isn't running on this computer".to_string()),
+            Ok(models) if !models.iter().any(|m| *m == model) => {
+                Some(format!("Ollama doesn't have the model {model}"))
+            }
+            Ok(_) => None,
+        }
     } else if saved_key().is_none()
         && !std::env::var("ANTHROPIC_API_KEY").is_ok_and(|k| !k.is_empty())
     {
-        Some("Add your Claude API key in Translation settings, or choose a local model".into())
+        Some("No Claude API key is saved".to_string())
     } else {
         None
     };
@@ -265,6 +276,10 @@ pub async fn translate_estimate(
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TranslateView {
+    /// Why the model gave no answer, when it stopped for that.
+    stopped: Option<String>,
+    /// Functions still left to port after this run.
+    left: usize,
     ported: usize,
     unchecked: usize,
     failed: Vec<String>,
@@ -293,6 +308,7 @@ pub async fn translate(
         )
     };
     let events = app.clone();
+    let dir_after = dir.clone();
     let out = tauri::async_runtime::spawn_blocking(move || {
         ai::translate(
             &dir,
@@ -307,7 +323,13 @@ pub async fn translate(
     .await
     .map_err(message)?
     .map_err(|e| format!("{e:#}"))?;
+    let left = ai::pending(&dir_after).map(|p| p.len()).unwrap_or(0);
     Ok(TranslateView {
+        stopped: out.iter().find_map(|o| match &o.status {
+            Status::NoAnswer(why) => Some(why.clone()),
+            _ => None,
+        }),
+        left,
         ported: out.iter().filter(|o| o.status == Status::Ported).count(),
         unchecked: out.iter().filter(|o| o.status == Status::Unchecked).count(),
         failed: out

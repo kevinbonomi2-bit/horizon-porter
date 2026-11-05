@@ -196,3 +196,28 @@ fn a_dry_run_calls_nothing() {
     assert!(model.prompts.borrow().is_empty());
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// A model that never answers, as with no key or Ollama not running.
+struct Silent;
+
+impl Model for Silent {
+    fn name(&self) -> String {
+        "silent".into()
+    }
+    fn complete(&self, _system: &str, _shared: &str, _prompt: &str) -> Result<Reply> {
+        anyhow::bail!("is Ollama running?")
+    }
+}
+
+#[test]
+fn stops_when_the_model_gives_no_answer() {
+    let (dir, scan) = ported("fabric-mixin-demo", "silent");
+    let before = ai::pending(&dir).unwrap().len();
+    assert!(before > 1);
+    let out = ai::translate(&dir, &scan, &Silent, &Options::default(), |_| {}).unwrap();
+    // One try, then it stops: every other function would get the same non-answer.
+    assert_eq!(out.len(), 1);
+    assert!(matches!(&out[0].status, Status::NoAnswer(why) if why.contains("Ollama")));
+    assert_eq!(ai::pending(&dir).unwrap().len(), before);
+    std::fs::remove_dir_all(&dir).ok();
+}

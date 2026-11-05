@@ -96,9 +96,17 @@
       <div id="go-code-row"><dt>Its code</dt><dd><span id="go-code"></span> <button class="link" type="button" id="go-change">Change</button></dd></div>
       <div><dt>Add it to</dt><dd><select id="go-target" aria-label="Instance"></select></dd></div>
     </dl>
+    <div class="callout" id="go-warn" role="alert" hidden>
+      <svg class="i"><use href="#i-alert"/></svg>
+      <div>
+        <p class="callout-title" id="go-warn-title"></p>
+        <p class="callout-text">Its blocks and items will work, but what the mod does (its machines, HUD, keys, and what its Mixins change) won't, until its code is translated.</p>
+      </div>
+    </div>
     <p class="trust" id="go-trust"><svg class="i"><use href="#i-alert"/></svg><span>Its code is compiled into Horizon and runs with your rights on this computer, like any native mod. Only do this for mods you trust.</span></p>
     <div class="sheet-foot">
       <button class="btn" value="close">Cancel</button>
+      <button class="btn" type="button" id="go-skip" hidden>I trust it: add without translating</button>
       <button class="btn primary" type="button" id="go-run"></button>
     </div>
   </form>

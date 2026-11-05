@@ -60,6 +60,9 @@ pub enum Status {
     Unchecked,
     /// Left as it was, with why.
     Failed(String),
+    /// The model gave no answer (no key, no connection, Ollama not running): the
+    /// translation stopped there, and this function and the rest are left as they were.
+    NoAnswer(String),
     /// A dry run: what would be sent.
     Planned { prompt_chars: usize },
 }
@@ -200,9 +203,14 @@ pub fn translate(
         }
         let outcome = translate_one(dir, unit, &prompt, model, opts, cargo, &mut progress);
         progress(&format!("  {}", describe(&outcome.status)));
+        let stop = matches!(outcome.status, Status::NoAnswer(_));
         state.record(&outcome, &model.name());
         state.save(dir)?;
         out.push(outcome);
+        // Every other function would get the same non-answer.
+        if stop {
+            break;
+        }
     }
     Ok(out)
 }
@@ -213,6 +221,7 @@ pub fn describe(status: &Status) -> String {
         Status::Ported => "ported: compiles and its tests pass".into(),
         Status::Unchecked => "ported: `horizon-porter build` checks it".into(),
         Status::Failed(why) => format!("left as it was: {why}"),
+        Status::NoAnswer(why) => format!("stopped: the model gave no answer: {why}"),
         Status::Planned { prompt_chars } => format!("would send {prompt_chars} characters"),
     }
 }
@@ -256,7 +265,7 @@ fn translate_one(
         let reply = match model.complete(SYSTEM, &prompt.shared, &ask) {
             Ok(r) => r,
             Err(e) => {
-                outcome.status = Status::Failed(format!("{e:#}"));
+                outcome.status = Status::NoAnswer(format!("{e:#}"));
                 return outcome;
             }
         };

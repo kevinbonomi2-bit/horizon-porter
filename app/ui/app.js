@@ -64,6 +64,11 @@ function count(n, one, many = `${one}s`) {
   return `${n} ${n === 1 ? one : many}`;
 }
 
+/** "Demo Machines'", "Create's". */
+function possessive(name) {
+  return name.endsWith("s") ? `${name}'` : `${name}'s`;
+}
+
 /** "about $0.19", "under a cent". */
 function dollars(n) {
   if (n == null) return "";
@@ -93,14 +98,14 @@ function notice(kind, title, detail, actions = []) {
     el.hidden = true;
     return;
   }
-  el.className = `notice${kind === "bad" ? " bad" : ""}${kind === "busy" ? " busy" : ""}`;
+  el.className = `notice ${kind}`;
   if (kind === "busy") {
     const spinner = document.createElement("span");
     spinner.className = "spinner";
     spinner.setAttribute("aria-hidden", "true");
     el.append(spinner);
   } else {
-    el.append(icon(kind === "bad" ? "alert" : "check"));
+    el.append(icon(kind === "ok" ? "check" : "alert"));
   }
   const text = document.createElement("div");
   text.className = "notice-text";
@@ -249,10 +254,10 @@ function renderSummary() {
   let blocked = false;
   if (ported.native) {
     if (!estimate || !estimate.functions) {
-      code.textContent = "Already ported";
+      code.textContent = "Already translated";
       change.hidden = true;
     } else if (estimate.blocker) {
-      code.textContent = "Needs your Claude API key, or a model on this computer";
+      code.textContent = `${count(estimate.functions, "function")} to translate, but it can't be translated now`;
       code.className = "warn";
       change.textContent = "Set up";
       change.hidden = false;
@@ -277,13 +282,24 @@ function renderSummary() {
   }
 
   $("go-trust").hidden = !ported.native;
+  $("go-warn").hidden = !blocked;
+  const reason = blocked ? estimate.blocker.charAt(0).toLowerCase() + estimate.blocker.slice(1) : "";
+  $("go-warn-title").textContent = blocked ? `Its code won't be translated: ${reason}.` : "";
+  $("go-skip").hidden = !blocked;
   const run = $("go-run");
-  run.textContent = ported.native ? "I trust it: make it work" : "Add to Horizon";
-  run.disabled = blocked;
+  run.textContent = blocked ? "Set up translation" : ported.native ? "I trust it: make it work" : "Add to Horizon";
+  run.disabled = false;
 }
 
-/** Translates, adds and builds: the player said yes on the summary. */
-async function run() {
+/** The summary's main button: set up translation when it can't run, else go. */
+function onRun() {
+  const { estimate } = plan;
+  if (estimate && estimate.functions && estimate.blocker) openSettings();
+  else run(false);
+}
+
+/** Translates (unless `skip`), adds and builds: the player said yes on the summary. */
+async function run(skip) {
   const { ported, estimate } = plan;
   const id = $("go-target").value;
   const instanceName = plan.targets.find((t) => t.id === id)?.name || id;
@@ -291,9 +307,9 @@ async function run() {
   $("go").disabled = true;
   let translated = null;
   try {
-    if (ported.native && estimate && estimate.functions && !estimate.blocker) {
+    if (!skip && ported.native && estimate && estimate.functions && !estimate.blocker) {
       running = "translate";
-      notice("busy", `Translating ${modName}'s code`, "Starting");
+      notice("busy", `Translating ${possessive(modName)} code`, "Starting");
       translated = await invoke("translate");
     }
     running = "add";
@@ -304,17 +320,7 @@ async function run() {
       notice("busy", `Building "${added.instance}"`, "Starting");
       await invoke("build_installed", { id, trusted: true });
     }
-    const facts = [];
-    if (translated) {
-      const done = translated.ported + translated.unchecked;
-      if (done) facts.push(`${count(done, "function")} translated`);
-      if (translated.failed.length) facts.push(`${translated.failed.length} still to port by hand (PORTING.md)`);
-    }
-    facts.push("turned on in Options > Mods");
-    const actions = [];
-    if (translated && translated.failed.length) actions.push(button("Open PORTING.md", () => openPath(ported.porting)));
-    actions.push(button("Play", () => playInstance(added), "play", "primary"));
-    notice("ok", `${modName} is in "${added.instance}"`, facts.join(" · "), actions);
+    finish(ported, added, translated, estimate);
   } catch (e) {
     const text = String(e);
     const what = { translate: "Translation stopped", add: "Could not add the mod", build: "The build failed" }[running] || "It stopped";
@@ -323,6 +329,77 @@ async function run() {
       button("Try again", makeItWork, "again", "primary"),
     ]);
     setDetail(text.split("\n").filter(Boolean).slice(-1)[0] || text, text);
+  } finally {
+    running = null;
+    $("go").disabled = isJar;
+  }
+}
+
+/** The ending: done, or in the instance with code still to translate, said plainly. */
+function finish(ported, added, translated, estimate) {
+  const left = translated ? translated.left : ported.native && estimate ? estimate.functions : 0;
+  if (!left) {
+    const facts = [];
+    if (translated) facts.push(`${count(translated.ported + translated.unchecked, "function")} translated`);
+    facts.push("turned on in Options > Mods");
+    notice("ok", `${modName} is in "${added.instance}"`, facts.join(" · "), [
+      button("Play", () => playInstance(added), "play", "primary"),
+    ]);
+    return;
+  }
+  let why;
+  if (translated && translated.stopped) why = `Translation stopped: ${translated.stopped}`;
+  else if (translated) why = `${count(left, "function")} couldn't be translated: its blocks and items work, what it does may not yet`;
+  else why = `${count(left, "function")} not translated: its blocks and items work, what it does won't until it is`;
+  notice("warn", `${modName} is in "${added.instance}", but its code isn't translated yet`, why, [
+    button("Play", () => playInstance(added), "play"),
+    button(translated && !translated.stopped ? "Try translating again" : "Translate now", () => translateNow(ported, added), "code", "primary"),
+  ]);
+}
+
+/** Translates what is left, then adds and builds the instance again. */
+async function translateNow(ported, added) {
+  if (running) return;
+  running = "port";
+  $("go").disabled = true;
+  notice("busy", `Getting ready to translate ${modName}`, "Checking the translator");
+  let translated = null;
+  try {
+    const estimate = await invoke("translate_estimate");
+    if (estimate.blocker) {
+      running = null;
+      notice("warn", `Can't translate ${possessive(modName)} code yet`, `${estimate.blocker}. Set it up, then translate.`, [
+        button("Set up translation", openSettings, "settings", "primary"),
+        button("Translate now", () => translateNow(ported, added), "code"),
+      ]);
+      return;
+    }
+    if (estimate.functions) {
+      running = "translate";
+      notice("busy", `Translating ${possessive(modName)} code`, `${count(estimate.functions, "function")}, ${estimate.local ? "free" : dollars(estimate.dollars)}`);
+      translated = await invoke("translate");
+    }
+    running = "add";
+    notice("busy", `Adding ${modName} to "${added.instance}"`, "Packing the mod");
+    const again = await invoke("install_port", { id: added.instanceId });
+    if (again.needsBuild) {
+      running = "build";
+      notice("busy", `Building "${again.instance}"`, "Waiting for your answer");
+      // New code: the app asks again whether the player trusts it.
+      const built = await invoke("build_installed", { id: again.instanceId, trusted: false });
+      if (!built) {
+        notice("warn", `${possessive(modName)} code is translated, not built yet`, "Build when you're ready", [
+          button(`Build "${again.instance}"`, () => translateNow(ported, added), "play", "primary"),
+        ]);
+        return;
+      }
+    }
+    finish(ported, again, translated || { ported: 0, unchecked: 0, failed: [], left: 0, stopped: null }, estimate);
+  } catch (e) {
+    const text = String(e);
+    notice("bad", "It stopped", text.split("\n").filter(Boolean).slice(-1)[0] || text, [
+      button("Try again", () => translateNow(ported, added), "again", "primary"),
+    ]);
   } finally {
     running = null;
     $("go").disabled = isJar;
@@ -525,7 +602,8 @@ $("settings").addEventListener("close", async () => {
 /* ---- Wiring ---- */
 
 $("go").addEventListener("click", makeItWork);
-$("go-run").addEventListener("click", run);
+$("go-run").addEventListener("click", onRun);
+$("go-skip").addEventListener("click", () => run(true));
 $("go-change").addEventListener("click", openSettings);
 $("pick-folder").addEventListener("click", () => pick(false));
 $("pick-jar").addEventListener("click", () => pick(true));
