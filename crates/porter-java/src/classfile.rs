@@ -212,6 +212,8 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<ClassFile> {
                     annotations,
                     ty: String::new(),
                     is_static: member_access & 0x0008 != 0,
+                    is_final: member_access & 0x0010 != 0,
+                    init: None,
                 });
             }
         }

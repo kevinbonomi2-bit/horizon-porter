@@ -272,6 +272,11 @@ pub struct FieldInfo {
     /// The type as written: `float`, `int`, `List<ItemStack>`.
     pub ty: String,
     pub is_static: bool,
+    #[serde(default)]
+    pub is_final: bool,
+    /// Its initializer as written, when it has one: `70.0f`, `new ArrayList<>()`.
+    #[serde(default)]
+    pub init: Option<String>,
 }
 
 /// A value a class writes to an NBT compound: `tag.putFloat("Speed", speed)`.

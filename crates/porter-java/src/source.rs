@@ -88,6 +88,9 @@ pub(crate) struct Member {
     /// A field's type as written (empty for methods).
     pub ty: String,
     pub is_static: bool,
+    pub is_final: bool,
+    /// A field's initializer as written: `70.0f`, `new ArrayList<>()`.
+    pub init: Option<String>,
 }
 
 pub(crate) struct TypeDecl {
@@ -427,6 +430,8 @@ fn collect_members(body: Node, src: &str, out: &mut Vec<Member>) {
                     annotations,
                     ty: String::new(),
                     is_static: modifiers.is_some_and(|m| has_word(&text(m), "static")),
+                    is_final: false,
+                    init: None,
                 });
             }
             "field_declaration" => {
@@ -437,6 +442,7 @@ fn collect_members(body: Node, src: &str, out: &mut Vec<Member>) {
                     .map(|m| annotations_of(m, src))
                     .unwrap_or_default();
                 let is_static = modifiers.is_some_and(|m| has_word(&text(m), "static"));
+                let is_final = modifiers.is_some_and(|m| has_word(&text(m), "final"));
                 let ty = child
                     .child_by_field_name("type")
                     .map(text)
@@ -455,6 +461,8 @@ fn collect_members(body: Node, src: &str, out: &mut Vec<Member>) {
                         annotations: annotations.clone(),
                         ty: ty.clone(),
                         is_static,
+                        is_final,
+                        init: declarator.child_by_field_name("value").map(text),
                     });
                 }
             }

@@ -61,7 +61,8 @@ pub enum Kind {
 }
 
 impl Kind {
-    fn from_java(ty: &str) -> Option<Kind> {
+    /// The kind for a Java type: `float` → Float, `String` → Text.
+    pub fn from_java(ty: &str) -> Option<Kind> {
         Some(match ty.rsplit('.').next().unwrap_or(ty) {
             "boolean" | "Boolean" => Kind::Bool,
             "byte" | "Byte" => Kind::Byte,

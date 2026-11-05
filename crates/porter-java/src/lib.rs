@@ -240,6 +240,8 @@ fn assemble(
                         name: m.name.clone(),
                         ty: m.ty.clone(),
                         is_static: m.is_static,
+                        is_final: m.is_final,
+                        init: m.init.clone(),
                     })
                     .collect(),
                 method_names: t

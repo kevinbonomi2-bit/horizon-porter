@@ -395,7 +395,8 @@ fn prompt(dir: &Path, scan: &ModScan, unit: &Unit) -> Result<Prompt> {
             s,
             "The function to port is a horizon-mixins helper: it is pasted at the start of the Horizon function its comment \
              names, inside Horizon's game crate, and called with the parameters shown. It can't add `use` lines to the file: \
-             put any `use` inside the function. It reaches the game through its parameters. These are the game's functions \
+             put any `use` inside the function. It reaches the game through its parameters, and the mod's own state through \
+             the mod's module (shown below), whose `pub mod`s hold the Java's static fields. These are the game's functions \
              hook code calls (`game.native_...(...)`), from Horizon {}:\n",
             &porter_map::hooks::catalog().horizon[..7]
         );
@@ -468,8 +469,9 @@ fn prompt(dir: &Path, scan: &ModScan, unit: &Unit) -> Result<Prompt> {
             let _ = writeln!(
                 p,
                 "This module is plain Rust: it compiles on its own with only `std` (no crates), and `cargo test` runs its tests. \
-                 Hook helpers in the game call it. Keep state the Java kept in fields or statics in `static` items \
-                 (atomics or a `Mutex`) or in the struct the function is given."
+                 Hook helpers in the game call it. The Java's static fields are already here, as Rust: a `pub mod` per \
+                 Java class (`SteadyView.pickups` is `steady_view::PICKUPS`); use them for the state the Java keeps \
+                 there, and the struct the function is given for the rest."
             );
         }
         Kind::Helper => {

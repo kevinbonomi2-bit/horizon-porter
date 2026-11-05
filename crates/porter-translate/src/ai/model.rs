@@ -200,10 +200,15 @@ impl Model for Anthropic {
                         .join("")
                 })
                 .unwrap_or_default();
+            // Every input token, the cached ones too (read from or written to the cache).
+            let usage = &json["usage"];
+            let tokens = |k: &str| usage[k].as_u64().unwrap_or(0);
             return Ok(Reply {
                 text,
-                input_tokens: json["usage"]["input_tokens"].as_u64().unwrap_or(0),
-                output_tokens: json["usage"]["output_tokens"].as_u64().unwrap_or(0),
+                input_tokens: tokens("input_tokens")
+                    + tokens("cache_creation_input_tokens")
+                    + tokens("cache_read_input_tokens"),
+                output_tokens: tokens("output_tokens"),
             });
         }
         unreachable!("the loop returns")

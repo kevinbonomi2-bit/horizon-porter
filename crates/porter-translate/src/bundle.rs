@@ -211,6 +211,16 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
             hooks = hooks.max(h.needs());
         }
     }
+    // The Java statics the hooked code shares (`SteadyView.pickups`).
+    let roots: BTreeSet<String> = wired
+        .values()
+        .flatten()
+        .chain(stubbed.values().flat_map(|(classes, _)| classes))
+        .chain(unwired.values().flat_map(|(classes, _)| classes))
+        .cloned()
+        .chain(block_entities.iter().filter_map(|b| b.class.clone()))
+        .collect();
+    let java_statics = crate::statics::find(scan, &roots);
     // Only an Options > Mods row: the content mod is the whole port.
     let native = content.is_empty() || !stubbed.is_empty() || wired.keys().any(|h| *h != "mods");
 
@@ -226,6 +236,7 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
         stubbed: &stubbed,
         hooks,
         block_entities: &block_entities,
+        statics: &java_statics,
         ledger: horizon.map(|src| (src.to_path_buf(), unmapped_ports(scan, src))),
     };
     let mut files = BTreeMap::new();
@@ -579,6 +590,8 @@ struct Ctx<'a> {
     stubbed: &'a BTreeMap<&'static str, Uses>,
     hooks: u32,
     block_entities: &'a [BlockEntity],
+    /// The Java statics the mod's code shares.
+    statics: &'a [crate::statics::Module],
     /// The Horizon checkout read, and the functions that port each unmapped
     /// Mixin's target (`FarmBlock.turnToDirt`).
     ledger: Option<(PathBuf, BTreeMap<String, Vec<ledger::Port>>)>,
@@ -737,6 +750,7 @@ pub const DESCRIPTION: &str = "{description}";
         }
         r.push_str("];\n");
         r.push_str(PLAYER_TYPE);
+        r.push_str(&crate::statics::runtime(self.statics));
 
         if self.uses("command") {
             r.push_str("\n/// Commands this mod answers, without the slash.\npub const COMMANDS: &[&str] = &[");

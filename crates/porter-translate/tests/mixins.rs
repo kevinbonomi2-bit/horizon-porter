@@ -31,6 +31,14 @@ fn mixins_become_hooks() {
     // No hook does FarmBlock.turnToDirt or LivingEntity.jumpFromGround's job.
     assert!(b.unwired.is_empty(), "{:?}", b.unwired.keys());
 
+    // The Java's statics are shared state in runtime.rs.
+    let runtime = &b.files["mixins/steadyview/runtime.rs"];
+    assert!(runtime.contains("pub mod steady_view {"));
+    assert!(runtime.contains(
+        "pub static PICKUPS: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);"
+    ));
+    assert!(runtime.contains("pub const FOV: f32 = 70.0;"));
+
     // The bundle needs the newest of the hooks it uses (can_eat came in 90).
     assert_eq!(b.hooks, 90);
     let native: serde_json::Value = serde_json::from_str(&b.files["horizon-native.json"]).unwrap();
