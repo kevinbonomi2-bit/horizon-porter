@@ -346,7 +346,9 @@ fn {id}_screen_render_post(
                     game.native_text(batch, &text, [x + at[0], y + at[1]], rgb, shadow);
                 }}
                 GuiOp::Sprite {{ name, src, dst: [a, b, c, d] }} => {{
-                    game.native_sprite(batch, &name, src, [x + a, y + b, c, d]);
+                    // Horizon names vanilla's sprites without `minecraft:`.
+                    let name = name.strip_prefix("minecraft:").unwrap_or(&name);
+                    game.native_sprite(batch, name, src, [x + a, y + b, c, d]);
                 }}
                 GuiOp::Item {{ item, at, size }} => {{
                     game.native_item(batch, &item, [x + at[0], y + at[1]], size);

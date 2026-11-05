@@ -1,0 +1,1 @@
+{"parent":"minecraft:block/block","textures":{"particle":"minecraft:block/iron_block","axle":"minecraft:block/iron_block"},"elements":[{"from":[6,0,6],"to":[10,16,10],"faces":{"down":{"texture":"#axle"},"up":{"texture":"#axle"},"north":{"texture":"#axle"},"south":{"texture":"#axle"},"west":{"texture":"#axle"},"east":{"texture":"#axle"}}}]}

@@ -575,6 +575,13 @@ fn block_properties(args: &str) -> serde_json::Map<String, serde_json::Value> {
     if args.contains(".requiresCorrectToolForDrops()") {
         p.insert("requires_tool".into(), true.into());
     }
+    // Its neighbours' faces are drawn and light passes it (a shaft, glass, a pipe).
+    if args.contains(".noOcclusion()") {
+        p.insert("occludes".into(), false.into());
+    }
+    if let Some(f) = call_numbers(args, ".friction(").and_then(|v| v.first().copied()) {
+        p.insert("friction".into(), f.into());
+    }
     if let Some(sound) = vanilla_constant(args, "SoundType.").and_then(|s| sound_block(&s)) {
         p.insert("sounds".into(), sound.into());
     }

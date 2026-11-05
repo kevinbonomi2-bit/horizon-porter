@@ -1861,8 +1861,10 @@ fn {id}_block_entity_submit(
                 game.native_draw_block(draw, &block, &properties);
             }}
             m::DrawOp::Cube {{ from, to, sprite, tint }} => {{
+                // Horizon names vanilla's textures without `minecraft:` (`block/stone`).
+                let sprite = sprite.strip_prefix("minecraft:").unwrap_or(&sprite);
                 let face = Some(crate::game::native_block_entity_draw::CubeFace {{
-                    sprite: &sprite,
+                    sprite,
                     uv: None,
                 }});
                 game.native_draw_cube(draw, from, to, [face; 6], tint);
