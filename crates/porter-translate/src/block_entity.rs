@@ -433,7 +433,7 @@ pub const BLOCK_ENTITIES: &[(&str, &str, bool)] = &[
                 };
                 let _ = write!(
                     r,
-                    "\n/// A server tick of the `{id}` machine at `pos`, 20 a second. `machine` has its\n/// {slots}, its menu's {data} data slots (`ContainerData`: what its screen\n/// shows){recipes}. What the tick changes in them and in `state` is kept.\n///\n/// TODO: port the tick of `{java}`.\npub fn tick_{snake}(pos: [i32; 3], state: &mut {ty}, machine: &mut Machine<'_>) {{\n    let _ = (pos, state, machine);\n}}\n",
+                    "\n/// A server tick of the `{id}` machine at `pos`, 20 a second. `machine` has its\n/// {slots}, its menu's {data} data slots (`ContainerData`: what its screen\n/// shows){recipes}. What the tick changes in them and in `state` is kept;\n/// `machine.push(slot, Side::Down, 64)` and `machine.pull(...)` move items to and from\n/// the blocks beside it, as a hopper does.\n///\n/// TODO: port the tick of `{java}`.\npub fn tick_{snake}(pos: [i32; 3], state: &mut {ty}, machine: &mut Machine<'_>) {{\n    let _ = (pos, state, machine);\n}}\n",
                     id = be.id,
                     data = m.data_slots,
                     snake = be.snake,

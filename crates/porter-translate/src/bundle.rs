@@ -1228,7 +1228,7 @@ fn {id}_block_entity_ticks(block: &str, ticks: &mut bool) {{
                     r##"// A server tick of one of {name}'s block entities: runs its tick on the state
 // saved with it, its slots and its data slots, and keeps what changed.
 fn {id}_block_entity_tick(
-    game: &crate::game::Game<'_>,
+    game: &mut crate::game::Game<'_>,
     pos: [i32; 3],
     entity: &mut horizon_client::containers::ModBlockEntity,
 ) {{
@@ -1366,6 +1366,74 @@ fn {id}_block_entity_tick(
             &mut machine,
         )
     }};
+    let mut done = machine.into_parts();
+    // What the tick sent to or took from the blocks beside it (`machine.push`,
+    // `machine.pull`): this block entity is out of the world while it ticks, so
+    // they move through its slots here.
+    if !done.transfers.is_empty() {{
+        use horizon_core::geometry::Direction;
+        let dimension = game.native_dimension();
+        for transfer in std::mem::take(&mut done.transfers) {{
+            let (slot, side, max, push) = match transfer {{
+                m::Transfer::Push {{ slot, side, max }} => (slot, side, max, true),
+                m::Transfer::Pull {{ slot, side, max }} => (slot, side, max, false),
+            }};
+            let [dx, dy, dz] = side.offset();
+            let next = [pos[0] + dx, pos[1] + dy, pos[2] + dz];
+            // The neighbour's side that faces this block.
+            let face = match side {{
+                m::Side::Down => Direction::Up,
+                m::Side::Up => Direction::Down,
+                m::Side::North => Direction::South,
+                m::Side::South => Direction::North,
+                m::Side::West => Direction::East,
+                m::Side::East => Direction::West,
+            }};
+            if push {{
+                let Some(Some(stack)) = done.slots.get(slot).cloned() else {{
+                    continue;
+                }};
+                let n = stack.count.min(max);
+                let left = game
+                    .native_insert_item(next, face, horizon_client::items::ItemStack::new(&stack.item, n))
+                    .map_or(0, |s| s.count);
+                let moved = n - left.min(n);
+                if let Some(Some(s)) = done.slots.get_mut(slot) {{
+                    s.count -= moved;
+                    if s.count == 0 {{
+                        done.slots[slot] = None;
+                    }}
+                }}
+            }} else {{
+                let Some(held) = done.slots.get(slot).cloned() else {{
+                    continue;
+                }};
+                let Some(found) = game.native_container_slots(dimension, next, face) else {{
+                    continue;
+                }};
+                for source in found {{
+                    let Some(have) = source.stack.as_ref().filter(|_| source.can_take) else {{
+                        continue;
+                    }};
+                    // Only what fits: the same item, or anything into an empty slot.
+                    let room = match &held {{
+                        Some(h) if *h.item != *have.item => 0,
+                        Some(h) => m::MAX_STACK.saturating_sub(h.count),
+                        None => m::MAX_STACK,
+                    }};
+                    let want = room.min(max).min(have.count);
+                    if want == 0 {{
+                        continue;
+                    }}
+                    if let Some(got) = game.native_extract_item(dimension, next, face, source.slot, want) {{
+                        let s = done.slots[slot].get_or_insert_with(|| m::Stack::new(&got.item, 0));
+                        s.count += got.count;
+                    }}
+                    break;
+                }}
+            }}
+        }}
+    }}
     // Only a change touches the entity: each write marks it for saving and sending.
     if let Some(values) = changed {{
         for (key, value) in values {{
@@ -1373,9 +1441,9 @@ fn {id}_block_entity_tick(
             entity.nbt.insert(key.into(), tag);
         }}
     }}
-    if machine.slots != slots {{
+    if done.slots != slots {{
         let items = &mut entity.items;
-        for (i, new) in machine.slots.iter().enumerate() {{
+        for (i, new) in done.slots.iter().enumerate() {{
             if slots.get(i) == Some(new) {{
                 continue;
             }}
@@ -1393,11 +1461,11 @@ fn {id}_block_entity_tick(
             }};
         }}
     }}
-    if machine.data != data {{
-        entity.data = machine.data.clone();
+    if done.data != data {{
+        entity.data = done.data.clone();
     }}
-    if storage.is_some() && machine.tanks != tanks {{
-        let list = machine
+    if storage.is_some() && done.tanks != tanks {{
+        let list = done
             .tanks
             .iter()
             .map(|t| {{
@@ -1412,8 +1480,8 @@ fn {id}_block_entity_tick(
             .collect();
         entity.nbt.insert(JavaString::from("fluids"), Tag::List(list));
     }}
-    if storage.is_some() && machine.energy != energy {{
-        entity.nbt.insert(JavaString::from("energy"), Tag::Int(machine.energy));
+    if storage.is_some() && done.energy != energy {{
+        entity.nbt.insert(JavaString::from("energy"), Tag::Int(done.energy));
     }}
 }}
 "##,
@@ -2482,7 +2550,7 @@ fn bindings(hook: &str) -> &'static [(&'static str, &'static str, &'static str)]
             ("ticks", "&mut bool", "&mut *ticks"),
         ],
         "block_entity_tick" => &[
-            ("game", "&crate::game::Game<'_>", "&*self"),
+            GAME,
             ("pos", "[i32; 3]", "pos"),
             (
                 "entity",

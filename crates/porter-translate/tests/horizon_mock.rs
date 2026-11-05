@@ -102,6 +102,14 @@ const HOOKS: &[(&str, &str)] = &[
 const MOCK_LIB: &str = r#"
 extern crate self as horizon_client;
 
+// horizon-core's geometry: the six directions.
+pub mod horizon_core {
+    pub mod geometry {
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        pub enum Direction { Down, Up, North, South, West, East }
+    }
+}
+
 // horizon-assets' item display contexts (crates/horizon-assets/src/item_model.rs).
 pub mod horizon_assets {
     pub mod item_model {
@@ -311,6 +319,14 @@ pub mod game {
         use crate::hud::HudBatch;
         #[allow(unused_imports)]
         use crate::horizon_assets;
+        #[allow(unused_imports)]
+        use crate::horizon_core;
+        use crate::horizon_core::geometry::Direction;
+        pub struct NativeContainerSlot {
+            pub slot: usize,
+            pub stack: Option<ItemStack>,
+            pub can_take: bool,
+        }
         // In Horizon, horizon_world is a dependency: helpers name it by its crate path.
         #[allow(unused_imports)]
         use crate::horizon_world;
@@ -347,6 +363,10 @@ pub mod game {
             pub fn native_recipes_of_type(&self, kind: &str) -> &[CustomRecipe] { &[] }
             pub fn native_recipe_ingredient(&self, json: &serde_json::Value) -> Option<Ingredient> { None }
             pub fn native_recipe_result(&self, json: &serde_json::Value) -> Option<ItemStack> { None }
+            pub fn native_dimension(&self) -> &'static str { "minecraft:overworld" }
+            pub fn native_insert_item(&mut self, pos: [i32; 3], face: Direction, stack: ItemStack) -> Option<ItemStack> { Some(stack) }
+            pub fn native_container_slots(&self, dimension: &str, pos: [i32; 3], face: Direction) -> Option<Vec<NativeContainerSlot>> { None }
+            pub fn native_extract_item(&mut self, dimension: &str, pos: [i32; 3], face: Direction, slot: usize, count: u32) -> Option<ItemStack> { None }
             pub fn native_mod_screen_open(&mut self, mod_id: &str) -> bool { false }
             pub fn native_mod_screen_close(&mut self, mod_id: &str) {}
             pub fn native_mod_screen(&self) -> Option<&str> { None }

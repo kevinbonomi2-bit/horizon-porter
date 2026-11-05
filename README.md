@@ -170,7 +170,9 @@ to items (`machine.recipe_for("grind:crushing", 0)`). The screen's progress arro
 
 A block entity's **fluid tanks and energy buffer** (NeoForge's handlers, `FluidTank`,
 `EnergyStorage`) are declared to Horizon, so pipes and cables reach them, and its tick
-gets them to fill, drain and spend (`machine.tanks[0]`, `machine.use_energy(20)`).
+gets them to fill, drain and spend (`machine.tanks[0]`, `machine.use_energy(20)`). A
+tick moves items to and from the blocks beside it as a hopper does
+(`machine.push(1, Side::Down, 64)`, `machine.pull(...)`): a machine's auto-output.
 
 A mod's **network messages** (`CustomPacketPayload` records) become Rust structs with
 their channel and fields, sent and received through Horizon's `native_net_*` hooks: the

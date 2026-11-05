@@ -77,6 +77,12 @@ struct Item {
 
 /// The top-level function items of `source`, with the comment block above each.
 fn items(source: &str) -> Vec<Item> {
+    items_where(source, false)
+}
+
+/// The top-level items of `source` with a body: functions, and with `structs`
+/// structs and enums too (`pub struct GuideScreen { ... }`).
+fn items_where(source: &str, structs: bool) -> Vec<Item> {
     let mut out = Vec::new();
     let mut offset = 0;
     let mut comment_start: Option<usize> = None;
@@ -97,8 +103,9 @@ fn items(source: &str) -> Vec<Item> {
             comment_start.get_or_insert(start);
             continue;
         }
+        let name = fn_name(t).or_else(|| structs.then(|| type_name(t)).flatten());
         if indent == 0
-            && let Some(name) = fn_name(t)
+            && let Some(name) = name
             && let Some(end) = item_end(source, start)
         {
             out.push(Item {
@@ -125,6 +132,18 @@ fn fn_name(line: &str) -> Option<String> {
         .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
         .collect();
     (!name.is_empty()).then_some(name)
+}
+
+/// `pub struct GuideScreen {` → `GuideScreen` (structs and enums with a body).
+fn type_name(line: &str) -> Option<String> {
+    let rest = ["pub struct ", "struct ", "pub enum ", "enum "]
+        .iter()
+        .find_map(|p| line.strip_prefix(p))?;
+    let name: String = rest
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+        .collect();
+    (!name.is_empty() && rest[name.len()..].trim_start().starts_with('{')).then_some(name)
 }
 
 /// Just past the closing brace of the item starting at `start`: braces counted
@@ -241,11 +260,13 @@ pub fn signature(function: &str) -> String {
 
 /// `fresh` (a file `port` generated again) with each function that is ported in
 /// `existing` (no TODO above it) kept as it is there, when the function still has
-/// the same signature. What `port --force` writes, so it never loses a port.
+/// the same signature. A struct `port` leaves to fill in (a screen's fields), once
+/// its TODO is gone, is kept too. What `port --force` writes, so it never loses a
+/// port.
 pub fn keep_ported(fresh: &str, existing: &str) -> String {
-    let old: Vec<Item> = items(existing);
+    let old: Vec<Item> = items_where(existing, true);
     let mut out = fresh.to_string();
-    for item in items(fresh) {
+    for item in items_where(fresh, true) {
         let Some(prev) = old.iter().find(|o| o.name == item.name) else {
             continue;
         };
@@ -255,11 +276,32 @@ pub fn keep_ported(fresh: &str, existing: &str) -> String {
         if prev_comment.contains(TODO) || signature(prev_fn) != signature(new_fn) {
             continue;
         }
-        if let Some(merged) = replace_function(&out, &item.name, prev_comment, prev_fn) {
+        // A struct is kept only where `port` asked for it to be filled in.
+        let fresh_comment = &fresh[item.comment_start..item.fn_start];
+        let is_type =
+            type_name(fresh[item.fn_start..].lines().next().unwrap_or_default()).is_some();
+        if is_type && !fresh_comment.contains(TODO) {
+            continue;
+        }
+        if let Some(merged) = replace_item(&out, &item.name, prev_comment, prev_fn) {
             out = merged;
         }
     }
     out
+}
+
+/// `replace_function` for any item with a body, structs included.
+fn replace_item(source: &str, name: &str, comment: &str, item: &str) -> Option<String> {
+    let found = items_where(source, true)
+        .into_iter()
+        .find(|i| i.name == name)?;
+    let mut item = item.trim_end().to_string();
+    item.push('\n');
+    Some(format!(
+        "{}{comment}{item}{}",
+        &source[..found.comment_start],
+        &source[found.end..]
+    ))
 }
 
 /// Java classes a TODO comment names: `net.compasshud.CompassHudClient`, and the
@@ -398,6 +440,22 @@ mod tests {
         assert_eq!(
             signature("pub fn f(a: u8) -> u8 {\n 1 }"),
             "pub fn f(a: u8) -> u8"
+        );
+    }
+
+    #[test]
+    fn regeneration_keeps_filled_in_structs() {
+        let fresh = "/// TODO: port the fields of `a.GuideScreen`.\n#[derive(Default)]\npub struct GuideScreen {}\n\n/// Kept as generated.\npub struct Fixed {\n    pub a: i32,\n}\n";
+        let existing = "/// Ported by hand.\n#[derive(Default)]\npub struct GuideScreen {\n    pub page: i32,\n}\n\n/// Edited.\npub struct Fixed {\n    pub b: i32,\n}\n";
+        let kept = keep_ported(fresh, existing);
+        assert!(
+            kept.contains("pub struct GuideScreen {\n    pub page: i32,\n}"),
+            "{kept}"
+        );
+        // A struct `port` doesn't leave to fill in follows the Java mod.
+        assert!(
+            kept.contains("pub struct Fixed {\n    pub a: i32,\n}"),
+            "{kept}"
         );
     }
 

@@ -271,7 +271,67 @@ pub struct Machine<'a> {
     /// Its energy, and the most it holds (`SimpleEnergyHandler`).
     pub energy: i32,
     pub energy_capacity: i32,
+    /// What the tick sends to and takes from the blocks beside it, done after it.
+    pub transfers: Vec<Transfer>,
     recipes: &'a dyn Fn(&str) -> Vec<Recipe>,
+}
+
+/// A side of a block (`Direction`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Side {
+    Down,
+    Up,
+    North,
+    South,
+    West,
+    East,
+}
+
+impl Side {
+    pub const ALL: [Side; 6] = [Side::Down, Side::Up, Side::North, Side::South, Side::West, Side::East];
+
+    /// The step to the block on this side (`Direction.getNormal`).
+    pub fn offset(self) -> [i32; 3] {
+        match self {
+            Side::Down => [0, -1, 0],
+            Side::Up => [0, 1, 0],
+            Side::North => [0, 0, -1],
+            Side::South => [0, 0, 1],
+            Side::West => [-1, 0, 0],
+            Side::East => [1, 0, 0],
+        }
+    }
+
+    /// A block's `facing` (`north`...) as a side.
+    pub fn from_name(name: &str) -> Option<Side> {
+        Some(match name {
+            "down" => Side::Down,
+            "up" => Side::Up,
+            "north" => Side::North,
+            "south" => Side::South,
+            "west" => Side::West,
+            "east" => Side::East,
+            _ => return None,
+        })
+    }
+}
+
+/// Items moved between a machine and the block beside it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Transfer {
+    /// Up to `max` of what is in `slot`, into the block on `side`.
+    Push { slot: usize, side: Side, max: u32 },
+    /// Up to `max` into `slot`, from the block on `side`.
+    Pull { slot: usize, side: Side, max: u32 },
+}
+
+/// A machine after its tick: what to keep, and the transfers to carry out.
+pub struct MachineParts {
+    pub slots: Vec<Option<Stack>>,
+    pub data: Vec<i32>,
+    pub tanks: Vec<Tank>,
+    pub energy: i32,
+    pub transfers: Vec<Transfer>,
 }
 
 /// A fluid tank: its fluid (`minecraft:water`), how much in millibuckets, and its
@@ -324,7 +384,33 @@ impl<'a> Machine<'a> {
             tanks: Vec::new(),
             energy: 0,
             energy_capacity: 0,
+            transfers: Vec::new(),
             recipes,
+        }
+    }
+
+    /// Sends up to `max` of what is in `slot` to the container on `side` (a chest,
+    /// a hopper, another machine), after the tick, as a hopper would; what doesn't
+    /// fit stays. `ItemHandlerHelper.insertItem` into the neighbour's
+    /// `Capabilities.ItemHandler.BLOCK`, a machine's auto-output.
+    pub fn push(&mut self, slot: usize, side: Side, max: u32) {
+        self.transfers.push(Transfer::Push { slot, side, max });
+    }
+
+    /// Takes up to `max` items that fit in `slot` from the container on `side`,
+    /// after the tick: the first stack it may take that fits. A machine's auto-input.
+    pub fn pull(&mut self, slot: usize, side: Side, max: u32) {
+        self.transfers.push(Transfer::Pull { slot, side, max });
+    }
+
+    /// What to keep after the tick, and the transfers to carry out.
+    pub fn into_parts(self) -> MachineParts {
+        MachineParts {
+            slots: self.slots,
+            data: self.data,
+            tanks: self.tanks,
+            energy: self.energy,
+            transfers: self.transfers,
         }
     }
 
@@ -555,6 +641,21 @@ fn draw_name(m: &Machine) -> String {
 pub fn runtime_tests(machines: &[Machine]) -> String {
     let mut t = String::from(
         r#"
+    #[test]
+    fn transfers_wait_for_after_the_tick() {
+        let none = |_: &str| Vec::new();
+        let mut m = super::Machine::new(vec![None, None], vec![], &none);
+        m.push(1, super::Side::Down, 64);
+        m.pull(0, super::Side::Up, 8);
+        let parts = m.into_parts();
+        assert_eq!(parts.transfers.len(), 2);
+        for side in super::Side::ALL {
+            let [x, y, z] = side.offset();
+            assert_eq!(x.abs() + y.abs() + z.abs(), 1);
+        }
+        assert_eq!(super::Side::from_name("east"), Some(super::Side::East));
+    }
+
     #[test]
     fn tanks_and_energy_fill_and_drain() {
         let none = |_: &str| Vec::new();
