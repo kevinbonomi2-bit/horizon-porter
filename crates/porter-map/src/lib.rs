@@ -2,6 +2,10 @@
 //!
 //! [`client_hooks`] maps Fabric and NeoForge client events and callbacks to the
 //! Horizon hook points (from Horizon's `native-hooks.json`) that do the same job.
+//! [`hooks`] is the table of every hook point, with its Rust signature, and maps
+//! Mixin targets and loader events to hooks.
+
+pub mod hooks;
 
 /// One Java API, and the Horizon hooks that take its place.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

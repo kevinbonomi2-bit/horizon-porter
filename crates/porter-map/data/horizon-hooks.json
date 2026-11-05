@@ -1,0 +1,7416 @@
+{
+ "horizon": "6475f62f3c834b7489e1816bf47f47ea5eb2b879",
+ "hooks": [
+  {
+   "name": "frame",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_frame",
+   "contract": "listen",
+   "out": null,
+   "api": null,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "elapsed: Duration"
+   ],
+   "returns": "",
+   "doc": "Once a frame, in a world or not, after Horizon's extras.",
+   "cites": []
+  },
+  {
+   "name": "tick",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_tick",
+   "contract": "listen",
+   "out": null,
+   "api": null,
+   "generics": "",
+   "params": [
+    "&mut self"
+   ],
+   "returns": "",
+   "doc": "Once a tick, in every `Game`:",
+   "cites": []
+  },
+  {
+   "name": "visuals",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_visuals",
+   "contract": "listen",
+   "out": null,
+   "api": null,
+   "generics": "",
+   "params": [
+    "&self",
+    "rims: &mut Vec<NativeBlockRim>",
+    "lights: &mut Vec<NativeColoredLight>"
+   ],
+   "returns": "",
+   "doc": "The world frame's local visual sources.",
+   "cites": []
+  },
+  {
+   "name": "emissive",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_emissive",
+   "contract": "collect",
+   "out": "layers",
+   "api": null,
+   "generics": "",
+   "params": [
+    "&self",
+    "layers: &mut Vec<(&'static str, &'static str)>"
+   ],
+   "returns": "",
+   "doc": "At most 32 pairs of already-loaded base and transparent overlay sprites.",
+   "cites": []
+  },
+  {
+   "name": "world_lifecycle",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_world_lifecycle",
+   "contract": "listen",
+   "out": null,
+   "api": null,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "context: &NativeLifecycleContext",
+    "phase: WorldPhase",
+    "error_text: &str"
+   ],
+   "returns": "",
+   "doc": "The world's phases, read-only; `error_text` carries the engine's own open-failure text, empty otherwise.",
+   "cites": []
+  },
+  {
+   "name": "server_about_to_start",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_server_about_to_start",
+   "contract": "listen",
+   "out": null,
+   "api": 44,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "dedicated: bool"
+   ],
+   "returns": "",
+   "doc": "The server is about to open its worlds:",
+   "cites": [
+    "MinecraftServer.loadLevel"
+   ]
+  },
+  {
+   "name": "server_stopping",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_server_stopping",
+   "contract": "listen",
+   "out": null,
+   "api": 44,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "dedicated: bool"
+   ],
+   "returns": "",
+   "doc": "The server begins an orderly stop (NeoForge's `ServerStoppingEvent`):",
+   "cites": [
+    "MinecraftServer.stopServer"
+   ]
+  },
+  {
+   "name": "server_tick",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_server_tick",
+   "contract": "listen",
+   "out": null,
+   "api": null,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "context: &NativeLifecycleContext",
+    "phase: ServerTickPhase"
+   ],
+   "returns": "",
+   "doc": "The authoritative server tick's phases:",
+   "cites": [
+    "ServerTickEvent.Pre"
+   ]
+  },
+  {
+   "name": "level_tick_pre",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_level_tick_pre",
+   "contract": "listen",
+   "out": null,
+   "api": null,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "dimension: &str"
+   ],
+   "returns": "",
+   "doc": "Before an authoritative server level's tick pass.",
+   "cites": []
+  },
+  {
+   "name": "level_tick_post",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_level_tick_post",
+   "contract": "listen",
+   "out": null,
+   "api": null,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "dimension: &str"
+   ],
+   "returns": "",
+   "doc": "After a successful authoritative server level tick pass.",
+   "cites": []
+  },
+  {
+   "name": "block_changed",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_block_changed",
+   "contract": "listen",
+   "out": null,
+   "api": null,
+   "generics": "",
+   "params": [
+    "&self",
+    "dimension: LevelDimension",
+    "pos: BlockPos",
+    "old: BlockStateId",
+    "new: BlockStateId"
+   ],
+   "returns": "",
+   "doc": "An authoritative server committed a changed state through `Level.setBlock`.",
+   "cites": [
+    "Level.setBlock"
+   ]
+  },
+  {
+   "name": "neighbor_changed",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_neighbor_changed",
+   "contract": "listen",
+   "out": null,
+   "api": null,
+   "generics": "",
+   "params": [
+    "&self",
+    "dimension: LevelDimension",
+    "pos: BlockPos",
+    "state: BlockStateId",
+    "changed: BlockId",
+    "moved: bool"
+   ],
+   "returns": "",
+   "doc": "An authoritative server is about to deliver `neighborChanged`.",
+   "cites": []
+  },
+  {
+   "name": "random_tick",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_random_tick",
+   "contract": "cancel",
+   "out": "handled",
+   "api": null,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "ticks: &mut Ticks",
+    "dimension: LevelDimension",
+    "pos: BlockPos",
+    "state: BlockStateId",
+    "handled: &mut bool"
+   ],
+   "returns": "",
+   "doc": "An authoritative server's `ServerLevel.tickChunk` is about to random-tick the block `state` at `pos` (`BlockState.randomTick`):",
+   "cites": [
+    "BlockState.randomTick",
+    "ServerLevel.tickChunk",
+    "StemBlock.performBonemeal"
+   ]
+  },
+  {
+   "name": "tick_block",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_tick_block",
+   "contract": "cancel",
+   "out": "handled",
+   "api": null,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "ticks: &mut Ticks",
+    "dimension: LevelDimension",
+    "pos: BlockPos",
+    "state: BlockStateId",
+    "handled: &mut bool"
+   ],
+   "returns": "",
+   "doc": "An authoritative server's `ServerLevel.tickBlock` is about to run a due scheduled tick of the block `state` at `pos` (`BlockState.tick`):",
+   "cites": [
+    "BlockState.tick",
+    "ServerLevel.tickBlock"
+   ]
+  },
+  {
+   "name": "update_shape",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_update_shape",
+   "contract": "replace",
+   "out": "new",
+   "api": null,
+   "generics": "",
+   "params": [
+    "&self",
+    "ticks: &mut Ticks",
+    "dimension: LevelDimension",
+    "pos: BlockPos",
+    "state: BlockStateId",
+    "direction: Direction",
+    "neighbour_pos: BlockPos",
+    "neighbour: BlockStateId",
+    "new: &mut Option<BlockStateId>"
+   ],
+   "returns": "",
+   "doc": "An authoritative server is about to compute the state the block `state` at `pos` takes now that its neighbour in `direction` is `neighbour` (`BlockBehaviour.updateShape`).",
+   "cites": [
+    "BlockBehaviour.updateShape"
+   ]
+  },
+  {
+   "name": "hud",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_hud",
+   "contract": "listen",
+   "out": null,
+   "api": null,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "batch: &mut HudBatch",
+    "corners: &mut Corners"
+   ],
+   "returns": "",
+   "doc": "The HUD (not drawn under F1), after the minimap:",
+   "cites": []
+  },
+  {
+   "name": "key",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_key",
+   "contract": "listen",
+   "out": null,
+   "api": null,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "key: &str",
+    "pressed: bool"
+   ],
+   "returns": "",
+   "doc": "A key or mouse button went down or up, by its vanilla name (`key.keyboard.z`, `key.mouse.left`):",
+   "cites": []
+  },
+  {
+   "name": "wheel",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_wheel",
+   "contract": "cancel",
+   "out": "claimed",
+   "api": null,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "steps: f32",
+    "claimed: &mut bool"
+   ],
+   "returns": "",
+   "doc": "Wheel steps while playing:",
+   "cites": []
+  },
+  {
+   "name": "command",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_command",
+   "contract": "cancel",
+   "out": "ran",
+   "api": null,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "command: &str",
+    "ran: &mut bool"
+   ],
+   "returns": "",
+   "doc": "A command typed or clicked in chat, without its slash, before the server and Horizon's commands see it:",
+   "cites": []
+  },
+  {
+   "name": "commands",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_commands",
+   "contract": "collect",
+   "out": "commands",
+   "api": 35,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "commands: &mut Vec<&'static str>"
+   ],
+   "returns": "",
+   "doc": "The commands `native_command` runs, by name and without their slash:",
+   "cites": []
+  },
+  {
+   "name": "zoom",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_zoom",
+   "contract": "replace",
+   "out": "zoom",
+   "api": null,
+   "generics": "",
+   "params": [
+    "&self",
+    "zoom: &mut Option<NativeZoom>"
+   ],
+   "returns": "",
+   "doc": "The zoom a native mod asks for, applied while playing (the spyglass's own view wins):",
+   "cites": []
+  },
+  {
+   "name": "minimap",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_minimap",
+   "contract": "replace",
+   "out": "minimap",
+   "api": null,
+   "generics": "",
+   "params": [
+    "&self",
+    "minimap: &mut Option<NativeMinimap>"
+   ],
+   "returns": "",
+   "doc": "The minimap a native mod shows:",
+   "cites": []
+  },
+  {
+   "name": "mods",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_mods",
+   "contract": "collect",
+   "out": "mods",
+   "api": null,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "mods: &mut Vec<NativeMod>"
+   ],
+   "returns": "",
+   "doc": "Options > Mods lists the native mods:",
+   "cites": []
+  },
+  {
+   "name": "settings",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_settings",
+   "contract": "collect",
+   "out": "buttons",
+   "api": null,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "mod_id: &str",
+    "buttons: &mut Vec<String>"
+   ],
+   "returns": "",
+   "doc": "The buttons of mod `mod_id`'s settings page, under its keys:",
+   "cites": []
+  },
+  {
+   "name": "settings_click",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_settings_click",
+   "contract": "listen",
+   "out": null,
+   "api": null,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "mod_id: &str",
+    "button: usize"
+   ],
+   "returns": "",
+   "doc": "Button `button` of mod `mod_id`'s settings page was clicked.",
+   "cites": []
+  },
+  {
+   "name": "panel_event",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_panel_event",
+   "contract": "listen",
+   "out": null,
+   "api": 2,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "mod_id: &str",
+    "event: &NativePanelEvent"
+   ],
+   "returns": "",
+   "doc": "The player did `event` on mod `mod_id`'s panel (`native_panel_items`):",
+   "cites": []
+  },
+  {
+   "name": "block_entity",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_block_entity",
+   "contract": "replace",
+   "out": "entity",
+   "api": 15,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "block: &str",
+    "entity: &mut Option<(String, Compound)>"
+   ],
+   "returns": "",
+   "doc": "Block `block` (`mymod:machine`) gets a block entity (`EntityBlock.newBlockEntity`):",
+   "cites": [
+    "EntityBlock.newBlockEntity"
+   ]
+  },
+  {
+   "name": "block_entity_ticks",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_block_entity_ticks",
+   "contract": "listen",
+   "out": null,
+   "api": 15,
+   "generics": "",
+   "params": [
+    "&self",
+    "block: &str",
+    "ticks: &mut bool"
+   ],
+   "returns": "",
+   "doc": "Whether block `block`'s block entity ticks (`EntityBlock.getTicker`):",
+   "cites": [
+    "EntityBlock.getTicker"
+   ]
+  },
+  {
+   "name": "block_entity_tick",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_block_entity_tick",
+   "contract": "listen",
+   "out": null,
+   "api": 17,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "pos: [i32; 3]",
+    "entity: &mut ModBlockEntity"
+   ],
+   "returns": "",
+   "doc": "A server tick of the block entity at `pos`, in vanilla's order among the others (`Level.tickBlockEntities`), when its `id` is yours:",
+   "cites": [
+    "Level.tickBlockEntities"
+   ]
+  },
+  {
+   "name": "block_entity_update_tag",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_block_entity_update_tag",
+   "contract": "replace",
+   "out": "tag",
+   "api": 45,
+   "generics": "",
+   "params": [
+    "pos: [i32; 3]",
+    "entity: &ModBlockEntity",
+    "tag: &mut Option<Compound>"
+   ],
+   "returns": "",
+   "doc": "What clients get of the block entity at `pos` when its `id` is yours (`BlockEntity.getUpdateTag`):",
+   "cites": [
+    "BlockEntity.getUpdateTag"
+   ]
+  },
+  {
+   "name": "block_entity_container",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_block_entity_container",
+   "contract": "replace",
+   "out": "container",
+   "api": 85,
+   "generics": "",
+   "params": [
+    "&self",
+    "block: &str",
+    "container: &mut Option<ModContainer>"
+   ],
+   "returns": "",
+   "doc": "Block `block`'s block entity has item slots (a `WorldlyContainer`):",
+   "cites": []
+  },
+  {
+   "name": "screen",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_screen",
+   "contract": "replace",
+   "out": "screen",
+   "api": 19,
+   "generics": "",
+   "params": [
+    "&self",
+    "block: &str",
+    "screen: &mut Option<NativeScreen>"
+   ],
+   "returns": "",
+   "doc": "A menu opens on this client for block `block`, a mod's:",
+   "cites": []
+  },
+  {
+   "name": "screen_draw",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_screen_draw",
+   "contract": "listen",
+   "out": null,
+   "api": 19,
+   "generics": "",
+   "params": [
+    "&self",
+    "block: &str",
+    "data: &[i32]",
+    "batch: &mut HudBatch",
+    "origin: [f32; 2]"
+   ],
+   "returns": "",
+   "doc": "Draw block `block`'s screen at `origin` (its top left, GUI pixels), over a plain panel with its slots' frames and under the items and labels, from the menu's data slots `data` (the block entity's `data` on the server):",
+   "cites": []
+  },
+  {
+   "name": "screen_click",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_screen_click",
+   "contract": "replace",
+   "out": "button",
+   "api": 20,
+   "generics": "",
+   "params": [
+    "&self",
+    "block: &str",
+    "data: &[i32]",
+    "at: [f32; 2]",
+    "right: bool",
+    "button: &mut Option<i32>"
+   ],
+   "returns": "",
+   "doc": "A left or right (`right`) press at `at` (GUI pixels from the screen's top left, so outside it too) on block `block`'s screen, a mod's, over no slot:",
+   "cites": []
+  },
+  {
+   "name": "screen_tooltip",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_screen_tooltip",
+   "contract": "collect",
+   "out": "lines",
+   "api": 20,
+   "generics": "",
+   "params": [
+    "&self",
+    "block: &str",
+    "data: &[i32]",
+    "at: [f32; 2]",
+    "lines: &mut Vec<String>"
+   ],
+   "returns": "",
+   "doc": "The tooltip at `at` (as in `native_screen_click`) on block `block`'s screen, a mod's, over no item:",
+   "cites": []
+  },
+  {
+   "name": "menu_button",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_menu_button",
+   "contract": "listen",
+   "out": null,
+   "api": 20,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "pos: [i32; 3]",
+    "entity: &mut ModBlockEntity",
+    "id: i32"
+   ],
+   "returns": "",
+   "doc": "A player pressed menu button `id` on the menu of the mod block entity at `pos` (`AbstractContainerMenu.clickMenuButton`), on the server:",
+   "cites": [
+    "AbstractContainerMenu.clickMenuButton"
+   ]
+  },
+  {
+   "name": "register_commands",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_register_commands",
+   "contract": "collect",
+   "out": "commands",
+   "api": 8,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "commands: &mut Vec<NativeCommand>"
+   ],
+   "returns": "",
+   "doc": "The commands native mods add to the server's command tree:",
+   "cites": []
+  },
+  {
+   "name": "perform_command",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_perform_command",
+   "contract": "cancel",
+   "out": "ran",
+   "api": 8,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: &NativeServerPlayer",
+    "command: &str",
+    "ran: &mut bool"
+   ],
+   "returns": "",
+   "doc": "A player's command on the server (`Commands.performCommand`), without its slash, for a command a mod registered and the player's level allows:",
+   "cites": [
+    "Commands.performCommand"
+   ]
+  },
+  {
+   "name": "menu_clicked",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_menu_clicked",
+   "contract": "listen",
+   "out": null,
+   "api": 10,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "uuid: u128",
+    "window: i32",
+    "slot: i32",
+    "button: i32",
+    "mode: i32"
+   ],
+   "returns": "",
+   "doc": "A click in a menu a mod opened (`native_open_menu`), which moved nothing:",
+   "cites": []
+  },
+  {
+   "name": "menu_closed",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_menu_closed",
+   "contract": "listen",
+   "out": null,
+   "api": 10,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "uuid: u128",
+    "window: i32"
+   ],
+   "returns": "",
+   "doc": "A menu a mod opened closed:",
+   "cites": []
+  },
+  {
+   "name": "tooltip",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_tooltip",
+   "contract": "collect",
+   "out": "lines",
+   "api": 12,
+   "generics": "",
+   "params": [
+    "&self",
+    "stack: &ItemStack",
+    "lines: &mut Vec<(Text, u32)>"
+   ],
+   "returns": "",
+   "doc": "An item's tooltip, wherever the game shows one (slots, the creative tabs, the recipe book, chat's hover):",
+   "cites": [
+    "Text.legacy"
+   ]
+  },
+  {
+   "name": "use_item_on",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_use_item_on",
+   "contract": "cancel",
+   "out": "claimed",
+   "api": 13,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "stack: &ItemStack",
+    "pos: [i32; 3]",
+    "face: [i32; 3]",
+    "claimed: &mut bool"
+   ],
+   "returns": "",
+   "doc": "A player uses `stack` (right click) with `self.hand` on the block at `pos`, `face` the face clicked (`[0, 1, 0]` is the top), once the block itself let the click through (a chest still opens):",
+   "cites": [
+    "ItemStack.useOn"
+   ]
+  },
+  {
+   "name": "use_item",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_use_item",
+   "contract": "cancel",
+   "out": "claimed",
+   "api": 13,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "stack: &ItemStack",
+    "claimed: &mut bool"
+   ],
+   "returns": "",
+   "doc": "A player uses `stack` (right click) with `self.hand`:",
+   "cites": [
+    "Item.use"
+   ]
+  },
+  {
+   "name": "destroy_block",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_destroy_block",
+   "contract": "cancel",
+   "out": "canceled",
+   "api": 14,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "pos: [i32; 3]",
+    "state: BlockStateId",
+    "canceled: &mut bool"
+   ],
+   "returns": "",
+   "doc": "A player breaks the block `state` at `pos`, once the game allowed it (the held item can break blocks, the debug stick didn't take the click):",
+   "cites": [
+    "ServerPlayerGameMode.destroyBlock"
+   ]
+  },
+  {
+   "name": "place_block",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_place_block",
+   "contract": "listen",
+   "out": null,
+   "api": 14,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "stack: &ItemStack",
+    "pos: [i32; 3]",
+    "state: BlockStateId"
+   ],
+   "returns": "",
+   "doc": "A player placed `stack` as the block `state` at `pos`:",
+   "cites": [
+    "BlockItem.place"
+   ]
+  },
+  {
+   "name": "right_click_block",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_right_click_block",
+   "contract": "cancel",
+   "out": "canceled",
+   "api": 21,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "pos: [i32; 3]",
+    "face: [i32; 3]",
+    "canceled: &mut bool"
+   ],
+   "returns": "",
+   "doc": "A player right clicks the block at `pos` with `self.hand`, `face` the face clicked:",
+   "cites": [
+    "ServerPlayerGameMode.useItemOn"
+   ]
+  },
+  {
+   "name": "block_spread",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_block_spread",
+   "contract": "cancel",
+   "out": "canceled",
+   "api": 22,
+   "generics": "",
+   "params": [
+    "&self",
+    "dimension: LevelDimension",
+    "kind: &str",
+    "from: BlockPos",
+    "to: BlockPos",
+    "canceled: &mut bool"
+   ],
+   "returns": "",
+   "doc": "On an authoritative server, a fluid flows or fire spreads from `from` into `to` (`kind` is `fluid` or `fire`):",
+   "cites": [
+    "FireBlock.tick",
+    "FlowingFluid.spreadTo"
+   ]
+  },
+  {
+   "name": "piston_move",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_piston_move",
+   "contract": "cancel",
+   "out": "canceled",
+   "api": 22,
+   "generics": "",
+   "params": [
+    "&self",
+    "dimension: LevelDimension",
+    "piston: BlockPos",
+    "direction: [i32; 3]",
+    "push: &[BlockPos]",
+    "destroy: &[BlockPos]",
+    "canceled: &mut bool"
+   ],
+   "returns": "",
+   "doc": "On an authoritative server, the piston at `piston` is about to push the blocks at `push` one step `direction` (`[0, 1, 0]` is up; pulling when it retracts) and destroy those at `destroy`:",
+   "cites": [
+    "PistonBaseBlock.moveBlocks"
+   ]
+  },
+  {
+   "name": "explosion_detonate",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_explosion_detonate",
+   "contract": "collect",
+   "out": "blocks",
+   "api": 22,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "dimension: &str",
+    "center: [f64; 3]",
+    "blocks: &mut Vec<[i32; 3]>"
+   ],
+   "returns": "",
+   "doc": "An explosion at `center` in `dimension` (`minecraft:overworld`) is about to break `blocks`:",
+   "cites": [
+    "ServerExplosion.explode"
+   ]
+  },
+  {
+   "name": "fill_bucket",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_fill_bucket",
+   "contract": "cancel",
+   "out": "canceled",
+   "api": 22,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "stack: &ItemStack",
+    "pos: [i32; 3]",
+    "canceled: &mut bool"
+   ],
+   "returns": "",
+   "doc": "A player fills (`stack` an empty bucket) or empties a bucket at `pos`:",
+   "cites": [
+    "BucketItem.use",
+    "Level.mayInteract"
+   ]
+  },
+  {
+   "name": "attack_entity",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_attack_entity",
+   "contract": "cancel",
+   "out": "canceled",
+   "api": 22,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "entity: i32",
+    "kind: &str",
+    "pos: [f64; 3]",
+    "canceled: &mut bool"
+   ],
+   "returns": "",
+   "doc": "A player attacks the entity `entity` (`Entity.getId`) of type `kind` (`minecraft:item_frame`, `minecraft:cow`, `minecraft:player`) standing at `pos`:",
+   "cites": [
+    "Entity.getId",
+    "Player.attack",
+    "ServerGamePacketListenerImpl.handleInteract"
+   ]
+  },
+  {
+   "name": "net_from_client",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_net_from_client",
+   "contract": "listen",
+   "out": null,
+   "api": 40,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "channel: &str",
+    "data: &[u8]"
+   ],
+   "returns": "",
+   "doc": "A message from `player`'s client on `channel` (`mod_id:name`), within the caps (`native_net.rs`):",
+   "cites": []
+  },
+  {
+   "name": "net_from_server",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_net_from_server",
+   "contract": "listen",
+   "out": null,
+   "api": 40,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "channel: &str",
+    "data: &[u8]"
+   ],
+   "returns": "",
+   "doc": "A message from the server on `channel` (`mod_id:name`), whose `data` is the sender's own bytes.",
+   "cites": []
+  },
+  {
+   "name": "player_died",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_died",
+   "contract": "listen",
+   "out": null,
+   "api": 40,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "cause: Option<&str>"
+   ],
+   "returns": "",
+   "doc": "`player` died:",
+   "cites": [
+    "ServerPlayer.die"
+   ]
+  },
+  {
+   "name": "mob_spawned",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_mob_spawned",
+   "contract": "listen",
+   "out": null,
+   "api": 40,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "dimension: &str",
+    "kind: &str",
+    "pos: [f64; 3]",
+    "natural: bool"
+   ],
+   "returns": "",
+   "doc": "A new mob of `kind` joined `dimension` at `pos`:",
+   "cites": []
+  },
+  {
+   "name": "mob_killed",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_mob_killed",
+   "contract": "listen",
+   "out": null,
+   "api": 40,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "entity: u32",
+    "kind: &str"
+   ],
+   "returns": "",
+   "doc": "`player`'s melee blow killed the mob `entity` of `kind` (other deaths aren't told yet).",
+   "cites": []
+  },
+  {
+   "name": "item_dropped",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_item_dropped",
+   "contract": "listen",
+   "out": null,
+   "api": 40,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "item: &str",
+    "count: u32"
+   ],
+   "returns": "",
+   "doc": "`player` threw `count` of `item` (`Player.drop`:",
+   "cites": [
+    "Player.drop"
+   ]
+  },
+  {
+   "name": "item_picked_up",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_item_picked_up",
+   "contract": "cancel",
+   "out": "canceled",
+   "api": 40,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "item: &str",
+    "count: u32",
+    "canceled: &mut bool"
+   ],
+   "returns": "",
+   "doc": "`player` is about to take `count` of `item` from the ground (`ItemEntity.playerTouch`).",
+   "cites": [
+    "ItemEntity.playerTouch"
+   ]
+  },
+  {
+   "name": "hurt_enemy",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_hurt_enemy",
+   "contract": "listen",
+   "out": null,
+   "api": 39,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "stack: &ItemStack",
+    "entity: u32",
+    "kind: &str"
+   ],
+   "returns": "",
+   "doc": "A player's hit landed on the mob `entity` of type `kind` (`minecraft:zombie`), holding `stack`:",
+   "cites": [
+    "Item.hurtEnemy"
+   ]
+  },
+  {
+   "name": "inventory_tick",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_inventory_tick",
+   "contract": "listen",
+   "out": null,
+   "api": 39,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "slot: i32",
+    "selected: bool"
+   ],
+   "returns": "",
+   "doc": "A server tick of the stack a player carries in `slot`:",
+   "cites": [
+    "Inventory.tick",
+    "Item.inventoryTick"
+   ]
+  },
+  {
+   "name": "on_equip",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_on_equip",
+   "contract": "listen",
+   "out": null,
+   "api": 39,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "slot: &str",
+    "new: Option<&ItemStack>"
+   ],
+   "returns": "",
+   "doc": "A player's equipment slot `slot` (`head`, `chest`, `legs`, `feet`, `offhand`, and `mainhand` on a swap of the hands or `/item`) took a different item, `new` (none when it was emptied):",
+   "cites": [
+    "LivingEntity.onEquipItem"
+   ]
+  },
+  {
+   "name": "block_signal",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_block_signal",
+   "contract": "listen",
+   "out": null,
+   "api": 38,
+   "generics": "",
+   "params": [
+    "&self",
+    "dimension: LevelDimension",
+    "pos: BlockPos",
+    "state: BlockStateId",
+    "face: Direction",
+    "direct: bool",
+    "signal: &mut i32"
+   ],
+   "returns": "",
+   "doc": "The redstone signal the block `state` at `pos` gives on its `face`, the side that touches the block reading it:",
+   "cites": [
+    "BlockState.getDirectSignal"
+   ]
+  },
+  {
+   "name": "is_signal_source",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_is_signal_source",
+   "contract": "listen",
+   "out": null,
+   "api": 38,
+   "generics": "",
+   "params": [
+    "&self",
+    "state: BlockStateId",
+    "source: &mut bool"
+   ],
+   "returns": "",
+   "doc": "`BlockState.isSignalSource`:",
+   "cites": [
+    "BlockState.isSignalSource"
+   ]
+  },
+  {
+   "name": "health_hud",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_health_hud",
+   "contract": "replace",
+   "out": "draws",
+   "api": null,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "inputs: &horizon_client::hud_layout::HealthInputs",
+    "wi: i32",
+    "hi: i32",
+    "draws: &mut Option<Vec<horizon_client::hud_layout::GuiDraw>>"
+   ],
+   "returns": "",
+   "doc": "The player-health HUD rows, once a frame the HUD draws them (`HealthHud::layout`, not under F1):",
+   "cites": [
+    "HealthHud.layout"
+   ]
+  },
+  {
+   "name": "interact_entity",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_interact_entity",
+   "contract": "cancel",
+   "out": "claimed",
+   "api": 29,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "entity: i32",
+    "kind: &str",
+    "stack: Option<&ItemStack>",
+    "claimed: &mut bool"
+   ],
+   "returns": "",
+   "doc": "A player right-clicks the entity `entity` (`Entity.getId`) of type `kind` (`minecraft:cow`) with `self.hand`, holding `stack` (none in an empty hand):",
+   "cites": [
+    "Entity.getId",
+    "Player.interactOn"
+   ]
+  },
+  {
+   "name": "left_click_block",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_left_click_block",
+   "contract": "cancel",
+   "out": "canceled",
+   "api": 30,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "pos: [i32; 3]",
+    "face: [i32; 3]",
+    "state: BlockStateId",
+    "canceled: &mut bool"
+   ],
+   "returns": "",
+   "doc": "A player left-clicks the block `state` at `pos`, `face` the face hit (`[0, 1, 0]` is the top):",
+   "cites": [
+    "Block.attack",
+    "ServerPlayerGameMode.handleBlockBreakAction"
+   ]
+  },
+  {
+   "name": "player_tick",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_tick",
+   "contract": "listen",
+   "out": null,
+   "api": 31,
+   "generics": "",
+   "params": [
+    "&mut self"
+   ],
+   "returns": "",
+   "doc": "A living player's server tick ends (`ServerPlayer.tick`):",
+   "cites": [
+    "ServerPlayer.tick"
+   ]
+  },
+  {
+   "name": "entity_join_level",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_entity_join_level",
+   "contract": "cancel",
+   "out": "canceled",
+   "api": null,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "dimension: &str",
+    "entity: u32",
+    "kind: &str",
+    "pos: [f64; 3]",
+    "loaded_from_disk: bool",
+    "canceled: &mut bool"
+   ],
+   "returns": "",
+   "doc": "An entity joins the server level `dimension` (NeoForge's `EntityJoinLevelEvent`):",
+   "cites": [
+    "PersistentEntitySectionManager.addEntity"
+   ]
+  },
+  {
+   "name": "living_incoming_damage",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_living_incoming_damage",
+   "contract": "cancel",
+   "out": "canceled",
+   "api": 50,
+   "generics": "",
+   "params": [
+    "entity: i32",
+    "kind: &str",
+    "damage_type: &str",
+    "causing: i32",
+    "direct: i32",
+    "amount: &mut f32",
+    "canceled: &mut bool"
+   ],
+   "returns": "",
+   "doc": "`LivingEntity.hurtServer`, past its guards (invulnerable, dead, fire with fire resistance), is about to hurt entity `entity` of type `kind` (`minecraft:zombie`, `minecraft:player`) by `amount` of `damage_type` (`minecraft:fall`), from the source's `causing` entity (`DamageSource.getEntity`:",
+   "cites": [
+    "DamageSource.getEntity",
+    "EnderDragon.hurt",
+    "LivingEntity.hurtServer"
+   ]
+  },
+  {
+   "name": "menu_button_v2",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_menu_button_v2",
+   "contract": "listen",
+   "out": null,
+   "api": 51,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "pos: [i32; 3]",
+    "entity: &mut ModBlockEntity",
+    "id: i32",
+    "carried: &mut Option<ItemStack>"
+   ],
+   "returns": "",
+   "doc": "`AbstractContainerMenu.clickMenuButton(Player, int)`'s other half:",
+   "cites": [
+    "AbstractContainerMenu.clickMenuButton"
+   ]
+  },
+  {
+   "name": "entity_leave_level",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_entity_leave_level",
+   "contract": "listen",
+   "out": null,
+   "api": null,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "dimension: &str",
+    "entity: u32",
+    "kind: &str"
+   ],
+   "returns": "",
+   "doc": "An entity leaves the server level `dimension` (NeoForge's `EntityLeaveLevelEvent`):",
+   "cites": []
+  },
+  {
+   "name": "block_entity_fluids",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_block_entity_fluids",
+   "contract": "replace",
+   "out": "fluids",
+   "api": 54,
+   "generics": "",
+   "params": [
+    "&self",
+    "block: &str",
+    "fluids: &mut Option<ModFluidTanks>"
+   ],
+   "returns": "",
+   "doc": "Block `block`'s block entity has fluid tanks:",
+   "cites": []
+  },
+  {
+   "name": "should_apply_effect_tick_this_tick",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_should_apply_effect_tick_this_tick",
+   "contract": "listen",
+   "out": null,
+   "api": 56,
+   "generics": "",
+   "params": [
+    "&self",
+    "effect: &str",
+    "tick_count: i32",
+    "amplifier: i32",
+    "apply: &mut bool"
+   ],
+   "returns": "",
+   "doc": "`MobEffect.shouldApplyEffectTickThisTick` for a content mod's effect `effect` (`ruby:bleeding`), each tick a player or a mob has it, in `MobEffectInstance.tickServer` before it counts down:",
+   "cites": [
+    "MobEffect.shouldApplyEffectTickThisTick",
+    "MobEffectInstance.tickServer"
+   ]
+  },
+  {
+   "name": "apply_effect_tick",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_apply_effect_tick",
+   "contract": "listen",
+   "out": null,
+   "api": 56,
+   "generics": "",
+   "params": [
+    "&self",
+    "effect: &str",
+    "dimension: &str",
+    "entity: Option<i32>",
+    "amplifier: i32",
+    "keep: &mut bool"
+   ],
+   "returns": "",
+   "doc": "`MobEffect.applyEffectTick`:",
+   "cites": [
+    "Entity.getId",
+    "MobEffect.applyEffectTick"
+   ]
+  },
+  {
+   "name": "on_effect_added",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_on_effect_added",
+   "contract": "listen",
+   "out": null,
+   "api": 56,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "effect: &str",
+    "entity: Option<i32>",
+    "amplifier: i32"
+   ],
+   "returns": "",
+   "doc": "`MobEffect.onEffectAdded`:",
+   "cites": [
+    "LivingEntity.addEffect",
+    "MobEffect.onEffectAdded"
+   ]
+  },
+  {
+   "name": "mob_effect_added",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_mob_effect_added",
+   "contract": "listen",
+   "out": null,
+   "api": 56,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "effect: &str",
+    "entity: Option<i32>",
+    "amplifier: i32"
+   ],
+   "returns": "",
+   "doc": "NeoForge's `MobEffectEvent.Added`, vanilla's `MobEffect.onEffectStarted`:",
+   "cites": [
+    "LivingEntity.addEffect",
+    "MobEffect.onEffectStarted",
+    "MobEffectEvent.Added"
+   ]
+  },
+  {
+   "name": "chunk_load",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_chunk_load",
+   "contract": "listen",
+   "out": null,
+   "api": 57,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "dimension: &str",
+    "chunk: [i32; 2]",
+    "new: bool"
+   ],
+   "returns": "",
+   "doc": "Chunk `chunk` (`[x, z]`, in chunks) of `dimension` came into the world (NeoForge's `ChunkEvent.Load`):",
+   "cites": [
+    "ChunkEvent.Load"
+   ]
+  },
+  {
+   "name": "chunk_unload",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_chunk_unload",
+   "contract": "listen",
+   "out": null,
+   "api": 57,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "dimension: &str",
+    "chunk: [i32; 2]"
+   ],
+   "returns": "",
+   "doc": "Chunk `chunk` of `dimension` left the world (NeoForge's `ChunkEvent.Unload`), with a level that closes for being empty too.",
+   "cites": [
+    "ChunkEvent.Unload"
+   ]
+  },
+  {
+   "name": "player_logged_in",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_logged_in",
+   "contract": "listen",
+   "out": null,
+   "api": 57,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str"
+   ],
+   "returns": "",
+   "doc": "`player` (`name`) joined the game (NeoForge's `PlayerLoggedInEvent`):",
+   "cites": []
+  },
+  {
+   "name": "player_logged_out",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_logged_out",
+   "contract": "listen",
+   "out": null,
+   "api": 57,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str"
+   ],
+   "returns": "",
+   "doc": "`player` (`name`) left the game (NeoForge's `PlayerLoggedOutEvent`), by any path:",
+   "cites": []
+  },
+  {
+   "name": "world_drawn",
+   "version": 1,
+   "target": "horizon_client_render::gfx::native_render::native_world_drawn",
+   "contract": "listen",
+   "out": null,
+   "api": null,
+   "generics": "",
+   "params": [
+    "world: &mut WorldDrawn<'_>"
+   ],
+   "returns": "",
+   "doc": "The world is drawn (see [`WorldDrawn`]).",
+   "cites": []
+  },
+  {
+   "name": "render_needs",
+   "version": 1,
+   "target": "horizon_client_render::gfx::native_render::native_render_needs",
+   "contract": "collect",
+   "out": "needs",
+   "api": null,
+   "generics": "",
+   "params": [
+    "needs: &mut RenderNeeds"
+   ],
+   "returns": "",
+   "doc": "Asked as a frame is built and drawn:",
+   "cites": []
+  },
+  {
+   "name": "item_bar",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_item_bar",
+   "contract": "listen",
+   "out": null,
+   "api": 60,
+   "generics": "",
+   "params": [
+    "&self",
+    "stack: &ItemStack",
+    "bar: &mut Option<(i32, u32)>"
+   ],
+   "returns": "",
+   "doc": "The small bar `GuiGraphicsExtractor.itemDecorations` draws under an item, wherever the game shows one:",
+   "cites": [
+    "GuiGraphicsExtractor.itemDecorations"
+   ]
+  },
+  {
+   "name": "has_analog_output",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_has_analog_output",
+   "contract": "collect",
+   "out": "output",
+   "api": 64,
+   "generics": "",
+   "params": [
+    "&self",
+    "state: BlockStateId",
+    "output: &mut bool"
+   ],
+   "returns": "",
+   "doc": "`BlockState.hasAnalogOutputSignal`:",
+   "cites": [
+    "BlockState.hasAnalogOutputSignal"
+   ]
+  },
+  {
+   "name": "analog_output",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_analog_output",
+   "contract": "collect",
+   "out": "output",
+   "api": 64,
+   "generics": "",
+   "params": [
+    "&self",
+    "dimension: LevelDimension",
+    "pos: BlockPos",
+    "state: BlockStateId",
+    "face: Direction",
+    "output: &mut i32"
+   ],
+   "returns": "",
+   "doc": "`BlockState.getAnalogOutputSignal`:",
+   "cites": [
+    "BlockState.getAnalogOutputSignal",
+    "Level.setBlock"
+   ]
+  },
+  {
+   "name": "component_types",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_component_types",
+   "contract": "collect",
+   "out": "types",
+   "api": null,
+   "generics": "",
+   "params": [
+    "types: &mut Vec<String>"
+   ],
+   "returns": "",
+   "doc": "Register namespaced NBT component types before content loads.",
+   "cites": []
+  },
+  {
+   "name": "dispense_item",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_dispense_item",
+   "contract": "replace",
+   "out": "answer",
+   "api": 67,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "dimension: &str",
+    "pos: [i32; 3]",
+    "facing: Direction",
+    "stack: &ItemStack",
+    "answer: &mut Option<NativeDispensed>"
+   ],
+   "returns": "",
+   "doc": "`DispenserBlock.getDispenseMethod`:",
+   "cites": [
+    "DispenseItemBehavior.NOOP",
+    "DispenserBlock.getDispenseMethod"
+   ]
+  },
+  {
+   "name": "tooltip_component",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_tooltip_component",
+   "contract": "replace",
+   "out": "size",
+   "api": null,
+   "generics": "",
+   "params": [
+    "&self",
+    "stack: &ItemStack",
+    "size: &mut Option<[f32; 2]>"
+   ],
+   "returns": "",
+   "doc": "Client-side image component for this stack's tooltip.",
+   "cites": []
+  },
+  {
+   "name": "tooltip_component_draw",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_tooltip_component_draw",
+   "contract": "listen",
+   "out": null,
+   "api": null,
+   "generics": "",
+   "params": [
+    "&self",
+    "stack: &ItemStack",
+    "batch: &mut HudBatch",
+    "origin: [f32; 2]",
+    "size: [f32; 2]"
+   ],
+   "returns": "",
+   "doc": "Render the measured component at origin, inside the tooltip background.",
+   "cites": []
+  },
+  {
+   "name": "can_survive",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_can_survive",
+   "contract": "replace",
+   "out": "survives",
+   "api": 70,
+   "generics": "",
+   "params": [
+    "&self",
+    "dimension: LevelDimension",
+    "pos: BlockPos",
+    "state: BlockStateId",
+    "survives: &mut Option<bool>"
+   ],
+   "returns": "",
+   "doc": "On an authoritative server, `BlockState.canSurvive` for `state` at `pos` (`BlockBehaviour.canSurvive`), before the block answers it:",
+   "cites": [
+    "BlockBehaviour.canSurvive",
+    "BlockItem.canPlace",
+    "BlockState.canSurvive"
+   ]
+  },
+  {
+   "name": "may_place_on",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_may_place_on",
+   "contract": "replace",
+   "out": "may",
+   "api": 70,
+   "generics": "",
+   "params": [
+    "&self",
+    "dimension: LevelDimension",
+    "state: BlockStateId",
+    "ground: BlockStateId",
+    "ground_pos: BlockPos",
+    "may: &mut Option<bool>"
+   ],
+   "returns": "",
+   "doc": "On an authoritative server, `VegetationBlock.mayPlaceOn` for the plant `state` on `ground` at `ground_pos`, before the plant answers it:",
+   "cites": [
+    "VegetationBlock.mayPlaceOn"
+   ]
+  },
+  {
+   "name": "block_entity_submit",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_block_entity_submit",
+   "contract": "listen",
+   "out": null,
+   "api": 71,
+   "generics": "",
+   "params": [
+    "&self",
+    "pos: [i32; 3]",
+    "block: &str",
+    "state: BlockStateId",
+    "entity: &ModBlockEntity",
+    "draw: &mut BlockEntityDraw"
+   ],
+   "returns": "",
+   "doc": "Draw the mod block entity at `pos`, of block `block` (`mymod:machine`), on this client:",
+   "cites": [
+    "BlockEntityRenderer.submit"
+   ]
+  },
+  {
+   "name": "block_entity_render_bounding_box",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_block_entity_render_bounding_box",
+   "contract": "collect",
+   "out": "bounds",
+   "api": 71,
+   "generics": "",
+   "params": [
+    "&self",
+    "pos: [i32; 3]",
+    "block: &str",
+    "state: BlockStateId",
+    "entity: &ModBlockEntity",
+    "bounds: &mut [f32; 6]"
+   ],
+   "returns": "",
+   "doc": "Where the mod block entity at `pos` draws, for culling (NeoForge's `getRenderBoundingBox`):",
+   "cites": []
+  },
+  {
+   "name": "is_valid_bonemeal_target",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_is_valid_bonemeal_target",
+   "contract": "replace",
+   "out": "valid",
+   "api": 72,
+   "generics": "",
+   "params": [
+    "&self",
+    "dimension: LevelDimension",
+    "pos: BlockPos",
+    "state: BlockStateId",
+    "valid: &mut Option<bool>"
+   ],
+   "returns": "",
+   "doc": "A block nothing in Horizon knows a `BonemealableBlock` for is about to take bone meal:",
+   "cites": [
+    "BoneMealItem.useOn",
+    "BonemealableBlock.isValidBonemealTarget"
+   ]
+  },
+  {
+   "name": "is_bonemeal_success",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_is_bonemeal_success",
+   "contract": "collect",
+   "out": "success",
+   "api": 72,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "dimension: LevelDimension",
+    "pos: BlockPos",
+    "state: BlockStateId",
+    "success: &mut bool"
+   ],
+   "returns": "",
+   "doc": "`BonemealableBlock.isBonemealSuccess` for a block that answered `native_is_valid_bonemeal_target`, after it did:",
+   "cites": [
+    "BonemealableBlock.isBonemealSuccess"
+   ]
+  },
+  {
+   "name": "perform_bonemeal",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_perform_bonemeal",
+   "contract": "listen",
+   "out": null,
+   "api": 72,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "ticks: &mut Ticks",
+    "dimension: LevelDimension",
+    "pos: BlockPos",
+    "state: BlockStateId"
+   ],
+   "returns": "",
+   "doc": "`BonemealableBlock.performBonemeal` for a block that answered `native_is_valid_bonemeal_target` and whose `native_is_bonemeal_success` said yes:",
+   "cites": [
+    "BonemealableBlock.performBonemeal"
+   ]
+  },
+  {
+   "name": "block_step_on",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_block_step_on",
+   "contract": "listen",
+   "out": null,
+   "api": null,
+   "generics": "",
+   "params": [
+    "dimension: &str",
+    "entity: i32",
+    "kind: &str",
+    "state: BlockStateId",
+    "position: [i32; 3]"
+   ],
+   "returns": "",
+   "doc": "`Block.stepOn` for a mod block, on its authoritative server level.",
+   "cites": [
+    "Block.stepOn"
+   ]
+  },
+  {
+   "name": "block_entity_inside",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_block_entity_inside",
+   "contract": "listen",
+   "out": null,
+   "api": null,
+   "generics": "",
+   "params": [
+    "dimension: &str",
+    "entity: i32",
+    "kind: &str",
+    "state: BlockStateId",
+    "position: [i32; 3]"
+   ],
+   "returns": "",
+   "doc": "`Block.entityInside` for each mod block touched along the entity's movement.",
+   "cites": [
+    "Block.entityInside"
+   ]
+  },
+  {
+   "name": "block_fall_on",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_block_fall_on",
+   "contract": "collect",
+   "out": "damage",
+   "api": null,
+   "generics": "",
+   "params": [
+    "dimension: &str",
+    "entity: i32",
+    "kind: &str",
+    "state: BlockStateId",
+    "position: [i32; 3]",
+    "distance: f64",
+    "damage: &mut f32"
+   ],
+   "returns": "",
+   "doc": "`Block.fallOn` for a mod block.",
+   "cites": [
+    "Block.fallOn"
+   ]
+  },
+  {
+   "name": "consume_effect",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_consume_effect",
+   "contract": "listen",
+   "out": null,
+   "api": 74,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "kind: &str",
+    "data: &serde_json::Value"
+   ],
+   "returns": "",
+   "doc": "A consumable's effect of a mod's own kind:",
+   "cites": []
+  },
+  {
+   "name": "loot_table_load",
+   "version": 1,
+   "target": "horizon_world::loot::native_loot_table_load",
+   "contract": "collect",
+   "out": "table",
+   "api": 75,
+   "generics": "",
+   "params": [
+    "id: &str",
+    "table: &mut Value"
+   ],
+   "returns": "",
+   "doc": "A native mod's hook point (docs/native-mods.md), listed in `native-hooks.json` with the game's:",
+   "cites": [
+    "LootTableEvents.MODIFY"
+   ]
+  },
+  {
+   "name": "loot_drops",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_loot_drops",
+   "contract": "collect",
+   "out": "drops",
+   "api": 75,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "context: &NativeLootDrops<'_>",
+    "drops: &mut Vec<ItemStack>"
+   ],
+   "returns": "",
+   "doc": "A block broke or a mob died, and `drops` are the items about to drop, in the order they drop:",
+   "cites": [
+    "LootTableEvents.MODIFY_DROPS",
+    "NativeLootDrops.used"
+   ]
+  },
+  {
+   "name": "state_for_placement",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_state_for_placement",
+   "contract": "replace",
+   "out": "answer",
+   "api": 76,
+   "generics": "",
+   "params": [
+    "&self",
+    "dimension: LevelDimension",
+    "state: BlockStateId",
+    "context: &PlacementContext",
+    "fluid: FluidState",
+    "answer: &mut Option<Option<BlockStateId>>"
+   ],
+   "returns": "",
+   "doc": "A block is about to take the state it is placed in (`Block.getStateForPlacement(BlockPlaceContext)`), `state` the block's own default state.",
+   "cites": [
+    "Block.getStateForPlacement",
+    "BlockItem.place"
+   ]
+  },
+  {
+   "name": "enchant_effect",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_enchant_effect",
+   "contract": "listen",
+   "out": null,
+   "api": 77,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "enchantment: &str",
+    "kind: &str",
+    "data: &serde_json::Value",
+    "level: u32",
+    "victim: u32"
+   ],
+   "returns": "",
+   "doc": "A `minecraft:post_attack` effect of a mod's own kind, on a mob a player's weapon hit:",
+   "cites": []
+  },
+  {
+   "name": "screen_render_post",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_screen_render_post",
+   "contract": "listen",
+   "out": null,
+   "api": 326,
+   "generics": "",
+   "params": [
+    "&self",
+    "batch: &mut HudBatch",
+    "screen: &NativeScreenView<'_>"
+   ],
+   "returns": "",
+   "doc": "The open screen has drawn itself and its tooltips (`Screen.render`, the point of `ScreenEvent.Render.Post`):",
+   "cites": [
+    "Screen.Playing",
+    "Screen.render",
+    "ScreenEvent.Render.Post"
+   ]
+  },
+  {
+   "name": "modify_default_components",
+   "version": 1,
+   "target": "horizon_world::item_defaults::native_modify_default_components",
+   "contract": "collect",
+   "out": "components",
+   "api": 79,
+   "generics": "",
+   "params": [
+    "item: &str",
+    "components: &mut Map<String, Value>"
+   ],
+   "returns": "",
+   "doc": "Hook point for native mods (docs/native-mods.md, listed in `native-hooks.json` with those of `horizon-client/src/game/native_hooks.rs`):",
+   "cites": []
+  },
+  {
+   "name": "screen_mouse_button_pressed_pre",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_screen_mouse_button_pressed_pre",
+   "contract": "cancel",
+   "out": "canceled",
+   "api": 326,
+   "generics": "",
+   "params": [
+    "&self",
+    "screen: &NativeScreenView<'_>",
+    "button: i32",
+    "modifiers: u32",
+    "canceled: &mut bool"
+   ],
+   "returns": "",
+   "doc": "A mouse button went down over the open screen (`ScreenEvent.MouseButtonPressed.Pre`, vanilla's `Screen.mouseClicked`):",
+   "cites": [
+    "Screen.mouseClicked",
+    "ScreenEvent.MouseButtonPressed.Pre"
+   ]
+  },
+  {
+   "name": "screen_mouse_button_released_pre",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_screen_mouse_button_released_pre",
+   "contract": "cancel",
+   "out": "canceled",
+   "api": 80,
+   "generics": "",
+   "params": [
+    "&self",
+    "screen: &NativeScreenView<'_>",
+    "button: i32",
+    "modifiers: u32",
+    "canceled: &mut bool"
+   ],
+   "returns": "",
+   "doc": "A mouse button went up over the open screen (`ScreenEvent.MouseButtonReleased.Pre`, vanilla's `Screen.mouseReleased`), with the same `screen`, `button` and `modifiers` as `native_screen_mouse_button_pressed_pre` and fired at the same point.",
+   "cites": [
+    "Screen.mouseReleased",
+    "ScreenEvent.MouseButtonReleased.Pre"
+   ]
+  },
+  {
+   "name": "camera_shake",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_camera_shake",
+   "contract": "listen",
+   "out": null,
+   "api": 82,
+   "generics": "",
+   "params": [
+    "&self",
+    "partial: f32",
+    "shake: &mut NativeShake"
+   ],
+   "returns": "",
+   "doc": "The camera shake native mods ask for in this frame, `partial` ticks past the last tick (0 to 1):",
+   "cites": []
+  },
+  {
+   "name": "shader_params",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_shader_params",
+   "contract": "listen",
+   "out": null,
+   "api": 84,
+   "generics": "",
+   "params": [
+    "&self",
+    "partial: f32",
+    "params: &mut [[f32; 4]; 8]"
+   ],
+   "returns": "",
+   "doc": "The values native mods hand their shader packs in this frame, `partial` ticks past the last tick (0 to 1):",
+   "cites": []
+  },
+  {
+   "name": "block_highlight",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_block_highlight",
+   "contract": "cancel",
+   "out": "canceled",
+   "api": null,
+   "generics": "",
+   "params": [
+    "&self",
+    "pos: [i32; 3]",
+    "state: BlockStateId",
+    "partial: f32",
+    "canceled: &mut bool"
+   ],
+   "returns": "",
+   "doc": "Before an eligible targeted block's selection outline is built.",
+   "cites": []
+  },
+  {
+   "name": "render_hand",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_render_hand",
+   "contract": "cancel",
+   "out": "canceled",
+   "api": null,
+   "generics": "",
+   "params": [
+    "&self",
+    "hand: horizon_client::first_person::Hand",
+    "stack: Option<&ItemStack>",
+    "partial: f32",
+    "swing: f32",
+    "equip: f32",
+    "canceled: &mut bool"
+   ],
+   "returns": "",
+   "doc": "Before one first-person hand and its displayed stack are drawn (RenderHandEvent).",
+   "cites": []
+  },
+  {
+   "name": "client_resources_reloaded",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_client_resources_reloaded",
+   "contract": "listen",
+   "out": null,
+   "api": null,
+   "generics": "",
+   "params": [
+    "&mut self"
+   ],
+   "returns": "",
+   "doc": "Render-thread notification after a resource-pack reload has applied successfully.",
+   "cites": []
+  },
+  {
+   "name": "item_decorations",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_item_decorations",
+   "contract": "listen",
+   "out": null,
+   "api": null,
+   "generics": "",
+   "params": [
+    "&self",
+    "stack: &ItemStack",
+    "x: f32",
+    "y: f32",
+    "batch: &mut HudBatch"
+   ],
+   "returns": "",
+   "doc": "Append an item's custom decorations after its default bar, cooldown and count.",
+   "cites": []
+  },
+  {
+   "name": "use_duration",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_use_duration",
+   "contract": "listen",
+   "out": null,
+   "api": 90,
+   "generics": "",
+   "params": [
+    "&self",
+    "stack: &ItemStack",
+    "duration: &mut i32"
+   ],
+   "returns": "",
+   "doc": "`Item.getUseDuration` of `stack`, in ticks:",
+   "cites": [
+    "Item.getUseDuration",
+    "Item.use"
+   ]
+  },
+  {
+   "name": "use_animation",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_use_animation",
+   "contract": "listen",
+   "out": null,
+   "api": 90,
+   "generics": "",
+   "params": [
+    "&self",
+    "stack: &ItemStack",
+    "animation: &mut UseAnimation"
+   ],
+   "returns": "",
+   "doc": "`Item.getUseAnimation` of `stack` in use, for the first person hand:",
+   "cites": [
+    "Item.getUseAnimation"
+   ]
+  },
+  {
+   "name": "can_eat",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_can_eat",
+   "contract": "listen",
+   "out": null,
+   "api": 90,
+   "generics": "",
+   "params": [
+    "&self",
+    "stack: &ItemStack",
+    "can_eat: &mut bool"
+   ],
+   "returns": "",
+   "doc": "`Player.canEat` for the food `stack`, from `Consumable.canConsume` when eating starts:",
+   "cites": [
+    "Consumable.canConsume",
+    "Player.canEat"
+   ]
+  },
+  {
+   "name": "living_entity_use_item_start",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_living_entity_use_item_start",
+   "contract": "cancel",
+   "out": "canceled",
+   "api": 90,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "stack: &ItemStack",
+    "entity: Option<i32>",
+    "hand: Hand",
+    "duration: &mut i32",
+    "canceled: &mut bool"
+   ],
+   "returns": "",
+   "doc": "NeoForge's `LivingEntityUseItemEvent.Start`:",
+   "cites": [
+    "Entity.getId",
+    "LivingEntity.startUsingItem",
+    "LivingEntityUseItemEvent.Start"
+   ]
+  },
+  {
+   "name": "living_entity_use_item_finish",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_living_entity_use_item_finish",
+   "contract": "listen",
+   "out": null,
+   "api": 90,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "stack: &ItemStack",
+    "entity: Option<i32>",
+    "hand: Hand",
+    "duration: i32",
+    "result: &mut Option<ItemStack>"
+   ],
+   "returns": "",
+   "doc": "NeoForge's `LivingEntityUseItemEvent.Finish`:",
+   "cites": [
+    "LivingEntity.completeUsingItem",
+    "LivingEntityUseItemEvent.Finish"
+   ]
+  },
+  {
+   "name": "screen_mouse_scrolled_pre",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_screen_mouse_scrolled_pre",
+   "contract": "cancel",
+   "out": "canceled",
+   "api": 326,
+   "generics": "",
+   "params": [
+    "&self",
+    "screen: &NativeScreenView<'_>",
+    "scroll: [f64; 2]",
+    "modifiers: u32",
+    "canceled: &mut bool"
+   ],
+   "returns": "",
+   "doc": "The wheel turned over the open screen (`ScreenEvent.MouseScrolled.Pre`, vanilla's `Screen.mouseScrolled`):",
+   "cites": [
+    "Screen.mouseScrolled",
+    "ScreenEvent.MouseScrolled.Pre"
+   ]
+  },
+  {
+   "name": "player_command",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_command",
+   "contract": "cancel",
+   "out": "canceled",
+   "api": 95,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "command: &str",
+    "canceled: &mut bool",
+    "replies: &mut Vec<Text>"
+   ],
+   "returns": "",
+   "doc": "A command a player typed (NeoForge's `CommandEvent`, before `Commands.performCommand` runs it), without its slash:",
+   "cites": [
+    "Commands.performCommand"
+   ]
+  },
+  {
+   "name": "perform_console_command",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_perform_console_command",
+   "contract": "cancel",
+   "out": "ran",
+   "api": 99,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "command: &str",
+    "ran: &mut bool"
+   ],
+   "returns": "",
+   "doc": "A command a mod registered, typed on the dedicated server's console or sent through `horizon-server console` (`DedicatedServer.handleConsoleInputs`), without its slash:",
+   "cites": [
+    "DedicatedServer.handleConsoleInputs"
+   ]
+  },
+  {
+   "name": "screen_key_pressed_pre",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_screen_key_pressed_pre",
+   "contract": "cancel",
+   "out": "canceled",
+   "api": 326,
+   "generics": "",
+   "params": [
+    "&self",
+    "screen: &NativeScreenView<'_>",
+    "key: &str",
+    "repeat: bool",
+    "modifiers: u32",
+    "canceled: &mut bool"
+   ],
+   "returns": "",
+   "doc": "A key went down over the open screen (`ScreenEvent.KeyPressed.Pre`, vanilla's `Screen.keyPressed`):",
+   "cites": [
+    "Screen.keyPressed",
+    "ScreenEvent.KeyPressed.Pre"
+   ]
+  },
+  {
+   "name": "screen_char_typed_pre",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_screen_char_typed_pre",
+   "contract": "cancel",
+   "out": "canceled",
+   "api": 104,
+   "generics": "",
+   "params": [
+    "&self",
+    "screen: &NativeScreenView<'_>",
+    "c: char",
+    "modifiers: u32",
+    "canceled: &mut bool"
+   ],
+   "returns": "",
+   "doc": "A character was typed at the open screen (`ScreenEvent.CharacterTyped.Pre`, vanilla's `Screen.charTyped`):",
+   "cites": [
+    "CharacterTyped.Pre",
+    "KeyPressed.Pre",
+    "KeyboardHandler.charTyped",
+    "Screen.charTyped",
+    "ScreenEvent.CharacterTyped.Pre"
+   ]
+  },
+  {
+   "name": "data_pack_files",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_data_pack_files",
+   "contract": "collect",
+   "out": "files",
+   "api": 106,
+   "generics": "",
+   "params": [
+    "&self",
+    "files: &mut Vec<(String, Vec<u8>)>"
+   ],
+   "returns": "",
+   "doc": "The server is assembling its data tables from the world's data packs (`ReloadableServerResources`):",
+   "cites": []
+  },
+  {
+   "name": "biome_colors",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_biome_colors",
+   "contract": "listen",
+   "out": null,
+   "api": 107,
+   "generics": "",
+   "params": [
+    "&self",
+    "biome: &str",
+    "colors: &mut BiomeColors"
+   ],
+   "returns": "",
+   "doc": "Change the colours of `biome` (`minecraft:plains`) on this client:",
+   "cites": []
+  },
+  {
+   "name": "server_data_loaded",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_server_data_loaded",
+   "contract": "listen",
+   "out": null,
+   "api": 108,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "reload: bool"
+   ],
+   "returns": "",
+   "doc": "The server's data tables are built (NeoForge's `TagsUpdatedEvent` with `SERVER_DATA_LOAD`):",
+   "cites": []
+  },
+  {
+   "name": "compute_fov",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_compute_fov",
+   "contract": "listen",
+   "out": null,
+   "api": null,
+   "generics": "",
+   "params": [
+    "&self",
+    "partial: f32",
+    "camera: [f64; 3]",
+    "degrees: &mut f32"
+   ],
+   "returns": "",
+   "doc": "World field of view, after normal calculation and zoom and before projection/Nausea.",
+   "cites": []
+  },
+  {
+   "name": "mob_submit",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_mob_submit",
+   "contract": "cancel",
+   "out": "drawn",
+   "api": 110,
+   "generics": "",
+   "params": [
+    "&self",
+    "mob: &NativeMobRender<'_>",
+    "draw: &mut BlockEntityDraw",
+    "drawn: &mut bool"
+   ],
+   "returns": "",
+   "doc": "Draw the mob `mob` (its id, kind, custom name and the frame's body and head turns and walk cycle, `LivingEntityRenderState`) on this client with a model of your own, once a frame while it is in view (vanilla's `EntityRenderer.submit`), and set `drawn` to leave out its vanilla model, armour and held ",
+   "cites": [
+    "EntityRenderer.submit",
+    "RenderLivingEvent.Pre"
+   ]
+  },
+  {
+   "name": "camera_distance",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_camera_distance",
+   "contract": "listen",
+   "out": null,
+   "api": null,
+   "generics": "",
+   "params": [
+    "&self",
+    "partial: f32",
+    "mirrored: bool",
+    "entity: &horizon_client::camera::CameraEntity",
+    "distance: &mut f32"
+   ],
+   "returns": "",
+   "doc": "Final scaled third-person camera distance, before visual-shape collision clipping.",
+   "cites": []
+  },
+  {
+   "name": "compute_fog_color",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_compute_fog_color",
+   "contract": "listen",
+   "out": null,
+   "api": null,
+   "generics": "",
+   "params": [
+    "&self",
+    "partial: f32",
+    "camera: [f64; 3]",
+    "fog_type: horizon_client::fog::FogType",
+    "rgb: &mut [f32; 3]"
+   ],
+   "returns": "",
+   "doc": "Computed world fog RGB, after ordinary effects and before upload.",
+   "cites": []
+  },
+  {
+   "name": "mouse_button_pre",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_mouse_button_pre",
+   "contract": "cancel",
+   "out": "canceled",
+   "api": null,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "button: i32",
+    "pressed: bool",
+    "modifiers: u32",
+    "canceled: &mut bool"
+   ],
+   "returns": "",
+   "doc": "Raw mouse button input on any screen, before dispatch; cancel skips dispatch and Post.",
+   "cites": []
+  },
+  {
+   "name": "mouse_button_post",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_mouse_button_post",
+   "contract": "listen",
+   "out": null,
+   "api": null,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "button: i32",
+    "pressed: bool",
+    "modifiers: u32"
+   ],
+   "returns": "",
+   "doc": "An accepted raw button event finished dispatch, including a screen handler's early return.",
+   "cites": []
+  },
+  {
+   "name": "player_respawned",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_respawned",
+   "contract": "listen",
+   "out": null,
+   "api": 115,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str"
+   ],
+   "returns": "",
+   "doc": "`player` (`name`) respawned (NeoForge's `PlayerRespawnEvent`):",
+   "cites": [
+    "PlayerList.respawn"
+   ]
+  },
+  {
+   "name": "render_fog",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_render_fog",
+   "contract": "listen",
+   "out": null,
+   "api": null,
+   "generics": "",
+   "params": [
+    "&self",
+    "partial: f32",
+    "camera: [f64; 3]",
+    "fog_type: horizon_client::fog::FogType",
+    "fog: &mut horizon_client::fog::FogData"
+   ],
+   "returns": "",
+   "doc": "Final world fog, after the computed color hook, ordinary calculations and Horizon's fog option, before upload.",
+   "cites": []
+  },
+  {
+   "name": "screen_key_released_pre",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_screen_key_released_pre",
+   "contract": "cancel",
+   "out": "canceled",
+   "api": null,
+   "generics": "",
+   "params": [
+    "&self",
+    "screen: &NativeScreenView<'_>",
+    "key: &str",
+    "modifiers: u32",
+    "canceled: &mut bool"
+   ],
+   "returns": "",
+   "doc": "Before an open screen handles a named key's release (same screen gate as key presses).",
+   "cites": []
+  },
+  {
+   "name": "music",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_music",
+   "contract": "listen",
+   "out": null,
+   "api": 119,
+   "generics": "",
+   "params": [
+    "&self",
+    "music: &mut Option<Music>",
+    "volume: &mut f32"
+   ],
+   "returns": "",
+   "doc": "Choose this client's music, once a client tick:",
+   "cites": [
+    "Minecraft.getSituationalMusic",
+    "Music.new"
+   ]
+  },
+  {
+   "name": "music_layers",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_music_layers",
+   "contract": "collect",
+   "out": "layers",
+   "api": 119,
+   "generics": "",
+   "params": [
+    "&self",
+    "layers: &mut Vec<MusicLayer>"
+   ],
+   "returns": "",
+   "doc": "The tracks to play over (or instead of) the music on this client, asked once a client tick:",
+   "cites": []
+  },
+  {
+   "name": "datapack_sync",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_datapack_sync",
+   "contract": "collect",
+   "out": "recipe_types",
+   "api": 120,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "recipe_types: &mut Vec<String>"
+   ],
+   "returns": "",
+   "doc": "The server is about to send its data to the players (NeoForge's `OnDatapackSyncEvent`, its `sendRecipes`):",
+   "cites": []
+  },
+  {
+   "name": "recipes_received",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_recipes_received",
+   "contract": "listen",
+   "out": null,
+   "api": 120,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "recipe_types: &[String]"
+   ],
+   "returns": "",
+   "doc": "The server's recipes of `recipe_types` arrived (NeoForge's `RecipesReceivedEvent`):",
+   "cites": []
+  },
+  {
+   "name": "input_key",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_input_key",
+   "contract": "listen",
+   "out": null,
+   "api": null,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "event: &winit::event::KeyEvent",
+    "modifiers: u32"
+   ],
+   "returns": "",
+   "doc": "A real window key event after handling, including repeats and consumed shortcuts.",
+   "cites": []
+  },
+  {
+   "name": "mouse_scrolling",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_mouse_scrolling",
+   "contract": "cancel",
+   "out": "canceled",
+   "api": null,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "scroll: [f64; 2]",
+    "accumulated: [i32; 2]",
+    "buttons: [bool; 3]",
+    "cursor: [f32; 2]",
+    "modifiers: u32",
+    "canceled: &mut bool"
+   ],
+   "returns": "",
+   "doc": "Gameplay scrolling after whole steps accumulate, before hotbar/spectator handling.",
+   "cites": []
+  },
+  {
+   "name": "screen_mouse_dragged_pre",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_screen_mouse_dragged_pre",
+   "contract": "cancel",
+   "out": "canceled",
+   "api": null,
+   "generics": "",
+   "params": [
+    "&self",
+    "screen: &NativeScreenView<'_>",
+    "button: i32",
+    "delta: [f32; 2]",
+    "modifiers: u32",
+    "canceled: &mut bool"
+   ],
+   "returns": "",
+   "doc": "Before a real held-button movement reaches screen drag handlers.",
+   "cites": []
+  },
+  {
+   "name": "mod_container_viewers",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_mod_container_viewers",
+   "contract": "listen",
+   "out": null,
+   "api": 124,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "dimension: &str",
+    "pos: [i32; 3]",
+    "viewers: u32",
+    "previous: u32"
+   ],
+   "returns": "",
+   "doc": "The number of players with the mod container at `pos` of `dimension` open went from `previous` to `viewers` (vanilla's `ContainerOpenersCounter`, as a barrel keeps it):",
+   "cites": []
+  },
+  {
+   "name": "living_knockback",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_living_knockback",
+   "contract": "cancel",
+   "out": "canceled",
+   "api": 125,
+   "generics": "",
+   "params": [
+    "entity: i32",
+    "kind: &str",
+    "damage_type: &str",
+    "causing: i32",
+    "direct: i32",
+    "strength: &mut f64",
+    "x: &mut f64",
+    "z: &mut f64",
+    "canceled: &mut bool"
+   ],
+   "returns": "",
+   "doc": "`LivingEntity.knockback` is about to push entity `entity` of type `kind` (`minecraft:zombie`, `minecraft:player`) `strength` away from the direction (`x`, `z`), on the raw strength, before the entity's knockback resistance takes its share and its motion changes (docs/native-mods.md, API 125).",
+   "cites": [
+    "DamageSource.getEntity",
+    "LivingEntity.knockback",
+    "SulfurCube.knockback"
+   ]
+  },
+  {
+   "name": "experience_orb_can_merge",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_experience_orb_can_merge",
+   "contract": "listen",
+   "out": null,
+   "api": 128,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "dimension: &str",
+    "into: u32",
+    "from: u32",
+    "into_value: u32",
+    "from_value: u32",
+    "can_merge: &mut bool"
+   ],
+   "returns": "",
+   "doc": "Whether the experience orb `into` takes the orb `from` in (vanilla's `ExperienceOrb.canMerge`):",
+   "cites": [
+    "ExperienceOrb.canMerge"
+   ]
+  },
+  {
+   "name": "experience_orb_merge",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_experience_orb_merge",
+   "contract": "cancel",
+   "out": "canceled",
+   "api": 128,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "dimension: &str",
+    "into: u32",
+    "from: u32",
+    "from_value: u32",
+    "canceled: &mut bool"
+   ],
+   "returns": "",
+   "doc": "The experience orb `into` is about to take `from` in, after `native_experience_orb_can_merge` said yes (`from` is 0 and `from_value` the points of a new orb that is spawning).",
+   "cites": []
+  },
+  {
+   "name": "menu_slot_rules",
+   "version": 1,
+   "target": "horizon_client_lib::menu::native_menu_slot_rules",
+   "contract": "listen",
+   "out": null,
+   "api": 130,
+   "generics": "",
+   "params": [
+    "menu: &str",
+    "slot: usize",
+    "stack: &ItemStack",
+    "may_place: &mut bool",
+    "max_stack: &mut u32"
+   ],
+   "returns": "",
+   "doc": "Hook point for native mods (docs/native-mods.md, listed in `native-hooks.json` with the game's):",
+   "cites": [
+    "Slot.getMaxStackSize",
+    "Slot.mayPlace"
+   ]
+  },
+  {
+   "name": "living_entity_use_item_tick",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_living_entity_use_item_tick",
+   "contract": "cancel",
+   "out": "canceled",
+   "api": 131,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "stack: &ItemStack",
+    "entity: Option<i32>",
+    "hand: Hand",
+    "duration: &mut i32",
+    "canceled: &mut bool"
+   ],
+   "returns": "",
+   "doc": "NeoForge's `LivingEntityUseItemEvent.Tick`:",
+   "cites": [
+    "LivingEntity.updatingUsingItem",
+    "LivingEntityUseItemEvent.Tick"
+   ]
+  },
+  {
+   "name": "on_use_tick",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_on_use_tick",
+   "contract": "listen",
+   "out": null,
+   "api": 131,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "stack: &ItemStack",
+    "entity: Option<i32>",
+    "remaining: i32"
+   ],
+   "returns": "",
+   "doc": "`Item.onUseTick` of `stack`, used by `entity` with `remaining` ticks left, always above 0:",
+   "cites": [
+    "Item.onUseTick",
+    "ItemStack.onUseTick"
+   ]
+  },
+  {
+   "name": "living_entity_use_item_stop",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_living_entity_use_item_stop",
+   "contract": "cancel",
+   "out": "canceled",
+   "api": 131,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "stack: &ItemStack",
+    "entity: Option<i32>",
+    "hand: Hand",
+    "duration: i32",
+    "canceled: &mut bool"
+   ],
+   "returns": "",
+   "doc": "NeoForge's `LivingEntityUseItemEvent.Stop`:",
+   "cites": [
+    "LivingEntity.releaseUsingItem",
+    "LivingEntityUseItemEvent.Stop"
+   ]
+  },
+  {
+   "name": "release_using",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_release_using",
+   "contract": "listen",
+   "out": null,
+   "api": 131,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "stack: &ItemStack",
+    "entity: Option<i32>",
+    "time_left: i32",
+    "used: &mut bool"
+   ],
+   "returns": "",
+   "doc": "`Item.releaseUsing` of `stack`:",
+   "cites": [
+    "Item.releaseUsing",
+    "ItemStack.releaseUsing"
+   ]
+  },
+  {
+   "name": "loot_function",
+   "version": 1,
+   "target": "horizon_world::loot::native_loot_function",
+   "contract": "collect",
+   "out": "stack",
+   "api": 133,
+   "generics": "",
+   "params": [
+    "kind: &str",
+    "data: &Value",
+    "ctx: &NativeLootContext<'_>",
+    "stack: &mut LootStack"
+   ],
+   "returns": "",
+   "doc": "A loot function of a mod's own kind:",
+   "cites": []
+  },
+  {
+   "name": "loot_condition",
+   "version": 1,
+   "target": "horizon_world::loot::native_loot_condition",
+   "contract": "collect",
+   "out": "holds",
+   "api": 133,
+   "generics": "",
+   "params": [
+    "kind: &str",
+    "data: &Value",
+    "ctx: &NativeLootContext<'_>",
+    "holds: &mut bool"
+   ],
+   "returns": "",
+   "doc": "A loot condition of a mod's own kind:",
+   "cites": []
+  },
+  {
+   "name": "level_load",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_level_load",
+   "contract": "listen",
+   "out": null,
+   "api": 134,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "dimension: &str"
+   ],
+   "returns": "",
+   "doc": "`dimension`'s level opened on the server (NeoForge's `LevelEvent.Load`, posted in `MinecraftServer.createLevels`):",
+   "cites": [
+    "LevelEvent.Load",
+    "MinecraftServer.createLevels"
+   ]
+  },
+  {
+   "name": "level_unload",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_level_unload",
+   "contract": "listen",
+   "out": null,
+   "api": 134,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "dimension: &str"
+   ],
+   "returns": "",
+   "doc": "`dimension`'s level closed (NeoForge's `LevelEvent.Unload`, posted after `level.close()` in `MinecraftServer.stopServer`), after its last save:",
+   "cites": [
+    "LevelEvent.Unload",
+    "MinecraftServer.stopServer"
+   ]
+  },
+  {
+   "name": "client_level_load",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_client_level_load",
+   "contract": "listen",
+   "out": null,
+   "api": 135,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "dimension: &str"
+   ],
+   "returns": "",
+   "doc": "The client made a new level for `dimension` (NeoForge's `LevelEvent.Load` from the `ClientLevel` constructor):",
+   "cites": [
+    "LevelEvent.Load",
+    "Minecraft.setLevel"
+   ]
+  },
+  {
+   "name": "client_level_unload",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_client_level_unload",
+   "contract": "listen",
+   "out": null,
+   "api": 135,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "dimension: &str"
+   ],
+   "returns": "",
+   "doc": "The client dropped its level for `dimension` (`LevelEvent.Unload` from `Minecraft.setLevel` and `disconnect`):",
+   "cites": [
+    "LevelEvent.Unload",
+    "Minecraft.setLevel"
+   ]
+  },
+  {
+   "name": "hears_projectile_impacts",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_hears_projectile_impacts",
+   "contract": "collect",
+   "out": "hears",
+   "api": 136,
+   "generics": "",
+   "params": [
+    "&self",
+    "hears: &mut bool"
+   ],
+   "returns": "",
+   "doc": "Whether a mod hears projectiles' impacts (`native_projectile_impact`):",
+   "cites": []
+  },
+  {
+   "name": "projectile_impact",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_projectile_impact",
+   "contract": "cancel",
+   "out": "canceled",
+   "api": 136,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "dimension: &str",
+    "projectile: u32",
+    "kind: &str",
+    "owner: u32",
+    "entity: Option<u32>",
+    "entity_kind: &str",
+    "block: [i32; 3]",
+    "face: [i32; 3]",
+    "at: [f64; 3]",
+    "canceled: &mut bool"
+   ],
+   "returns": "",
+   "doc": "A projectile hit something (NeoForge's `ProjectileImpactEvent`, posted where vanilla's projectile has found what it meets, before the hit acts):",
+   "cites": []
+  },
+  {
+   "name": "entity_mount",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_entity_mount",
+   "contract": "cancel",
+   "out": "canceled",
+   "api": 137,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "dimension: &str",
+    "entity: u32",
+    "kind: &str",
+    "vehicle: u32",
+    "vehicle_kind: &str",
+    "mounting: bool",
+    "canceled: &mut bool"
+   ],
+   "returns": "",
+   "doc": "An entity mounts or dismounts a vehicle (NeoForge's `EntityMountEvent`, posted from `Entity.startRiding` and `removeVehicle`):",
+   "cites": [
+    "Entity.startRiding"
+   ]
+  },
+  {
+   "name": "interaction_key",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_interaction_key",
+   "contract": "cancel",
+   "out": "canceled",
+   "api": 138,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "button: i32",
+    "key_mapping: &str",
+    "hand: horizon_client::first_person::Hand",
+    "swing_hand: &mut bool",
+    "canceled: &mut bool"
+   ],
+   "returns": "",
+   "doc": "An interaction key acts on what the crosshair points at (`InputEvent.InteractionKeyMappingTriggered`), while playing:",
+   "cites": [
+    "InputEvent.InteractionKeyMappingTriggered"
+   ]
+  },
+  {
+   "name": "gui_layer_pre",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_gui_layer_pre",
+   "contract": "cancel",
+   "out": "canceled",
+   "api": 139,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "layer: &str",
+    "batch: &mut HudBatch",
+    "canceled: &mut bool"
+   ],
+   "returns": "",
+   "doc": "Before one of vanilla's HUD layers is drawn (`RenderGuiLayerEvent.Pre`):",
+   "cites": [
+    "RenderGuiLayerEvent.Pre"
+   ]
+  },
+  {
+   "name": "gui_layer_post",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_gui_layer_post",
+   "contract": "listen",
+   "out": null,
+   "api": 139,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "layer: &str",
+    "batch: &mut HudBatch"
+   ],
+   "returns": "",
+   "doc": "After one of vanilla's HUD layers (or after the layer a mod hid), with the ids of `native_gui_layer_pre`:",
+   "cites": [
+    "RenderGuiLayerEvent.Post"
+   ]
+  },
+  {
+   "name": "map_decorations",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_map_decorations",
+   "contract": "collect",
+   "out": "decorations",
+   "api": 140,
+   "generics": "",
+   "params": [
+    "&self",
+    "map: &NativeMapInfo<'_>",
+    "decorations: &mut Vec<NativeMapDecoration>"
+   ],
+   "returns": "",
+   "doc": "Icons a mod puts on map `map` each time it is drawn:",
+   "cites": [
+    "NativeMapDecoration.x"
+   ]
+  },
+  {
+   "name": "player_start_tracking",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_start_tracking",
+   "contract": "listen",
+   "out": null,
+   "api": 141,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "entity: u32",
+    "uuid: u128",
+    "kind: &str"
+   ],
+   "returns": "",
+   "doc": "A client started tracking an entity (NeoForge's `PlayerEvent.StartTracking`, posted at the end of `ServerEntity.addPairing`):",
+   "cites": [
+    "PlayerEvent.StartTracking",
+    "ServerEntity.addPairing"
+   ]
+  },
+  {
+   "name": "player_stop_tracking",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_stop_tracking",
+   "contract": "listen",
+   "out": null,
+   "api": 141,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "entity: u32",
+    "uuid: u128",
+    "kind: &str"
+   ],
+   "returns": "",
+   "doc": "A client stopped tracking an entity (NeoForge's `PlayerEvent.StopTracking`, posted at the end of `ServerEntity.removePairing`):",
+   "cites": [
+    "PlayerEvent.StopTracking",
+    "ServerEntity.removePairing"
+   ]
+  },
+  {
+   "name": "block_entity_energy",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_block_entity_energy",
+   "contract": "replace",
+   "out": "energy",
+   "api": 142,
+   "generics": "",
+   "params": [
+    "&self",
+    "block: &str",
+    "energy: &mut Option<ModEnergyBuffer>"
+   ],
+   "returns": "",
+   "doc": "Block `block`'s block entity has an energy buffer (`Capabilities.Energy.BLOCK`):",
+   "cites": [
+    "Capabilities.Energy.BLOCK"
+   ]
+  },
+  {
+   "name": "data_map_types",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_data_map_types",
+   "contract": "collect",
+   "out": "types",
+   "api": 143,
+   "generics": "",
+   "params": [
+    "&self",
+    "types: &mut Vec<NativeDataMapType>"
+   ],
+   "returns": "",
+   "doc": "The server is assembling its data tables, as for `native_data_pack_files` (a world's first open and every `/reload`):",
+   "cites": []
+  },
+  {
+   "name": "living_breathe",
+   "version": 1,
+   "target": "horizon_client_lib::breathing::native_living_breathe",
+   "contract": "listen",
+   "out": null,
+   "api": 144,
+   "generics": "",
+   "params": [
+    "entity: u32",
+    "kind: &str",
+    "can_breathe: &mut bool",
+    "consume: &mut i32",
+    "refill: &mut i32"
+   ],
+   "returns": "",
+   "doc": "An entity's breathing this tick (`LivingBreatheEvent`, posted from `LivingEntity.baseTick` every tick for a living entity with the generic air logic):",
+   "cites": [
+    "LivingEntity.baseTick"
+   ]
+  },
+  {
+   "name": "blocks",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_blocks",
+   "contract": "collect",
+   "out": "blocks",
+   "api": 145,
+   "generics": "",
+   "params": [
+    "blocks: &mut Vec<horizon_mods::content::Block>"
+   ],
+   "returns": "",
+   "doc": "Blocks this mod adds, declared in code rather than one file each (NeoForge's `DeferredRegister.Blocks` drained by `RegisterEvent`):",
+   "cites": [
+    "DeferredRegister.Blocks"
+   ]
+  },
+  {
+   "name": "items",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_items",
+   "contract": "collect",
+   "out": "items",
+   "api": 145,
+   "generics": "",
+   "params": [
+    "items: &mut Vec<horizon_mods::content::Item>"
+   ],
+   "returns": "",
+   "doc": "Items this mod adds, declared in code (NeoForge's `DeferredRegister.Items`), as `native_blocks` declares blocks:",
+   "cites": [
+    "DeferredRegister.Items"
+   ]
+  },
+  {
+   "name": "entity_tick_pre",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_entity_tick_pre",
+   "contract": "cancel",
+   "out": "canceled",
+   "api": 146,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "dimension: &str",
+    "entity: u32",
+    "kind: &str",
+    "canceled: &mut bool"
+   ],
+   "returns": "",
+   "doc": "An entity of type `kind` (`minecraft:zombie`, `minecraft:item`) with ID `entity` is about to tick in the server level `dimension` (NeoForge's `EntityTickEvent.Pre`, posted around `Entity.commonTick` and `tick` in `ServerLevel.tickNonPassenger`).",
+   "cites": [
+    "Entity.commonTick",
+    "EntityTickEvent.Pre",
+    "ServerLevel.tickNonPassenger"
+   ]
+  },
+  {
+   "name": "entity_tick_post",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_entity_tick_post",
+   "contract": "listen",
+   "out": null,
+   "api": 146,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "dimension: &str",
+    "entity: u32",
+    "kind: &str"
+   ],
+   "returns": "",
+   "doc": "The entity `entity` of type `kind` ticked in the server level `dimension` (NeoForge's `EntityTickEvent.Post`):",
+   "cites": [
+    "EntityTickEvent.Post"
+   ]
+  },
+  {
+   "name": "entity_tick_listened",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_entity_tick_listened",
+   "contract": "collect",
+   "out": "listened",
+   "api": 146,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "listened: &mut bool"
+   ],
+   "returns": "",
+   "doc": "Whether a mod listens to `native_entity_tick_pre` and `native_entity_tick_post`:",
+   "cites": []
+  },
+  {
+   "name": "item_fluid_tank",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_item_fluid_tank",
+   "contract": "replace",
+   "out": "capacity",
+   "api": 147,
+   "generics": "",
+   "params": [
+    "&self",
+    "item: &str",
+    "capacity: &mut Option<i32>"
+   ],
+   "returns": "",
+   "doc": "Item `item` (`mod_id:name`) is a fluid container (`Capabilities.FluidHandler.ITEM`):",
+   "cites": [
+    "Capabilities.FluidHandler.ITEM"
+   ]
+  },
+  {
+   "name": "living_equipment_change",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_living_equipment_change",
+   "contract": "listen",
+   "out": null,
+   "api": 148,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "entity: u32",
+    "kind: &str",
+    "slot: &str",
+    "from: Option<&ItemStack>",
+    "to: Option<&ItemStack>"
+   ],
+   "returns": "",
+   "doc": "A mob's or an armor stand's equipment slot took a different stack (NeoForge's `LivingEquipmentChangeEvent`, posted in `LivingEntity.collectEquipmentChanges`):",
+   "cites": [
+    "LivingEntity.collectEquipmentChanges"
+   ]
+  },
+  {
+   "name": "living_equipment_listened",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_living_equipment_listened",
+   "contract": "collect",
+   "out": "listened",
+   "api": 148,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "listened: &mut bool"
+   ],
+   "returns": "",
+   "doc": "Whether a mod listens to the mobs' `native_living_equipment_change`:",
+   "cites": []
+  },
+  {
+   "name": "player_submit",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_submit",
+   "contract": "cancel",
+   "out": "drawn",
+   "api": 149,
+   "generics": "",
+   "params": [
+    "&self",
+    "player: &NativeMobRender<'_>",
+    "who: &NativePlayerRender<'_>",
+    "draw: &mut BlockEntityDraw",
+    "drawn: &mut bool"
+   ],
+   "returns": "",
+   "doc": "Draw the player `player` (`who`:",
+   "cites": [
+    "RenderPlayerEvent.Pre"
+   ]
+  },
+  {
+   "name": "mob_layer",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_mob_layer",
+   "contract": "listen",
+   "out": null,
+   "api": 149,
+   "generics": "",
+   "params": [
+    "&self",
+    "mob: &NativeMobRender<'_>",
+    "who: Option<&NativePlayerRender<'_>>",
+    "draw: &mut BlockEntityDraw"
+   ],
+   "returns": "",
+   "doc": "A layer on every mob and player in view, once a frame after its vanilla model and layers (`EntityRenderersEvent.AddLayers`, with `RenderLivingEvent.Post` and `RenderPlayerEvent.Post`):",
+   "cites": [
+    "EntityRenderersEvent.AddLayers",
+    "RenderLivingEvent.Post",
+    "RenderPlayerEvent.Post"
+   ]
+  },
+  {
+   "name": "player_render_listened",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_render_listened",
+   "contract": "collect",
+   "out": "listened",
+   "api": 149,
+   "generics": "",
+   "params": [
+    "&self",
+    "listened: &mut bool"
+   ],
+   "returns": "",
+   "doc": "Whether a mod listens to `native_player_submit` or `native_mob_layer`:",
+   "cites": []
+  },
+  {
+   "name": "sign_changed",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_sign_changed",
+   "contract": "cancel",
+   "out": "cancel",
+   "api": 150,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "dimension: &str",
+    "pos: [i32; 3]",
+    "front: bool",
+    "lines: &mut Vec<String>",
+    "cancel: &mut bool"
+   ],
+   "returns": "",
+   "doc": "A player finished editing a sign:",
+   "cites": [
+    "ServerGamePacketListenerImpl.updateSignText"
+   ]
+  },
+  {
+   "name": "standalone_models",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_standalone_models",
+   "contract": "collect",
+   "out": "models",
+   "api": 151,
+   "generics": "",
+   "params": [
+    "models: &mut Vec<String>"
+   ],
+   "returns": "",
+   "doc": "Models no blockstate names that this client bakes beside the block models (NeoForge's `ModelEvent.RegisterStandalone`):",
+   "cites": [
+    "ModelEvent.RegisterStandalone"
+   ]
+  },
+  {
+   "name": "player_container_open",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_container_open",
+   "contract": "listen",
+   "out": null,
+   "api": 152,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "dimension: &str",
+    "menu: &str",
+    "pos: Option<[i32; 3]>"
+   ],
+   "returns": "",
+   "doc": "`player` (`name`) opened a menu (NeoForge's `PlayerContainerEvent.Open`, posted when `ServerPlayer.openMenu` sets the new `containerMenu`):",
+   "cites": [
+    "PlayerContainerEvent.Open",
+    "ServerPlayer.openMenu"
+   ]
+  },
+  {
+   "name": "player_container_close",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_container_close",
+   "contract": "listen",
+   "out": null,
+   "api": 152,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "dimension: &str",
+    "menu: &str",
+    "pos: Option<[i32; 3]>"
+   ],
+   "returns": "",
+   "doc": "`player` (`name`) closed the menu `native_player_container_open` told of (NeoForge's `PlayerContainerEvent.Close`, posted in `ServerPlayer.doCloseContainer` after the menu's `removed`):",
+   "cites": [
+    "PlayerContainerEvent.Close",
+    "ServerPlayer.doCloseContainer"
+   ]
+  },
+  {
+   "name": "player_toggle_flight",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_toggle_flight",
+   "contract": "cancel",
+   "out": "cancel",
+   "api": 153,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "flying: bool",
+    "cancel: &mut bool"
+   ],
+   "returns": "",
+   "doc": "A player's client started (`flying`) or stopped flying (vanilla's `handlePlayerAbilities`, which honours it only for a player who may fly:",
+   "cites": []
+  },
+  {
+   "name": "anvil_damaged",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_anvil_damaged",
+   "contract": "listen",
+   "out": null,
+   "api": 183,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "dimension: &str",
+    "pos: [i32; 3]",
+    "from: &str",
+    "to: &str"
+   ],
+   "returns": "",
+   "doc": "An anvil at `pos` took damage, changing its block from `from` to `to`.",
+   "cites": []
+  },
+  {
+   "name": "arrow_loose",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_arrow_loose",
+   "contract": "cancel",
+   "out": "canceled",
+   "api": 318,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "stack: &ItemStack",
+    "has_ammo: bool",
+    "charge: &mut i32",
+    "canceled: &mut bool"
+   ],
+   "returns": "",
+   "doc": "NeoForge's `ArrowLooseEvent`:",
+   "cites": []
+  },
+  {
+   "name": "beacon_state_change",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_beacon_state_change",
+   "contract": "listen",
+   "out": null,
+   "api": 184,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "dimension: &str",
+    "pos: [i32; 3]",
+    "active: bool"
+   ],
+   "returns": "",
+   "doc": "A beacon at `pos` activated or deactivated after its beam was checked.",
+   "cites": []
+  },
+  {
+   "name": "bell_ring",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_bell_ring",
+   "contract": "cancel",
+   "out": "cancel",
+   "api": 185,
+   "generics": "",
+   "params": [
+    "&self",
+    "dimension: LevelDimension",
+    "player: Option<u128>",
+    "pos: BlockPos",
+    "cancel: &mut bool"
+   ],
+   "returns": "",
+   "doc": "On an authoritative server, a bell at `pos` is about to ring.",
+   "cites": []
+  },
+  {
+   "name": "block_break_progress_update",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_block_break_progress_update",
+   "contract": "listen",
+   "out": null,
+   "api": 186,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "pos: [i32; 3]",
+    "progress: i32"
+   ],
+   "returns": "",
+   "doc": "A server guest's block-breaking animation changed to `progress` at `pos` (0 through 9).",
+   "cites": []
+  },
+  {
+   "name": "block_burn",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_block_burn",
+   "contract": "cancel",
+   "out": "cancel",
+   "api": 187,
+   "generics": "",
+   "params": [
+    "&self",
+    "dimension: LevelDimension",
+    "pos: BlockPos",
+    "cancel: &mut bool"
+   ],
+   "returns": "",
+   "doc": "On an authoritative server, fire is about to burn the block at `pos` away.",
+   "cites": []
+  },
+  {
+   "name": "block_cook",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_block_cook",
+   "contract": "listen",
+   "out": null,
+   "api": 188,
+   "generics": "",
+   "params": [
+    "&self",
+    "pos: [i32; 3]",
+    "item: &str",
+    "result: &str"
+   ],
+   "returns": "",
+   "doc": "A block finished cooking `item` into `result` at `pos`.",
+   "cites": []
+  },
+  {
+   "name": "block_damage_abort",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_block_damage_abort",
+   "contract": "listen",
+   "out": null,
+   "api": 329,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "pos: [i32; 3]"
+   ],
+   "returns": "",
+   "doc": "A server player stopped digging `pos` before the block broke, after the server cleared the dig and sent the block back to the client.",
+   "cites": []
+  },
+  {
+   "name": "block_dispense_armor",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_block_dispense_armor",
+   "contract": "listen",
+   "out": null,
+   "api": 189,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "dimension: &str",
+    "pos: [i32; 3]",
+    "item: &str",
+    "target: &str"
+   ],
+   "returns": "",
+   "doc": "A dispenser equipped `item` on the first eligible `target` in front of its block at `pos`.",
+   "cites": []
+  },
+  {
+   "name": "block_exp",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_block_exp",
+   "contract": "listen",
+   "out": null,
+   "api": 190,
+   "generics": "",
+   "params": [
+    "&self",
+    "dimension: LevelDimension",
+    "pos: BlockPos",
+    "block: &str",
+    "experience: &mut u32"
+   ],
+   "returns": "",
+   "doc": "A broken block is about to drop `experience` points at `pos`.",
+   "cites": []
+  },
+  {
+   "name": "block_fade",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_block_fade",
+   "contract": "cancel",
+   "out": "cancel",
+   "api": 191,
+   "generics": "",
+   "params": [
+    "&self",
+    "dimension: LevelDimension",
+    "pos: BlockPos",
+    "from: BlockStateId",
+    "to: BlockStateId",
+    "cancel: &mut bool"
+   ],
+   "returns": "",
+   "doc": "A block at `pos` is about to fade from `from` to `to` because of melting or coral death.",
+   "cites": []
+  },
+  {
+   "name": "block_failed_dispense",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_block_failed_dispense",
+   "contract": "listen",
+   "out": null,
+   "api": 192,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "dimension: &str",
+    "pos: [i32; 3]",
+    "item: &str"
+   ],
+   "returns": "",
+   "doc": "A dispenser at `pos` failed to dispense `item`.",
+   "cites": []
+  },
+  {
+   "name": "block_form",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_block_form",
+   "contract": "cancel",
+   "out": "cancel",
+   "api": 193,
+   "generics": "",
+   "params": [
+    "&self",
+    "dimension: LevelDimension",
+    "pos: BlockPos",
+    "from: BlockStateId",
+    "to: BlockStateId",
+    "cancel: &mut bool"
+   ],
+   "returns": "",
+   "doc": "Precipitation is about to form or add to a block at `pos`.",
+   "cites": []
+  },
+  {
+   "name": "block_ignite",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_block_ignite",
+   "contract": "cancel",
+   "out": "cancel",
+   "api": 194,
+   "generics": "",
+   "params": [
+    "&self",
+    "dimension: LevelDimension",
+    "player: Option<u128>",
+    "pos: BlockPos",
+    "cause: &str",
+    "cancel: &mut bool"
+   ],
+   "returns": "",
+   "doc": "On an authoritative server, fire is about to be placed at `pos` by flint and steel, a fire charge, lava, lightning or fire spread.",
+   "cites": []
+  },
+  {
+   "name": "block_lock_check",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_block_lock_check",
+   "contract": "cancel",
+   "out": "locked",
+   "api": 195,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "pos: [i32; 3]",
+    "locked: &mut bool"
+   ],
+   "returns": "",
+   "doc": "A guest's block inventory lock check at `pos`.",
+   "cites": []
+  },
+  {
+   "name": "block_receive_game",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_block_receive_game",
+   "contract": "cancel",
+   "out": "cancel",
+   "api": 196,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "dimension: &str",
+    "pos: [i32; 3]",
+    "block: &str",
+    "event: &str",
+    "cancel: &mut bool"
+   ],
+   "returns": "",
+   "doc": "A sculk sensor or shrieker received a vibration for `event` at `pos`.",
+   "cites": []
+  },
+  {
+   "name": "block_shear_entity",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_block_shear_entity",
+   "contract": "listen",
+   "out": null,
+   "api": 197,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "dimension: &str",
+    "pos: [i32; 3]",
+    "entity: u32",
+    "kind: &str"
+   ],
+   "returns": "",
+   "doc": "A dispenser sheared `entity` of kind `kind` at the block in front of its own block at `pos`, after the shearing effects.",
+   "cites": []
+  },
+  {
+   "name": "brewing_complete",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_brewing_complete",
+   "contract": "listen",
+   "out": null,
+   "api": 198,
+   "generics": "",
+   "params": [
+    "&self",
+    "pos: [i32; 3]"
+   ],
+   "returns": "",
+   "doc": "A brewing stand finished brewing at `pos`, after its bottle contents were changed.",
+   "cites": []
+  },
+  {
+   "name": "brewing_fuel",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_brewing_fuel",
+   "contract": "listen",
+   "out": null,
+   "api": 199,
+   "generics": "",
+   "params": [
+    "&self",
+    "pos: [i32; 3]",
+    "fuel: &str"
+   ],
+   "returns": "",
+   "doc": "A brewing stand at `pos` consumed `fuel` and gained brewing fuel.",
+   "cites": []
+  },
+  {
+   "name": "brewing_start",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_brewing_start",
+   "contract": "listen",
+   "out": null,
+   "api": 200,
+   "generics": "",
+   "params": [
+    "&self",
+    "pos: [i32; 3]",
+    "ingredient: &str"
+   ],
+   "returns": "",
+   "doc": "A brewing stand at `pos` began brewing `ingredient`, after fuel and the timer were set.",
+   "cites": []
+  },
+  {
+   "name": "broadcast_message",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_broadcast_message",
+   "contract": "cancel",
+   "out": "cancel",
+   "api": 201,
+   "generics": "",
+   "params": [
+    "&self",
+    "line: &mut Text",
+    "cancel: &mut bool"
+   ],
+   "returns": "",
+   "doc": "A server broadcast line is about to be logged and sent.",
+   "cites": []
+  },
+  {
+   "name": "campfire_start",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_campfire_start",
+   "contract": "listen",
+   "out": null,
+   "api": 202,
+   "generics": "",
+   "params": [
+    "&self",
+    "pos: [i32; 3]",
+    "item: &str"
+   ],
+   "returns": "",
+   "doc": "An item was placed on a campfire at `pos` and began cooking.",
+   "cites": []
+  },
+  {
+   "name": "cauldron_level_changed",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_cauldron_level_changed",
+   "contract": "cancel",
+   "out": "cancel",
+   "api": 203,
+   "generics": "",
+   "params": [
+    "&self",
+    "dimension: LevelDimension",
+    "player: Option<u128>",
+    "pos: BlockPos",
+    "from_level: i32",
+    "to_level: i32",
+    "reason: &str",
+    "cancel: &mut bool"
+   ],
+   "returns": "",
+   "doc": "On an authoritative server, a cauldron at `pos` is about to change fill level from `from_level` to `to_level` for `reason`.",
+   "cites": []
+  },
+  {
+   "name": "chorus_fruit_teleport",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_chorus_fruit_teleport",
+   "contract": "cancel",
+   "out": "cancel",
+   "api": 311,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "from: [f64; 3]",
+    "target: &mut [f64; 3]",
+    "cancel: &mut bool"
+   ],
+   "returns": "",
+   "doc": "A server player who ate chorus fruit (or another item with the `teleport_randomly` consume effect) is about to try a random spot (NeoForge's `EntityTeleportEvent.ChorusFruit`, vanilla's `TeleportRandomlyConsumeEffect.apply`):",
+   "cites": [
+    "EntityTeleportEvent.ChorusFruit",
+    "TeleportRandomlyConsumeEffect.apply"
+   ]
+  },
+  {
+   "name": "compost_item",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_compost_item",
+   "contract": "listen",
+   "out": null,
+   "api": 204,
+   "generics": "",
+   "params": [
+    "&self",
+    "pos: [i32; 3]",
+    "item: &str"
+   ],
+   "returns": "",
+   "doc": "A compostable item was added to the composter at `pos`.",
+   "cites": []
+  },
+  {
+   "name": "crafter_craft",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_crafter_craft",
+   "contract": "listen",
+   "out": null,
+   "api": 205,
+   "generics": "",
+   "params": [
+    "&self",
+    "pos: [i32; 3]",
+    "recipe: &str"
+   ],
+   "returns": "",
+   "doc": "A crafter at `pos` completed recipe `recipe`.",
+   "cites": []
+  },
+  {
+   "name": "creeper_ignite",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_creeper_ignite",
+   "contract": "listen",
+   "out": null,
+   "api": 206,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "entity: u32",
+    "player: u128",
+    "item: &str"
+   ],
+   "returns": "",
+   "doc": "A player ignited a creeper with an item.",
+   "cites": []
+  },
+  {
+   "name": "creeper_power",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_creeper_power",
+   "contract": "listen",
+   "out": null,
+   "api": 207,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "entity: u32",
+    "lightning: [f64; 3]"
+   ],
+   "returns": "",
+   "doc": "Lightning charged a creeper.",
+   "cites": []
+  },
+  {
+   "name": "critical_hit",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_critical_hit",
+   "contract": "listen",
+   "out": null,
+   "api": 316,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "target_kind: &str",
+    "vanilla_critical: bool",
+    "critical: &mut bool",
+    "damage_multiplier: &mut f32"
+   ],
+   "returns": "",
+   "doc": "NeoForge's `CriticalHitEvent`:",
+   "cites": [
+    "Player.attack"
+   ]
+  },
+  {
+   "name": "difficulty_changed",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_difficulty_changed",
+   "contract": "listen",
+   "out": null,
+   "api": 159,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "from: &str",
+    "to: &str"
+   ],
+   "returns": "",
+   "doc": "The server's difficulty changed, from `from` to `to` (`peaceful`, `easy`, `normal`, `hard`; NeoForge's `DifficultyChangeEvent`).",
+   "cites": [
+    "MinecraftServer.setDifficulty"
+   ]
+  },
+  {
+   "name": "dragon_egg_form",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_dragon_egg_form",
+   "contract": "cancel",
+   "out": "cancel",
+   "api": 208,
+   "generics": "",
+   "params": [
+    "&self",
+    "dimension: LevelDimension",
+    "pos: BlockPos",
+    "cancel: &mut bool"
+   ],
+   "returns": "",
+   "doc": "The Ender Dragon fight is about to place its first dragon egg at `pos`.",
+   "cites": []
+  },
+  {
+   "name": "enchant_item",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_enchant_item",
+   "contract": "listen",
+   "out": null,
+   "api": 209,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "pos: [i32; 3]",
+    "item: &ItemStack",
+    "levels: i32"
+   ],
+   "returns": "",
+   "doc": "A server player applied an enchantment at `pos`; `item` is the finished item and `levels` the levels charged.",
+   "cites": []
+  },
+  {
+   "name": "ender_pearl_teleport",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_ender_pearl_teleport",
+   "contract": "cancel",
+   "out": "cancel",
+   "api": 312,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "pearl: u32",
+    "from: [f64; 3]",
+    "target: &mut [f64; 3]",
+    "damage: &mut f32",
+    "cancel: &mut bool"
+   ],
+   "returns": "",
+   "doc": "A server player's ender pearl landed and is about to teleport them (NeoForge's `EntityTeleportEvent.EnderPearl`, vanilla's `ThrownEnderpearl.onHit` for a player owner):",
+   "cites": [
+    "EntityTeleportEvent.EnderPearl",
+    "ThrownEnderpearl.onHit"
+   ]
+  },
+  {
+   "name": "entities_load",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_entities_load",
+   "contract": "listen",
+   "out": null,
+   "api": 210,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "dimension: &str",
+    "chunk: [i32; 2]",
+    "count: usize"
+   ],
+   "returns": "",
+   "doc": "Entities from `chunk` finished loading into the server world.",
+   "cites": []
+  },
+  {
+   "name": "entities_unload",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_entities_unload",
+   "contract": "listen",
+   "out": null,
+   "api": 211,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "dimension: &str",
+    "chunk: [i32; 2]",
+    "count: usize"
+   ],
+   "returns": "",
+   "doc": "Entities in `chunk` left the active server world and were queued for saving.",
+   "cites": []
+  },
+  {
+   "name": "entity_break_door",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_entity_break_door",
+   "contract": "listen",
+   "out": null,
+   "api": 212,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "entity: u32",
+    "kind: &str",
+    "pos: [i32; 3]"
+   ],
+   "returns": "",
+   "doc": "A mob broke the door at `pos`.",
+   "cites": []
+  },
+  {
+   "name": "entity_breed",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_entity_breed",
+   "contract": "listen",
+   "out": null,
+   "api": 213,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "parent: u32",
+    "partner: u32",
+    "child: Option<u32>"
+   ],
+   "returns": "",
+   "doc": "Two mobs completed a breeding action.",
+   "cites": []
+  },
+  {
+   "name": "entity_change_block",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_entity_change_block",
+   "contract": "listen",
+   "out": null,
+   "api": 214,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "entity: u32",
+    "kind: &str",
+    "pos: [i32; 3]",
+    "from: &str",
+    "to: &str"
+   ],
+   "returns": "",
+   "doc": "A mob changed a block at `pos`, after the new state was applied.",
+   "cites": []
+  },
+  {
+   "name": "entity_drop_item",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_entity_drop_item",
+   "contract": "listen",
+   "out": null,
+   "api": 330,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "entity: u32",
+    "item: &str",
+    "count: i32",
+    "pos: [f64; 3]"
+   ],
+   "returns": "",
+   "doc": "A mob is about to drop `count` of `item` at `pos` (Bukkit's `EntityDropItemEvent`).",
+   "cites": []
+  },
+  {
+   "name": "entity_enter_block",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_entity_enter_block",
+   "contract": "listen",
+   "out": null,
+   "api": 215,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "entity: u32",
+    "kind: &str",
+    "pos: [i32; 3]",
+    "block: &str"
+   ],
+   "returns": "",
+   "doc": "A bee entered the hive at `pos` and was stored there.",
+   "cites": []
+  },
+  {
+   "name": "entity_enter_love_mode",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_entity_enter_love_mode",
+   "contract": "listen",
+   "out": null,
+   "api": 216,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "entity: u32",
+    "kind: &str",
+    "player: Option<u128>"
+   ],
+   "returns": "",
+   "doc": "A mob entered love mode after player interaction.",
+   "cites": []
+  },
+  {
+   "name": "entity_portal",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_entity_portal",
+   "contract": "listen",
+   "out": null,
+   "api": 217,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "dimension: &str",
+    "entity: u32",
+    "pos: [i32; 3]"
+   ],
+   "returns": "",
+   "doc": "A server entity finished its portal wait and is beginning to leave `dimension` through `pos`.",
+   "cites": []
+  },
+  {
+   "name": "entity_pose_change",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_entity_pose_change",
+   "contract": "listen",
+   "out": null,
+   "api": 218,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "from: &str",
+    "to: &str"
+   ],
+   "returns": "",
+   "doc": "A guest player's synchronized pose changed from `from` to `to`.",
+   "cites": []
+  },
+  {
+   "name": "entity_shoot_bow",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_entity_shoot_bow",
+   "contract": "listen",
+   "out": null,
+   "api": 219,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "projectile: u32",
+    "force: f32"
+   ],
+   "returns": "",
+   "doc": "A player bow or crossbow launched an arrow with `force`, after the projectile entered the level.",
+   "cites": []
+  },
+  {
+   "name": "entity_tame",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_entity_tame",
+   "contract": "listen",
+   "out": null,
+   "api": 220,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "entity: u32",
+    "kind: &str",
+    "owner: Option<u128>"
+   ],
+   "returns": "",
+   "doc": "A mob became tamed after its owner and persistent state were set.",
+   "cites": []
+  },
+  {
+   "name": "entity_teleport",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_entity_teleport",
+   "contract": "listen",
+   "out": null,
+   "api": 221,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "dimension: &str",
+    "entity: u32",
+    "from: [f64; 3]",
+    "to: [f64; 3]"
+   ],
+   "returns": "",
+   "doc": "A server entity was moved by a same-level teleport command, after its position changed.",
+   "cites": []
+  },
+  {
+   "name": "entity_toggle_glide",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_entity_toggle_glide",
+   "contract": "listen",
+   "out": null,
+   "api": 222,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "gliding: bool"
+   ],
+   "returns": "",
+   "doc": "A guest's fall flying state changed on the server.",
+   "cites": []
+  },
+  {
+   "name": "entity_transform",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_entity_transform",
+   "contract": "listen",
+   "out": null,
+   "api": 223,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "entity: u32",
+    "kind: &str",
+    "transformed: u32",
+    "transformed_kind: &str"
+   ],
+   "returns": "",
+   "doc": "A mob conversion completed; both ids and entity types are reported.",
+   "cites": []
+  },
+  {
+   "name": "entity_unleash",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_entity_unleash",
+   "contract": "listen",
+   "out": null,
+   "api": 331,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "entity: u32",
+    "kind: &str"
+   ],
+   "returns": "",
+   "doc": "A leashed mob's leash was removed, before any lead drop is handled (Bukkit's `EntityUnleashEvent`).",
+   "cites": []
+  },
+  {
+   "name": "exp_bottle",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_exp_bottle",
+   "contract": "listen",
+   "out": null,
+   "api": 224,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "pos: [f64; 3]",
+    "experience: u32"
+   ],
+   "returns": "",
+   "doc": "An experience bottle broke and its experience was awarded.",
+   "cites": []
+  },
+  {
+   "name": "experience_orb_pickup_listened",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_experience_orb_pickup_listened",
+   "contract": "collect",
+   "out": "listened",
+   "api": 155,
+   "generics": "",
+   "params": [
+    "&self",
+    "listened: &mut bool"
+   ],
+   "returns": "",
+   "doc": "Whether a mod hears `native_experience_orb_pickup`:",
+   "cites": []
+  },
+  {
+   "name": "experience_orb_pickup",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_experience_orb_pickup",
+   "contract": "cancel",
+   "out": "canceled",
+   "api": 155,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "dimension: &str",
+    "orb: u32",
+    "value: &mut u32",
+    "count: &mut u32",
+    "canceled: &mut bool"
+   ],
+   "returns": "",
+   "doc": "Before `player` picks up orb `orb` in `dimension`.",
+   "cites": []
+  },
+  {
+   "name": "mending_repair",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_mending_repair",
+   "contract": "listen",
+   "out": null,
+   "api": 155,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "stack: &ItemStack",
+    "experience: u32",
+    "repair: &mut u32"
+   ],
+   "returns": "",
+   "doc": "The selected damaged Mending `stack` and the proposed durability repair for `experience` points.",
+   "cites": []
+  },
+  {
+   "name": "explosion_prime",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_explosion_prime",
+   "contract": "listen",
+   "out": null,
+   "api": 332,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "center: [f64; 3]",
+    "radius: f32"
+   ],
+   "returns": "",
+   "doc": "A server explosion is about to begin at `center`, with `radius` (Bukkit's `ExplosionPrimeEvent`).",
+   "cites": []
+  },
+  {
+   "name": "fire_odds",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_fire_odds",
+   "contract": "replace",
+   "out": "odds",
+   "api": 157,
+   "generics": "",
+   "params": [
+    "&self",
+    "dimension: LevelDimension",
+    "state: BlockStateId",
+    "odds: &mut Option<(i32, i32)>"
+   ],
+   "returns": "",
+   "doc": "On an authoritative server, how fire treats the block `state` (`FireBlock.setFlammable(block, igniteOdds, burnOdds)`):",
+   "cites": [
+    "FireBlock.setFlammable"
+   ]
+  },
+  {
+   "name": "smoke_source",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_smoke_source",
+   "contract": "replace",
+   "out": "smoke",
+   "api": 157,
+   "generics": "",
+   "params": [
+    "&self",
+    "dimension: LevelDimension",
+    "state: BlockStateId",
+    "smoke: &mut Option<bool>"
+   ],
+   "returns": "",
+   "doc": "On an authoritative server, `CampfireBlock.isSmokeSource` for the block `state` under a campfire, as the campfire is placed or the block under it changes:",
+   "cites": [
+    "CampfireBlock.isSmokeSource"
+   ]
+  },
+  {
+   "name": "firework_explode",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_firework_explode",
+   "contract": "listen",
+   "out": null,
+   "api": 225,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "entity: u32",
+    "pos: [f64; 3]",
+    "bursts: usize"
+   ],
+   "returns": "",
+   "doc": "A firework rocket completed its explosion effects.",
+   "cites": []
+  },
+  {
+   "name": "fluid_level_change",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_fluid_level_change",
+   "contract": "cancel",
+   "out": "cancel",
+   "api": 226,
+   "generics": "",
+   "params": [
+    "&self",
+    "dimension: LevelDimension",
+    "pos: BlockPos",
+    "fluid: &str",
+    "from: i32",
+    "to: i32",
+    "cancel: &mut bool"
+   ],
+   "returns": "",
+   "doc": "A flowing fluid at `pos` is about to change level.",
+   "cites": []
+  },
+  {
+   "name": "framerate_limit",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_framerate_limit",
+   "contract": "listen",
+   "out": null,
+   "api": 167,
+   "generics": "",
+   "params": [
+    "&self",
+    "focused: bool",
+    "minimized: bool",
+    "in_world: bool",
+    "limit: &mut i32"
+   ],
+   "returns": "",
+   "doc": "The frame rate this window is about to be held to:",
+   "cites": []
+  },
+  {
+   "name": "furnace_burn",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_furnace_burn",
+   "contract": "listen",
+   "out": null,
+   "api": 227,
+   "generics": "",
+   "params": [
+    "&self",
+    "pos: [i32; 3]",
+    "fuel: &str"
+   ],
+   "returns": "",
+   "doc": "A furnace at `pos` consumed fuel and began or resumed burning it.",
+   "cites": []
+  },
+  {
+   "name": "furnace_extract",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_furnace_extract",
+   "contract": "listen",
+   "out": null,
+   "api": 228,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "pos: [i32; 3]",
+    "item: &str",
+    "count: u32"
+   ],
+   "returns": "",
+   "doc": "A server player took an output from a furnace at `pos`; `item` is the output item id and `count` is how many were taken.",
+   "cites": []
+  },
+  {
+   "name": "furnace_smelt",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_furnace_smelt",
+   "contract": "listen",
+   "out": null,
+   "api": 229,
+   "generics": "",
+   "params": [
+    "&self",
+    "pos: [i32; 3]",
+    "item: &str",
+    "result: &str"
+   ],
+   "returns": "",
+   "doc": "A furnace finished smelting `item` into `result` at `pos`.",
+   "cites": []
+  },
+  {
+   "name": "furnace_start_smelt",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_furnace_start_smelt",
+   "contract": "listen",
+   "out": null,
+   "api": 230,
+   "generics": "",
+   "params": [
+    "&self",
+    "pos: [i32; 3]",
+    "item: &str"
+   ],
+   "returns": "",
+   "doc": "A furnace at `pos` began cooking `item` (its cooking timer advanced from zero).",
+   "cites": []
+  },
+  {
+   "name": "game_event",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_game_event",
+   "contract": "listen",
+   "out": null,
+   "api": 231,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "event: &str",
+    "pos: [f64; 3]"
+   ],
+   "returns": "",
+   "doc": "A generic world game event was fired at `pos`.",
+   "cites": []
+  },
+  {
+   "name": "hopper_inventory_search",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_hopper_inventory_search",
+   "contract": "listen",
+   "out": null,
+   "api": 333,
+   "generics": "",
+   "params": [
+    "&self",
+    "hopper: [i32; 3]",
+    "container: Option<[i32; 3]>",
+    "entity: Option<u32>"
+   ],
+   "returns": "",
+   "doc": "A hopper selected a container while searching for items to push or pull.",
+   "cites": []
+  },
+  {
+   "name": "hopper_pickup_item",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_hopper_pickup_item",
+   "contract": "cancel",
+   "out": "cancel",
+   "api": 232,
+   "generics": "",
+   "params": [
+    "&self",
+    "dimension: LevelDimension",
+    "pos: BlockPos",
+    "item: &str",
+    "count: u32",
+    "cancel: &mut bool"
+   ],
+   "returns": "",
+   "doc": "A hopper at `pos` is about to pick up `count` of `item`.",
+   "cites": []
+  },
+  {
+   "name": "ingredient",
+   "version": 1,
+   "target": "horizon_client_lib::crafting::native_ingredient",
+   "contract": "collect",
+   "out": "items",
+   "api": 166,
+   "generics": "",
+   "params": [
+    "kind: &str",
+    "data: &serde_json::Map<String, Value>",
+    "items: &mut Vec<String>"
+   ],
+   "returns": "",
+   "doc": "A recipe ingredient of a mod's own kind:",
+   "cites": []
+  },
+  {
+   "name": "inventory_block_start",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_inventory_block_start",
+   "contract": "cancel",
+   "out": "cancel",
+   "api": 233,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "pos: [i32; 3]",
+    "cancel: &mut bool"
+   ],
+   "returns": "",
+   "doc": "A server player is about to open an inventory supplied by a block at `pos`.",
+   "cites": []
+  },
+  {
+   "name": "inventory_move_item",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_inventory_move_item",
+   "contract": "cancel",
+   "out": "cancel",
+   "api": 334,
+   "generics": "",
+   "params": [
+    "&self",
+    "source: [i32; 3]",
+    "destination: [i32; 3]",
+    "item: &str",
+    "cancel: &mut bool"
+   ],
+   "returns": "",
+   "doc": "A hopper is about to move one item between containers, a composter's bone meal included.",
+   "cites": []
+  },
+  {
+   "name": "item_crafted",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_item_crafted",
+   "contract": "listen",
+   "out": null,
+   "api": 161,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "recipe: &str",
+    "stack: &ItemStack"
+   ],
+   "returns": "",
+   "doc": "A player took a crafting grid's result (`ResultSlot.onTake`, NeoForge's `PlayerEvent.ItemCraftedEvent`):",
+   "cites": [
+    "PlayerEvent.ItemCraftedEvent",
+    "ResultSlot.onTake"
+   ]
+  },
+  {
+   "name": "item_despawn",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_item_despawn",
+   "contract": "listen",
+   "out": null,
+   "api": 335,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "entity: u32",
+    "item: &str",
+    "count: i32",
+    "pos: [f64; 3]"
+   ],
+   "returns": "",
+   "doc": "A dropped item entity reached its 6000-tick lifetime and is about to be removed (Bukkit's `ItemDespawnEvent`).",
+   "cites": []
+  },
+  {
+   "name": "item_energy_buffer",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_item_energy_buffer",
+   "contract": "replace",
+   "out": "buffer",
+   "api": 307,
+   "generics": "",
+   "params": [
+    "&self",
+    "item: &str",
+    "buffer: &mut Option<ItemEnergyBuffer>"
+   ],
+   "returns": "",
+   "doc": "Item `item` (`mod_id:name`) holds energy (`Capabilities.Energy.ITEM`):",
+   "cites": [
+    "Capabilities.Energy.ITEM"
+   ]
+  },
+  {
+   "name": "item_expire",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_item_expire",
+   "contract": "listen",
+   "out": null,
+   "api": 325,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "entity: u32",
+    "stack: &ItemStack",
+    "extra_life: &mut i32"
+   ],
+   "returns": "",
+   "doc": "A dropped item reaches its lifetime on the server (`ItemEntity.tick`, NeoForge's `ItemExpireEvent`).",
+   "cites": [
+    "ItemEntity.tick"
+   ]
+  },
+  {
+   "name": "item_spawn",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_item_spawn",
+   "contract": "listen",
+   "out": null,
+   "api": 234,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "entity: u32",
+    "item: &str",
+    "count: i32",
+    "pos: [f64; 3]"
+   ],
+   "returns": "",
+   "doc": "A dropped item entity was successfully added to the server level.",
+   "cites": []
+  },
+  {
+   "name": "leaves_decay",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_leaves_decay",
+   "contract": "cancel",
+   "out": "cancel",
+   "api": 235,
+   "generics": "",
+   "params": [
+    "&self",
+    "dimension: LevelDimension",
+    "pos: BlockPos",
+    "cancel: &mut bool"
+   ],
+   "returns": "",
+   "doc": "A non-persistent leaf block at distance 7 is about to decay at `pos`.",
+   "cites": []
+  },
+  {
+   "name": "lightning_strike",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_lightning_strike",
+   "contract": "cancel",
+   "out": "cancel",
+   "api": 236,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: Option<u128>",
+    "pos: [i32; 3]",
+    "cause: &str",
+    "cancel: &mut bool"
+   ],
+   "returns": "",
+   "doc": "A server lightning bolt is about to be created.",
+   "cites": []
+  },
+  {
+   "name": "menu_quick_move",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_menu_quick_move",
+   "contract": "cancel",
+   "out": "handled",
+   "api": 309,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "pos: [i32; 3]",
+    "entity: &mut ModBlockEntity",
+    "container_slots: usize",
+    "slot: usize",
+    "stack: &mut ItemStack",
+    "handled: &mut bool"
+   ],
+   "returns": "",
+   "doc": "A player shift-clicked slot `slot` of the menu of the mod block entity at `pos` (`AbstractContainerMenu.quickMoveStack`, the method a Java menu overrides), on the server, before the game's own routing:",
+   "cites": [
+    "AbstractContainerMenu.quickMoveStack"
+   ]
+  },
+  {
+   "name": "moisture_change",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_moisture_change",
+   "contract": "cancel",
+   "out": "cancel",
+   "api": 237,
+   "generics": "",
+   "params": [
+    "&self",
+    "dimension: LevelDimension",
+    "pos: BlockPos",
+    "from: i32",
+    "to: i32",
+    "cancel: &mut bool"
+   ],
+   "returns": "",
+   "doc": "Farmland at `pos` is about to change moisture from `from` to `to`.",
+   "cites": []
+  },
+  {
+   "name": "anvil_craft_post",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_anvil_craft_post",
+   "contract": "listen",
+   "out": null,
+   "api": 327,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "pos: [i32; 3]",
+    "craft: &horizon_client::menu::AnvilCraft"
+   ],
+   "returns": "",
+   "doc": "A player took an anvil's result at `pos` and the levels, inputs and anvil wear are done (`AnvilCraftEvent.Post`); a broken anvil is already air.",
+   "cites": [
+    "AnvilCraftEvent.Post"
+   ]
+  },
+  {
+   "name": "anvil_craft_pre",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_anvil_craft_pre",
+   "contract": "cancel",
+   "out": "cancel",
+   "api": 328,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "pos: [i32; 3]",
+    "craft: &horizon_client::menu::AnvilCraft",
+    "cancel: &mut bool"
+   ],
+   "returns": "",
+   "doc": "A player took an anvil's result at `pos` (`AnvilCraftEvent.Pre`), before the levels are charged, the inputs used up and the anvil worn.",
+   "cites": [
+    "AnvilCraftEvent.Pre"
+   ]
+  },
+  {
+   "name": "armor_stand_manipulate",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_armor_stand_manipulate",
+   "contract": "cancel",
+   "out": "cancel",
+   "api": 175,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "stand_id: i32",
+    "slot: &str",
+    "cancel: &mut bool"
+   ],
+   "returns": "",
+   "doc": "A player takes an item from an armor stand or puts one on it (`ArmorStand.interactAt`, after the stand's disabled-slot checks and `swapItem`'s take/put locks, before anything moves):",
+   "cites": [
+    "ArmorStand.interactAt",
+    "Entity.getId"
+   ]
+  },
+  {
+   "name": "bucket_empty",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_bucket_empty",
+   "contract": "cancel",
+   "out": "cancel",
+   "api": 179,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "pos: [i32; 3]",
+    "fluid: &str",
+    "cancel: &mut bool"
+   ],
+   "returns": "",
+   "doc": "A server player empties a bucket at `pos` (`fluid`:",
+   "cites": [
+    "BucketItem.use"
+   ]
+  },
+  {
+   "name": "container_opened",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_container_opened",
+   "contract": "cancel",
+   "out": "cancel",
+   "api": 176,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "kind: &str",
+    "pos: Option<[i32; 3]>",
+    "cancel: &mut bool"
+   ],
+   "returns": "",
+   "doc": "A player opens one of the game's own menus (`ServerPlayer.openMenu`; the job of NeoForge's `PlayerContainerEvent.Open`, which comes after the menu is open and cannot stop it):",
+   "cites": [
+    "PlayerContainerEvent.Open",
+    "ServerPlayer.openMenu"
+   ]
+  },
+  {
+   "name": "creative_slot",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_creative_slot",
+   "contract": "cancel",
+   "out": "cancel",
+   "api": 177,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "slot: i32",
+    "item: &str",
+    "count: i32",
+    "cancel: &mut bool"
+   ],
+   "returns": "",
+   "doc": "A creative-mode player sets a slot of their inventory from the creative screen (`ServerGamePacketListenerImpl.handleSetCreativeModeSlot`):",
+   "cites": [
+    "ServerGamePacketListenerImpl.handleSetCreativeModeSlot"
+   ]
+  },
+  {
+   "name": "food_level_changed",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_food_level_changed",
+   "contract": "cancel",
+   "out": "cancel",
+   "api": 169,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "from: i32",
+    "to: &mut i32",
+    "cancel: &mut bool"
+   ],
+   "returns": "",
+   "doc": "The food level of the server player `player` (`name`) is about to change from `from` to `to` (Bukkit's `FoodLevelChangeEvent`):",
+   "cites": []
+  },
+  {
+   "name": "hanging_break",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_hanging_break",
+   "contract": "cancel",
+   "out": "cancel",
+   "api": 319,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: Option<u128>",
+    "kind: &str",
+    "pos: [i32; 3]",
+    "cancel: &mut bool"
+   ],
+   "returns": "",
+   "doc": "An item frame (`minecraft:item_frame`, `minecraft:glow_item_frame`) or a painting (`minecraft:painting`), `kind` its entity type and `pos` the block it hangs in, is about to break:",
+   "cites": [
+    "BlockAttachedEntity.hurtServer"
+   ]
+  },
+  {
+   "name": "hanging_place",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_hanging_place",
+   "contract": "cancel",
+   "out": "cancel",
+   "api": 180,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "kind: &str",
+    "pos: [i32; 3]",
+    "cancel: &mut bool"
+   ],
+   "returns": "",
+   "doc": "A server player places a hanging entity:",
+   "cites": [
+    "HangingEntityItem.useOn",
+    "LeadItem.useOn"
+   ]
+  },
+  {
+   "name": "item_damaged",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_item_damaged",
+   "contract": "cancel",
+   "out": "cancel",
+   "api": 162,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "item: &str",
+    "amount: &mut i32",
+    "cancel: &mut bool"
+   ],
+   "returns": "",
+   "doc": "The item `item` of a server player is about to lose `amount` points of durability (`ItemStack.hurtAndBreak`; Bukkit's `PlayerItemDamageEvent`):",
+   "cites": [
+    "ItemStack.hurtAndBreak"
+   ]
+  },
+  {
+   "name": "player_changed_dimension",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_changed_dimension",
+   "contract": "listen",
+   "out": null,
+   "api": 154,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "from: &str",
+    "to: &str"
+   ],
+   "returns": "",
+   "doc": "`player` (`name`) changed dimension (NeoForge's `PlayerChangedDimensionEvent`):",
+   "cites": []
+  },
+  {
+   "name": "player_clone",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_clone",
+   "contract": "listen",
+   "out": null,
+   "api": null,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "was_death: bool"
+   ],
+   "returns": "",
+   "doc": "A player's data was copied to their new player (NeoForge's `PlayerEvent.Clone`, from `ServerPlayer.restoreFrom`):",
+   "cites": [
+    "PlayerEvent.Clone",
+    "ServerPlayer.restoreFrom"
+   ]
+  },
+  {
+   "name": "player_commands_sent",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_commands_sent",
+   "contract": "collect",
+   "out": "names",
+   "api": 171,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "names: &mut Vec<String>"
+   ],
+   "returns": "",
+   "doc": "The command tree a server sends a player (NeoForge's and Paper's \"commands sent to a player\" stage):",
+   "cites": []
+  },
+  {
+   "name": "player_destroy_item",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_destroy_item",
+   "contract": "listen",
+   "out": null,
+   "api": 315,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "item: &str",
+    "slot: &str"
+   ],
+   "returns": "",
+   "doc": "The item `item` of the server player `player` (`name`) broke in `slot` (`mainhand`, `offhand`, `head`, `chest`, `legs`, `feet`, `body` or `saddle`):",
+   "cites": [
+    "LivingEntity.onEquippedItemBroken"
+   ]
+  },
+  {
+   "name": "player_fish",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_fish",
+   "contract": "cancel",
+   "out": "cancel",
+   "api": 160,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "state: i32",
+    "cancel: &mut bool"
+   ],
+   "returns": "",
+   "doc": "A server player's fishing rod, with `state`:",
+   "cites": [
+    "FishingHook.catchingFish",
+    "FishingHook.retrieve",
+    "FishingRodItem.use"
+   ]
+  },
+  {
+   "name": "player_flower_pot_manipulate",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_flower_pot_manipulate",
+   "contract": "listen",
+   "out": null,
+   "api": 238,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "pos: [i32; 3]",
+    "plant: &str"
+   ],
+   "returns": "",
+   "doc": "A server player put a plant into a flower pot, after the potted block state was stored and the item consumed.",
+   "cites": []
+  },
+  {
+   "name": "player_game_mode_changed",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_game_mode_changed",
+   "contract": "cancel",
+   "out": "cancel",
+   "api": 158,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "from: i32",
+    "to: i32",
+    "cancel: &mut bool"
+   ],
+   "returns": "",
+   "doc": "A server player's game mode is about to change (NeoForge's `PlayerChangeGameModeEvent`):",
+   "cites": []
+  },
+  {
+   "name": "player_insert_lectern_book",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_insert_lectern_book",
+   "contract": "listen",
+   "out": null,
+   "api": 239,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "pos: [i32; 3]",
+    "book: &str"
+   ],
+   "returns": "",
+   "doc": "A server player inserted a book into a lectern, after the block entity and inventory changed.",
+   "cites": []
+  },
+  {
+   "name": "player_item_frame_change",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_item_frame_change",
+   "contract": "listen",
+   "out": null,
+   "api": 240,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "entity_id: u32",
+    "action: &str",
+    "item: &str",
+    "rotation: u8"
+   ],
+   "returns": "",
+   "doc": "A server player changed an item frame after its contents or rotation changed.",
+   "cites": []
+  },
+  {
+   "name": "player_item_mend",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_item_mend",
+   "contract": "listen",
+   "out": null,
+   "api": 241,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "item: &str",
+    "repair: u32",
+    "experience: u32"
+   ],
+   "returns": "",
+   "doc": "Mending repaired a server player's item with experience from an orb.",
+   "cites": []
+  },
+  {
+   "name": "player_lectern_page_change",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_lectern_page_change",
+   "contract": "listen",
+   "out": null,
+   "api": 242,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "pos: [i32; 3]",
+    "page: i32"
+   ],
+   "returns": "",
+   "doc": "A server player changed the page of a lectern, after its page and redstone pulse changed.",
+   "cites": []
+  },
+  {
+   "name": "player_load_from_file",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_load_from_file",
+   "contract": "listen",
+   "out": null,
+   "api": null,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "directory: &std::path::Path"
+   ],
+   "returns": "",
+   "doc": "A player was loaded from the world's save (NeoForge's `PlayerEvent.LoadFromFile`, `PlayerList.loadPlayerData`):",
+   "cites": [
+    "PlayerEvent.LoadFromFile",
+    "PlayerList.loadPlayerData"
+   ]
+  },
+  {
+   "name": "player_login",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_login",
+   "contract": "cancel",
+   "out": "cancel",
+   "api": 172,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "cancel: &mut bool",
+    "reason: &mut Option<Text>"
+   ],
+   "returns": "",
+   "doc": "A player whose login the server has accepted (NeoForge's `PlayerNegotiationEvent` stage):",
+   "cites": []
+  },
+  {
+   "name": "player_save_to_file",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_save_to_file",
+   "contract": "listen",
+   "out": null,
+   "api": null,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "directory: &std::path::Path"
+   ],
+   "returns": "",
+   "doc": "A player was saved to the world's store (NeoForge's `PlayerEvent.SaveToFile`, `PlayerList.save`):",
+   "cites": [
+    "PlayerEvent.SaveToFile",
+    "PlayerList.save"
+   ]
+  },
+  {
+   "name": "player_sprint",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_sprint",
+   "contract": "listen",
+   "out": null,
+   "api": 173,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "sprinting: bool"
+   ],
+   "returns": "",
+   "doc": "A server player's sprint started or stopped:",
+   "cites": []
+  },
+  {
+   "name": "player_swap_hands",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_swap_hands",
+   "contract": "cancel",
+   "out": "cancel",
+   "api": 168,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "cancel: &mut bool"
+   ],
+   "returns": "",
+   "doc": "`player` (`name`) pressed the swap-hands key:",
+   "cites": [
+    "ServerGamePacketListenerImpl.handlePlayerAction"
+   ]
+  },
+  {
+   "name": "player_take_lectern_book",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_take_lectern_book",
+   "contract": "listen",
+   "out": null,
+   "api": 243,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "pos: [i32; 3]",
+    "book: &str"
+   ],
+   "returns": "",
+   "doc": "A server player took the book from a lectern, after the menu and block entity changed.",
+   "cites": []
+  },
+  {
+   "name": "player_teleported",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_teleported",
+   "contract": "listen",
+   "out": null,
+   "api": 170,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "from: [f64; 3]",
+    "to: [f64; 3]",
+    "dimension: &str"
+   ],
+   "returns": "",
+   "doc": "A server player a command teleported (NeoForge's `EntityTeleportEvent`, for a player):",
+   "cites": []
+  },
+  {
+   "name": "player_totem",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_totem",
+   "contract": "listen",
+   "out": null,
+   "api": 182,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str"
+   ],
+   "returns": "",
+   "doc": "A totem of undying saved the server player `player` (`name`):",
+   "cites": [
+    "LivingEntity.checkTotemDeathProtection"
+   ]
+  },
+  {
+   "name": "resource_pack_status",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_resource_pack_status",
+   "contract": "listen",
+   "out": null,
+   "api": 174,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "status: i32"
+   ],
+   "returns": "",
+   "doc": "A server player's client answered a resource pack in play (vanilla's `ServerboundResourcePackPacket`):",
+   "cites": []
+  },
+  {
+   "name": "spawn_change",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_spawn_change",
+   "contract": "listen",
+   "out": null,
+   "api": 244,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "pos: [i32; 3]",
+    "angle: [f32; 2]"
+   ],
+   "returns": "",
+   "doc": "The world's spawn point changed to `pos` and `angle`.",
+   "cites": []
+  },
+  {
+   "name": "tnt_primed",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_tnt_primed",
+   "contract": "cancel",
+   "out": "cancel",
+   "api": 181,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: Option<u128>",
+    "pos: [i32; 3]",
+    "cancel: &mut bool"
+   ],
+   "returns": "",
+   "doc": "TNT at `pos` is about to be lit (primed):",
+   "cites": []
+  },
+  {
+   "name": "vehicle_create",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_vehicle_create",
+   "contract": "listen",
+   "out": null,
+   "api": 336,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "kind: &str",
+    "pos: [f64; 3]"
+   ],
+   "returns": "",
+   "doc": "A boat or minecart was created at `pos`, after it joined the level.",
+   "cites": []
+  },
+  {
+   "name": "vehicle_damage",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_vehicle_damage",
+   "contract": "cancel",
+   "out": "cancel",
+   "api": 337,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "kind: &str",
+    "damage: &mut f32",
+    "cancel: &mut bool"
+   ],
+   "returns": "",
+   "doc": "A vehicle is about to take damage from a player's attack.",
+   "cites": []
+  },
+  {
+   "name": "vehicle_destroy",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_vehicle_destroy",
+   "contract": "listen",
+   "out": null,
+   "api": 338,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "kind: &str",
+    "pos: [f64; 3]"
+   ],
+   "returns": "",
+   "doc": "A boat or minecart is about to be destroyed at `pos`.",
+   "cites": []
+  },
+  {
+   "name": "vehicle_moved",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_vehicle_moved",
+   "contract": "listen",
+   "out": null,
+   "api": 178,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: Option<u128>",
+    "kind: &str",
+    "from: [f64; 3]",
+    "to: [f64; 3]"
+   ],
+   "returns": "",
+   "doc": "A boat or minecart (`kind`, `minecraft:oak_boat`) moved since the last tick (`VehicleMoveEvent`):",
+   "cites": []
+  },
+  {
+   "name": "world_border_bounds_changed",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_world_border_bounds_changed",
+   "contract": "listen",
+   "out": null,
+   "api": 245,
+   "generics": "",
+   "params": [
+    "&mut self"
+   ],
+   "returns": "",
+   "doc": "The server world's border bounds changed, either immediately or when its timed size change was requested.",
+   "cites": []
+  },
+  {
+   "name": "world_border_center_changed",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_world_border_center_changed",
+   "contract": "listen",
+   "out": null,
+   "api": 246,
+   "generics": "",
+   "params": [
+    "&mut self"
+   ],
+   "returns": "",
+   "doc": "The server world's border center changed.",
+   "cites": []
+  },
+  {
+   "name": "world_game_rule_change",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_world_game_rule_change",
+   "contract": "listen",
+   "out": null,
+   "api": 247,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "rule: &str",
+    "value: &str"
+   ],
+   "returns": "",
+   "doc": "A server game rule changed to its final `value`.",
+   "cites": []
+  },
+  {
+   "name": "note_play",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_note_play",
+   "contract": "cancel",
+   "out": "cancel",
+   "api": 248,
+   "generics": "",
+   "params": [
+    "&self",
+    "dimension: LevelDimension",
+    "player: Option<u128>",
+    "pos: BlockPos",
+    "instrument: &str",
+    "note: i32",
+    "cancel: &mut bool"
+   ],
+   "returns": "",
+   "doc": "On an authoritative server, a note block at `pos` is about to sound.",
+   "cites": []
+  },
+  {
+   "name": "player_advancement_criterion_grant",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_advancement_criterion_grant",
+   "contract": "listen",
+   "out": null,
+   "api": 339,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "advancement: &str",
+    "criterion: &str"
+   ],
+   "returns": "",
+   "doc": "A server player earned one criterion of an advancement, after the progress was recorded.",
+   "cites": []
+  },
+  {
+   "name": "player_advancement_done",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_advancement_done",
+   "contract": "listen",
+   "out": null,
+   "api": 249,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "advancement: &str"
+   ],
+   "returns": "",
+   "doc": "A server player completed an advancement, after progress was recorded.",
+   "cites": []
+  },
+  {
+   "name": "player_advancement_progress",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_advancement_progress",
+   "contract": "listen",
+   "out": null,
+   "api": 320,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "advancement: &str",
+    "criterion: &str",
+    "granted: bool"
+   ],
+   "returns": "",
+   "doc": "A criterion of a server player's advancement was granted or revoked, after its progress changed and before any completion rewards, except the `minecraft:tick` criteria granted on a network player's first tick or a reload, which are heard after that tick's rewards and packets.",
+   "cites": []
+  },
+  {
+   "name": "player_arm_swing",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_arm_swing",
+   "contract": "listen",
+   "out": null,
+   "api": 340,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "hand: &str"
+   ],
+   "returns": "",
+   "doc": "A guest's arm swing was handled by the server.",
+   "cites": []
+  },
+  {
+   "name": "player_attack_cooldown_reset",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_attack_cooldown_reset",
+   "contract": "listen",
+   "out": null,
+   "api": 250,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str"
+   ],
+   "returns": "",
+   "doc": "A server player reset their attack strength by swinging (`handlePunch`).",
+   "cites": []
+  },
+  {
+   "name": "player_bed_enter",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_bed_enter",
+   "contract": "cancel",
+   "out": "cancel",
+   "api": 251,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "pos: [i32; 3]",
+    "cancel: &mut bool"
+   ],
+   "returns": "",
+   "doc": "A server player is about to enter a bed after the sleep checks pass.",
+   "cites": []
+  },
+  {
+   "name": "player_bed_leave",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_bed_leave",
+   "contract": "listen",
+   "out": null,
+   "api": 252,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "pos: [i32; 3]"
+   ],
+   "returns": "",
+   "doc": "while a guest packet is handled.",
+   "cites": []
+  },
+  {
+   "name": "player_bucket_entity",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_bucket_entity",
+   "contract": "listen",
+   "out": null,
+   "api": 253,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "entity_id: i32",
+    "entity: &str"
+   ],
+   "returns": "",
+   "doc": "A server player caught a mob in a bucket, after it was removed and the filled bucket was given.",
+   "cites": []
+  },
+  {
+   "name": "player_bundle_item_select",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_bundle_item_select",
+   "contract": "listen",
+   "out": null,
+   "api": 341,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "slot: i32",
+    "index: i32"
+   ],
+   "returns": "",
+   "doc": "A server player selected a bundle item in `slot` at `index`.",
+   "cites": []
+  },
+  {
+   "name": "player_change_beacon_effect",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_change_beacon_effect",
+   "contract": "listen",
+   "out": null,
+   "api": 254,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "pos: [i32; 3]",
+    "primary: &str",
+    "secondary: &str"
+   ],
+   "returns": "",
+   "doc": "A server player changed a beacon's selected effects, after they were stored.",
+   "cites": []
+  },
+  {
+   "name": "player_change_main_hand",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_change_main_hand",
+   "contract": "listen",
+   "out": null,
+   "api": 255,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "left: bool"
+   ],
+   "returns": "",
+   "doc": "A server player changed their client option for the dominant hand.",
+   "cites": []
+  },
+  {
+   "name": "player_client_loaded_world",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_client_loaded_world",
+   "contract": "listen",
+   "out": null,
+   "api": 342,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str"
+   ],
+   "returns": "",
+   "doc": "A server player finished loading the world around them after joining, respawning or changing dimension.",
+   "cites": []
+  },
+  {
+   "name": "player_deep_sleep",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_deep_sleep",
+   "contract": "listen",
+   "out": null,
+   "api": 256,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str"
+   ],
+   "returns": "",
+   "doc": "A server player has slept for 100 ticks in a bed and now counts as deeply asleep for the night-skip check.",
+   "cites": []
+  },
+  {
+   "name": "player_edit_book",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_edit_book",
+   "contract": "cancel",
+   "out": "cancel",
+   "api": 257,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "pages: i32",
+    "signing: bool",
+    "cancel: &mut bool"
+   ],
+   "returns": "",
+   "doc": "A server player's book edit or signing packet is about to be applied.",
+   "cites": []
+  },
+  {
+   "name": "player_egg_throw",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_egg_throw",
+   "contract": "listen",
+   "out": null,
+   "api": 258,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str"
+   ],
+   "returns": "",
+   "doc": "A server player threw an egg, after its projectile was launched and the use was applied.",
+   "cites": []
+  },
+  {
+   "name": "player_elytra_boost",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_elytra_boost",
+   "contract": "listen",
+   "out": null,
+   "api": 259,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str"
+   ],
+   "returns": "",
+   "doc": "A server player used a firework rocket to boost while gliding, after the rocket was launched and consumed.",
+   "cites": []
+  },
+  {
+   "name": "player_exp_change",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_exp_change",
+   "contract": "listen",
+   "out": null,
+   "api": 260,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "amount: &mut i32"
+   ],
+   "returns": "",
+   "doc": "A server player's experience points are about to increase from an orb pickup, after mending has taken its share.",
+   "cites": []
+  },
+  {
+   "name": "player_exp_cooldown_change",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_exp_cooldown_change",
+   "contract": "listen",
+   "out": null,
+   "api": 261,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "ticks: u32"
+   ],
+   "returns": "",
+   "doc": "A server player's XP orb pickup cooldown changed to `ticks`.",
+   "cites": []
+  },
+  {
+   "name": "player_input",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_input",
+   "contract": "listen",
+   "out": null,
+   "api": 343,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "flags: i32"
+   ],
+   "returns": "",
+   "doc": "A guest sent the server's current `PlayerInput` flags, after they were applied to the hub.",
+   "cites": []
+  },
+  {
+   "name": "player_item_cooldown",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_item_cooldown",
+   "contract": "cancel",
+   "out": "cancel",
+   "api": 262,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "item: &str",
+    "ticks: i32",
+    "cancel: &mut bool"
+   ],
+   "returns": "",
+   "doc": "An item cooldown is about to start for a server player.",
+   "cites": []
+  },
+  {
+   "name": "player_item_held",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_item_held",
+   "contract": "cancel",
+   "out": "cancel",
+   "api": 263,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "from_slot: i32",
+    "to_slot: i32",
+    "cancel: &mut bool"
+   ],
+   "returns": "",
+   "doc": "A server player selected a new hotbar slot.",
+   "cites": []
+  },
+  {
+   "name": "player_jump",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_jump",
+   "contract": "listen",
+   "out": null,
+   "api": 344,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str"
+   ],
+   "returns": "",
+   "doc": "A guest's accepted movement made the server jump them from the ground.",
+   "cites": []
+  },
+  {
+   "name": "player_kicked",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_kicked",
+   "contract": "listen",
+   "out": null,
+   "api": 345,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "reason: &str"
+   ],
+   "returns": "",
+   "doc": "A guest was disconnected by a server kick, after the hub recorded the rendered `reason`.",
+   "cites": []
+  },
+  {
+   "name": "player_launch_projectile",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_launch_projectile",
+   "contract": "listen",
+   "out": null,
+   "api": 346,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "item: &str"
+   ],
+   "returns": "",
+   "doc": "A server player launched a projectile item, after it was created.",
+   "cites": []
+  },
+  {
+   "name": "player_level_change",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_level_change",
+   "contract": "listen",
+   "out": null,
+   "api": 347,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "from: i32",
+    "to: i32"
+   ],
+   "returns": "",
+   "doc": "A server player's experience level changed, after the new level was applied.",
+   "cites": []
+  },
+  {
+   "name": "player_locale_change",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_locale_change",
+   "contract": "listen",
+   "out": null,
+   "api": 264,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "locale: &str"
+   ],
+   "returns": "",
+   "doc": "A server player changed their client language option to `locale`.",
+   "cites": []
+  },
+  {
+   "name": "player_loom_pattern_select",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_loom_pattern_select",
+   "contract": "listen",
+   "out": null,
+   "api": 265,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "pattern: i32"
+   ],
+   "returns": "",
+   "doc": "A server player selected a loom pattern, after the loom menu accepted the button.",
+   "cites": []
+  },
+  {
+   "name": "player_map_filled",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_map_filled",
+   "contract": "listen",
+   "out": null,
+   "api": 266,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "map_id: i32"
+   ],
+   "returns": "",
+   "doc": "A server player filled an empty map, after the filled map and its saved data were created.",
+   "cites": []
+  },
+  {
+   "name": "player_name_entity",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_name_entity",
+   "contract": "listen",
+   "out": null,
+   "api": 267,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "entity_id: u32",
+    "entity_name: &str"
+   ],
+   "returns": "",
+   "doc": "A server player named a mob with a name tag, after its name and persistence changed and the tag was consumed.",
+   "cites": []
+  },
+  {
+   "name": "player_open_sign",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_open_sign",
+   "contract": "listen",
+   "out": null,
+   "api": 268,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "pos: [i32; 3]",
+    "front: bool"
+   ],
+   "returns": "",
+   "doc": "A server player opened a sign for editing, after the editor state was made.",
+   "cites": []
+  },
+  {
+   "name": "player_pick_item",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_pick_item",
+   "contract": "cancel",
+   "out": "cancel",
+   "api": 269,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "from_entity: bool",
+    "pos: [i32; 3]",
+    "entity_id: i32",
+    "cancel: &mut bool"
+   ],
+   "returns": "",
+   "doc": "A server player picked an item from a block or entity, before it enters the hotbar.",
+   "cites": []
+  },
+  {
+   "name": "player_pickup_arrow",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_pickup_arrow",
+   "contract": "listen",
+   "out": null,
+   "api": 270,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "entity_id: u32",
+    "item: &str"
+   ],
+   "returns": "",
+   "doc": "A server player picked up an arrow after it was removed and its pickup was applied.",
+   "cites": []
+  },
+  {
+   "name": "player_portal",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_portal",
+   "contract": "cancel",
+   "out": "cancel",
+   "api": 271,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "from_dimension: &str",
+    "to_dimension: &str",
+    "cause: &str",
+    "cancel: &mut bool"
+   ],
+   "returns": "",
+   "doc": "A server player is about to travel through a Nether portal, End portal or End gateway.",
+   "cites": []
+  },
+  {
+   "name": "player_ready_arrow",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_ready_arrow",
+   "contract": "listen",
+   "out": null,
+   "api": 348,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "arrow: &str"
+   ],
+   "returns": "",
+   "doc": "A server player released a drawn bow with `arrow` selected.",
+   "cites": []
+  },
+  {
+   "name": "player_recipe_book_click",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_recipe_book_click",
+   "contract": "listen",
+   "out": null,
+   "api": 272,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "recipe: &str",
+    "all: bool"
+   ],
+   "returns": "",
+   "doc": "A server player's recipe book requested a known recipe be placed in their crafting grid.",
+   "cites": []
+  },
+  {
+   "name": "player_recipe_book_settings_change",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_recipe_book_settings_change",
+   "contract": "listen",
+   "out": null,
+   "api": 349,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "book: i32",
+    "open: bool",
+    "filtering: bool"
+   ],
+   "returns": "",
+   "doc": "A server player's recipe book open or filter setting changed.",
+   "cites": []
+  },
+  {
+   "name": "player_recipe_discovered",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_recipe_discovered",
+   "contract": "cancel",
+   "out": "cancel",
+   "api": 273,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "recipe: &str",
+    "cancel: &mut bool"
+   ],
+   "returns": "",
+   "doc": "A recipe is about to be unlocked for a server player.",
+   "cites": []
+  },
+  {
+   "name": "player_riptide",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_riptide",
+   "contract": "listen",
+   "out": null,
+   "api": 274,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str"
+   ],
+   "returns": "",
+   "doc": "A server player launched with a riptide trident, after the velocity, spin attack and grounded lift have been applied.",
+   "cites": []
+  },
+  {
+   "name": "player_shear_entity",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_shear_entity",
+   "contract": "cancel",
+   "out": "cancel",
+   "api": 275,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "entity_id: i32",
+    "off_hand: bool",
+    "cancel: &mut bool"
+   ],
+   "returns": "",
+   "doc": "A player shearing a mob is about to do so.",
+   "cites": []
+  },
+  {
+   "name": "player_shield_disable",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_shield_disable",
+   "contract": "listen",
+   "out": null,
+   "api": 276,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "ticks: u32"
+   ],
+   "returns": "",
+   "doc": "A server player's shield was disabled by a blocked melee hit.",
+   "cites": []
+  },
+  {
+   "name": "player_spawn_point_set",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_spawn_point_set",
+   "contract": "cancel",
+   "out": "cancel",
+   "api": 277,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "dimension: &str",
+    "pos: [i32; 3]",
+    "cause: &str",
+    "cancel: &mut bool"
+   ],
+   "returns": "",
+   "doc": "A server player's respawn point is about to change.",
+   "cites": []
+  },
+  {
+   "name": "player_stat_award",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_stat_award",
+   "contract": "cancel",
+   "out": "cancel",
+   "api": 321,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "stat_type: &str",
+    "stat: &str",
+    "value: i32",
+    "cancel: &mut bool"
+   ],
+   "returns": "",
+   "doc": "A statistic is about to be awarded to a server player, before its count and scoreboard criteria change.",
+   "cites": []
+  },
+  {
+   "name": "player_stonecutter_recipe_select",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_stonecutter_recipe_select",
+   "contract": "listen",
+   "out": null,
+   "api": 278,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "recipe: i32"
+   ],
+   "returns": "",
+   "doc": "A server player selected a stonecutter recipe, after the menu accepted its button.",
+   "cites": []
+  },
+  {
+   "name": "player_stop_spectating_entity",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_stop_spectating_entity",
+   "contract": "listen",
+   "out": null,
+   "api": 279,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "entity_id: i32"
+   ],
+   "returns": "",
+   "doc": "A server player stopped spectating `entity_id`, after their camera returned to the player.",
+   "cites": []
+  },
+  {
+   "name": "player_stop_using_item",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_stop_using_item",
+   "contract": "listen",
+   "out": null,
+   "api": 350,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str"
+   ],
+   "returns": "",
+   "doc": "A server player released the use-item key before the item finished being used.",
+   "cites": []
+  },
+  {
+   "name": "player_swap_with_equipment_slot",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_swap_with_equipment_slot",
+   "contract": "listen",
+   "out": null,
+   "api": 280,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "slot: &str"
+   ],
+   "returns": "",
+   "doc": "A server player swapped their main and off hands, after both inventory slots changed.",
+   "cites": []
+  },
+  {
+   "name": "player_teleport_end_gateway",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_teleport_end_gateway",
+   "contract": "cancel",
+   "out": "cancel",
+   "api": 281,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "gateway: [i32; 3]",
+    "cancel: &mut bool"
+   ],
+   "returns": "",
+   "doc": "A server player is about to travel through an End gateway at `gateway`.",
+   "cites": []
+  },
+  {
+   "name": "player_toggle_entity_age_lock",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_toggle_entity_age_lock",
+   "contract": "listen",
+   "out": null,
+   "api": 282,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "entity_id: u32",
+    "locked: bool"
+   ],
+   "returns": "",
+   "doc": "A server player toggled an ageable mob's age lock with a golden dandelion, after the lock and item use changed.",
+   "cites": []
+  },
+  {
+   "name": "player_toggle_sneak",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_toggle_sneak",
+   "contract": "listen",
+   "out": null,
+   "api": 351,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "sneaking: bool"
+   ],
+   "returns": "",
+   "doc": "A guest's client changed sneaking in its player input packet, after the hub applied the new state.",
+   "cites": []
+  },
+  {
+   "name": "player_trade",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_trade",
+   "contract": "listen",
+   "out": null,
+   "api": 283,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "entity_id: u32"
+   ],
+   "returns": "",
+   "doc": "A server player completed a villager or wandering trader trade.",
+   "cites": []
+  },
+  {
+   "name": "player_unleash_entity",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_unleash_entity",
+   "contract": "listen",
+   "out": null,
+   "api": 284,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "entity_id: u32"
+   ],
+   "returns": "",
+   "doc": "A server player removed an entity's leash, after it was cleared.",
+   "cites": []
+  },
+  {
+   "name": "player_velocity",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_velocity",
+   "contract": "listen",
+   "out": null,
+   "api": 285,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "velocity: [f64; 3]"
+   ],
+   "returns": "",
+   "doc": "A server applied `velocity` to a player, when syncing changed motion to that player's client.",
+   "cites": []
+  },
+  {
+   "name": "portal_create",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_portal_create",
+   "contract": "listen",
+   "out": null,
+   "api": 286,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "dimension: &str",
+    "pos: [i32; 3]"
+   ],
+   "returns": "",
+   "doc": "A Nether portal was built for a dimension travel, or an End platform was made for an arrival.",
+   "cites": []
+  },
+  {
+   "name": "potion_splash",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_potion_splash",
+   "contract": "listen",
+   "out": null,
+   "api": 287,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "item: &str",
+    "pos: [f64; 3]"
+   ],
+   "returns": "",
+   "doc": "A thrown splash or lingering potion applied its hit effects.",
+   "cites": []
+  },
+  {
+   "name": "prepare_anvil",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_prepare_anvil",
+   "contract": "replace",
+   "out": "result",
+   "api": 288,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "pos: [i32; 3]",
+    "result: &mut Option<ItemStack>",
+    "cost: &mut i32"
+   ],
+   "returns": "",
+   "doc": "An anvil result was prepared for a server player at `pos`.",
+   "cites": []
+  },
+  {
+   "name": "prepare_grindstone",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_prepare_grindstone",
+   "contract": "replace",
+   "out": "result",
+   "api": 289,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "pos: [i32; 3]",
+    "result: &mut Option<ItemStack>"
+   ],
+   "returns": "",
+   "doc": "A grindstone result was prepared for a server player at `pos`.",
+   "cites": []
+  },
+  {
+   "name": "prepare_hopper_transfer",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_prepare_hopper_transfer",
+   "contract": "listen",
+   "out": null,
+   "api": 352,
+   "generics": "",
+   "params": [
+    "&self",
+    "pos: [i32; 3]"
+   ],
+   "returns": "",
+   "doc": "A hopper at `pos` began an item transfer attempt.",
+   "cites": []
+  },
+  {
+   "name": "prepare_item_craft",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_prepare_item_craft",
+   "contract": "replace",
+   "out": "result",
+   "api": 290,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "pos: Option<[i32; 3]>",
+    "result: &mut Option<ItemStack>"
+   ],
+   "returns": "",
+   "doc": "A crafting-grid result was prepared for a server player; `pos` is the crafting table, or None for the inventory grid.",
+   "cites": []
+  },
+  {
+   "name": "prepare_item_enchant",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_prepare_item_enchant",
+   "contract": "listen",
+   "out": null,
+   "api": 291,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "pos: [i32; 3]",
+    "costs: &mut [i32; 3]"
+   ],
+   "returns": "",
+   "doc": "Enchanting offers were calculated for a server player at `pos`.",
+   "cites": []
+  },
+  {
+   "name": "prepare_smithing",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_prepare_smithing",
+   "contract": "replace",
+   "out": "result",
+   "api": 292,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "pos: [i32; 3]",
+    "result: &mut Option<ItemStack>"
+   ],
+   "returns": "",
+   "doc": "A smithing result was prepared for a server player at `pos`.",
+   "cites": []
+  },
+  {
+   "name": "projectile_launch",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_projectile_launch",
+   "contract": "listen",
+   "out": null,
+   "api": 293,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: Option<u128>",
+    "name: &str",
+    "entity: u32",
+    "kind: &str"
+   ],
+   "returns": "",
+   "doc": "A server projectile was added to the level.",
+   "cites": []
+  },
+  {
+   "name": "raid_spawn_wave",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_raid_spawn_wave",
+   "contract": "listen",
+   "out": null,
+   "api": 294,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "raid: i32",
+    "pos: [i32; 3]",
+    "wave: i32",
+    "raiders: usize"
+   ],
+   "returns": "",
+   "doc": "A raid wave has been spawned at `pos`; `wave` is its one-based wave number and `raiders` counts the raiders, not the mobs they ride.",
+   "cites": []
+  },
+  {
+   "name": "raid_state_change",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_raid_state_change",
+   "contract": "listen",
+   "out": null,
+   "api": 295,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "raid: i32",
+    "pos: [i32; 3]",
+    "state: &str"
+   ],
+   "returns": "",
+   "doc": "A raid at `pos` changed to `state` (`triggered`, `victory`, `loss` or `stopped`).",
+   "cites": []
+  },
+  {
+   "name": "sculk_bloom",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_sculk_bloom",
+   "contract": "listen",
+   "out": null,
+   "api": 296,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "dimension: &str",
+    "pos: [i32; 3]"
+   ],
+   "returns": "",
+   "doc": "A sculk catalyst at `pos` has begun blooming after taking experience.",
+   "cites": []
+  },
+  {
+   "name": "sleep_finished_time",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_sleep_finished_time",
+   "contract": "listen",
+   "out": null,
+   "api": 308,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "dimension: &str",
+    "current: i64",
+    "new_time: &mut i64"
+   ],
+   "returns": "",
+   "doc": "Enough players have slept through the night in level `dimension` and the clock is about to move to the morning (NeoForge's `SleepFinishedTimeEvent`, vanilla's `ServerLevel.tick` when it moves the clock to `wake_up_from_sleep`):",
+   "cites": [
+    "ServerLevel.tick"
+   ]
+  },
+  {
+   "name": "sponge_absorb",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_sponge_absorb",
+   "contract": "listen",
+   "out": null,
+   "api": 297,
+   "generics": "",
+   "params": [
+    "&self",
+    "dimension: LevelDimension",
+    "pos: BlockPos"
+   ],
+   "returns": "",
+   "doc": "A sponge at `pos` absorbed water and became wet.",
+   "cites": []
+  },
+  {
+   "name": "tab_complete",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_tab_complete",
+   "contract": "collect",
+   "out": "suggestions",
+   "api": 298,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "command: &str",
+    "range: [usize; 2]",
+    "suggestions: &mut Vec<Suggestion>"
+   ],
+   "returns": "",
+   "doc": "A guest asked to complete `command`; `suggestions` may be added to or filtered.",
+   "cites": []
+  },
+  {
+   "name": "target_hit",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_target_hit",
+   "contract": "listen",
+   "out": null,
+   "api": 299,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "dimension: &str",
+    "pos: [i32; 3]",
+    "strength: i32"
+   ],
+   "returns": "",
+   "doc": "A projectile hit the target block at `pos`, which now has `strength` output power.",
+   "cites": []
+  },
+  {
+   "name": "thunder_change",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_thunder_change",
+   "contract": "cancel",
+   "out": "cancel",
+   "api": 300,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "dimension: &str",
+    "thundering: bool",
+    "cancel: &mut bool"
+   ],
+   "returns": "",
+   "doc": "The server changed its thunder state through `/weather`.",
+   "cites": []
+  },
+  {
+   "name": "time_skip",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_time_skip",
+   "contract": "cancel",
+   "out": "cancel",
+   "api": 301,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "dimension: &str",
+    "from: i64",
+    "to: i64",
+    "cause: &str",
+    "cancel: &mut bool"
+   ],
+   "returns": "",
+   "doc": "The overworld clock is about to jump, from sleep or `/time`.",
+   "cites": []
+  },
+  {
+   "name": "trade_select",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_trade_select",
+   "contract": "listen",
+   "out": null,
+   "api": 302,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "villager: Option<u32>",
+    "index: usize"
+   ],
+   "returns": "",
+   "doc": "A server player selected trade `index` from `villager` in the trading menu.",
+   "cites": []
+  },
+  {
+   "name": "trade_with_villager",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_trade_with_villager",
+   "contract": "listen",
+   "out": null,
+   "api": 310,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "merchant: u32",
+    "kind: &str",
+    "offer: &MerchantOffer"
+   ],
+   "returns": "",
+   "doc": "A server player traded with a villager or a wandering trader (NeoForge's `TradeWithVillagerEvent`, at vanilla's `MerchantResultSlot.onTake` once the offer is taken):",
+   "cites": [
+    "MerchantResultSlot.onTake"
+   ]
+  },
+  {
+   "name": "vault_change_state",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_vault_change_state",
+   "contract": "listen",
+   "out": null,
+   "api": 303,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "dimension: &str",
+    "pos: [i32; 3]",
+    "state: &str"
+   ],
+   "returns": "",
+   "doc": "A vault at `pos` changed to `state`.",
+   "cites": []
+  },
+  {
+   "name": "vault_loot",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_vault_loot",
+   "contract": "listen",
+   "out": null,
+   "api": 353,
+   "generics": "",
+   "params": [
+    "&self",
+    "pos: [i32; 3]",
+    "item: &str"
+   ],
+   "returns": "",
+   "doc": "A vault at `pos` is about to eject a loot item.",
+   "cites": []
+  },
+  {
+   "name": "weather_change",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_weather_change",
+   "contract": "cancel",
+   "out": "cancel",
+   "api": 304,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "dimension: &str",
+    "raining: bool",
+    "thundering: bool",
+    "cancel: &mut bool"
+   ],
+   "returns": "",
+   "doc": "The server changed its weather parameters.",
+   "cites": []
+  },
+  {
+   "name": "whitelist_state_update",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_whitelist_state_update",
+   "contract": "listen",
+   "out": null,
+   "api": 305,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "enabled: bool"
+   ],
+   "returns": "",
+   "doc": "The dedicated server's whitelist changed to `enabled`.",
+   "cites": []
+  },
+  {
+   "name": "world_border_bounds_change_finish",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_world_border_bounds_change_finish",
+   "contract": "listen",
+   "out": null,
+   "api": 354,
+   "generics": "",
+   "params": [
+    "&mut self"
+   ],
+   "returns": "",
+   "doc": "A timed world-border size change finished on the server, after its final size was applied.",
+   "cites": []
+  },
+  {
+   "name": "world_saved",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_world_saved",
+   "contract": "listen",
+   "out": null,
+   "api": 306,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "wait: bool"
+   ],
+   "returns": "",
+   "doc": "The server completed a world save cycle.",
+   "cites": []
+  },
+  {
+   "name": "living_drown",
+   "version": 1,
+   "target": "horizon_client_lib::breathing::native_living_drown",
+   "contract": "cancel",
+   "out": "cancel",
+   "api": 356,
+   "generics": "",
+   "params": [
+    "entity: u32",
+    "kind: &str",
+    "is_drowning: &mut bool",
+    "damage_amount: &mut f32",
+    "bubble_count: i32",
+    "cancel: &mut bool"
+   ],
+   "returns": "",
+   "doc": "An entity that can't breathe and has no air (`LivingDrownEvent`, posted from `LivingEntity.baseTick`), with vanilla's answers as the defaults:",
+   "cites": [
+    "LivingEntity.baseTick"
+   ]
+  },
+  {
+   "name": "living_fall",
+   "version": 1,
+   "target": "horizon_client_lib::landing::native_living_fall",
+   "contract": "cancel",
+   "out": "cancel",
+   "api": 357,
+   "generics": "",
+   "params": [
+    "entity: u32",
+    "kind: &str",
+    "distance: &mut f64",
+    "multiplier: &mut f32",
+    "cancel: &mut bool"
+   ],
+   "returns": "",
+   "doc": "A living entity is about to handle a fall (`LivingFallEvent`).",
+   "cites": []
+  },
+  {
+   "name": "living_heal",
+   "version": 1,
+   "target": "horizon_client_lib::hunger::native_living_heal",
+   "contract": "cancel",
+   "out": "cancel",
+   "api": 358,
+   "generics": "",
+   "params": [
+    "entity: u32",
+    "amount: &mut f32",
+    "cancel: &mut bool"
+   ],
+   "returns": "",
+   "doc": "A living entity is about to heal.",
+   "cites": []
+  },
+  {
+   "name": "living_jump",
+   "version": 1,
+   "target": "horizon_client_lib::motion::native_living_jump",
+   "contract": "listen",
+   "out": null,
+   "api": 359,
+   "generics": "",
+   "params": [
+    "entity: u32",
+    "kind: &str"
+   ],
+   "returns": "",
+   "doc": "A living entity jumped (`LivingEvent.LivingJumpEvent`).",
+   "cites": [
+    "LivingEvent.LivingJumpEvent"
+   ]
+  }
+ ]
+}

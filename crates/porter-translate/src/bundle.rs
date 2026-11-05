@@ -18,6 +18,7 @@ use porter_model::{ModScan, Verdict};
 
 use crate::block_entity::{self, BlockEntity};
 use crate::content;
+use porter_map::hooks;
 
 /// The Horizon and horizon-mixins commits Horizon's own native mods were tested on
 /// (horizon-mods native/zoom, 2026-11). Update them to a current Nightly.
@@ -41,9 +42,17 @@ pub struct Bundle {
     pub block_entities: Vec<BlockEntity>,
     /// Hooks wired completely, with the Java classes that need each.
     pub wired: BTreeMap<&'static str, BTreeSet<String>>,
-    /// Hooks the mod needs that must be wired by hand.
-    pub unwired: BTreeMap<&'static str, (BTreeSet<String>, BTreeSet<&'static str>)>,
+    /// Hooks with a generated helper whose body is left to port: the Java classes
+    /// and Mixins that need each, and what in them.
+    pub stubbed: BTreeMap<&'static str, Uses>,
+    /// Hooks the mod needs that Horizon's hook table doesn't have, or a helper
+    /// can't take: wired by hand.
+    pub unwired: BTreeMap<&'static str, Uses>,
 }
+
+/// Who needs a hook: the Java classes (or Mixins), and what in them (the API or
+/// the Mixin member).
+pub type Uses = (BTreeSet<String>, BTreeSet<String>);
 
 /// Translation keys and their English text, from the mod's `en_us.json` files.
 pub type Lang = BTreeMap<String, String>;
@@ -94,23 +103,45 @@ pub fn generate(scan: &ModScan, lang: &Lang) -> Bundle {
 
     // Which hooks the mod needs, and which of its classes need each.
     let mut wired: BTreeMap<&'static str, BTreeSet<String>> = BTreeMap::new();
-    let mut unwired: BTreeMap<&'static str, (BTreeSet<String>, BTreeSet<&'static str>)> =
-        BTreeMap::new();
+    let mut unwired: BTreeMap<&'static str, Uses> = BTreeMap::new();
     for class in &scan.classes {
         for r in &class.references {
-            let Some(mapping) = porter_map::client_hooks(r) else {
-                continue;
-            };
-            for hook in mapping.hooks {
-                if porter_map::WIRED_HOOKS.contains(hook) {
-                    wired.entry(hook).or_default().insert(class.name.clone());
-                } else {
-                    let entry = unwired.entry(hook).or_default();
-                    entry.0.insert(class.name.clone());
-                    entry.1.insert(mapping.java);
+            if let Some(mapping) = porter_map::client_hooks(r) {
+                for hook in mapping.hooks {
+                    if porter_map::WIRED_HOOKS.contains(hook) {
+                        wired.entry(hook).or_default().insert(class.name.clone());
+                    } else {
+                        let entry = unwired.entry(hook).or_default();
+                        entry.0.insert(class.name.clone());
+                        entry.1.insert(mapping.java.to_string());
+                    }
                 }
+                continue;
+            }
+            // Loader events Horizon's hook docs name (`LivingEvent.LivingJumpEvent`).
+            for hook in hooks::event_hooks(r) {
+                let entry = unwired.entry(hook.name.as_str()).or_default();
+                entry.0.insert(class.name.clone());
+                entry.1.insert(r.clone());
             }
         }
+    }
+    // Mixins whose target method a hook stands for.
+    for (mx, member, hook, how) in mixin_hooks(scan) {
+        let entry = unwired.entry(hook.name.as_str()).or_default();
+        entry.0.insert(mx.name.clone());
+        entry.1.insert(format!(
+            "`@{}` {} on {} ({})",
+            member.annotation,
+            member.member,
+            member
+                .target_methods
+                .iter()
+                .map(|t| format!("`{}`", t.split('(').next().unwrap_or(t)))
+                .collect::<Vec<_>>()
+                .join(", "),
+            how.describe()
+        ));
     }
     for key in &scan.client.keys {
         wired.entry("key").or_default().insert(key.class.clone());
@@ -129,7 +160,9 @@ pub fn generate(scan: &ModScan, lang: &Lang) -> Bundle {
     {
         let entry = unwired.entry("key").or_default();
         entry.0.extend(classes);
-        entry.1.insert("key input (no key bindings found to match)");
+        entry
+            .1
+            .insert("key input (no key bindings found to match)".into());
     }
 
     // Blocks, items and resources: a content mod. Block entities: native hooks.
@@ -137,6 +170,7 @@ pub fn generate(scan: &ModScan, lang: &Lang) -> Bundle {
     let ns = content::namespace(&java_id, &id).to_string();
     let block_entities = block_entity::find(scan, &ns);
     let mut hooks = 1;
+    let mut stubbed: BTreeMap<&'static str, Uses> = BTreeMap::new();
     if !block_entities.is_empty() {
         hooks = block_entity::HOOKS_VERSION;
         let classes: BTreeSet<String> = block_entities
@@ -149,8 +183,25 @@ pub fn generate(scan: &ModScan, lang: &Lang) -> Bundle {
             wired.insert("block_entity_tick", classes);
         }
     }
+    // Every other hook Horizon has gets a helper with its bindings, to port into.
+    for (hook, uses) in std::mem::take(&mut unwired) {
+        if wired.contains_key(hook) {
+            continue;
+        }
+        let bindable = hooks::hook(hook).and_then(|h| h.bindings()).is_some();
+        if bindable {
+            stubbed.insert(hook, uses);
+        } else {
+            unwired.insert(hook, uses);
+        }
+    }
+    for name in wired.keys().chain(stubbed.keys()) {
+        if let Some(h) = hooks::hook(name) {
+            hooks = hooks.max(h.needs());
+        }
+    }
     // Only an Options > Mods row: the content mod is the whole port.
-    let native = content.is_empty() || wired.keys().any(|h| *h != "mods");
+    let native = content.is_empty() || !stubbed.is_empty() || wired.keys().any(|h| *h != "mods");
 
     let ctx = Ctx {
         id: &id,
@@ -161,6 +212,7 @@ pub fn generate(scan: &ModScan, lang: &Lang) -> Bundle {
         scan,
         lang,
         wired: &wired,
+        stubbed: &stubbed,
         hooks,
         block_entities: &block_entities,
     };
@@ -188,6 +240,11 @@ pub fn generate(scan: &ModScan, lang: &Lang) -> Bundle {
             let (file, body) = ctx.helper(hook);
             files.insert(format!("{dir}/{file}"), body);
         }
+        for (hook, uses) in &stubbed {
+            if let Some((file, body)) = ctx.stub_helper(hook, uses) {
+                files.insert(format!("{dir}/{file}"), body);
+            }
+        }
     }
     for (rel, text) in &content.files {
         files.insert(format!("content/{rel}"), text.clone());
@@ -210,6 +267,7 @@ pub fn generate(scan: &ModScan, lang: &Lang) -> Bundle {
         } else {
             BTreeMap::new()
         },
+        stubbed: stubbed.clone(),
         unwired,
     };
     let porting = ctx.porting_md(&bundle);
@@ -485,6 +543,7 @@ struct Ctx<'a> {
     scan: &'a ModScan,
     lang: &'a Lang,
     wired: &'a BTreeMap<&'static str, BTreeSet<String>>,
+    stubbed: &'a BTreeMap<&'static str, Uses>,
     hooks: u32,
     block_entities: &'a [BlockEntity],
 }
@@ -570,7 +629,93 @@ source = "runtime.rs"
                 id = hook.replace('_', "-"),
             );
         }
+        for hook in self.stubbed.keys() {
+            let Some(h) = hooks::hook(hook) else {
+                continue;
+            };
+            let Some(bindings) = h.bindings() else {
+                continue;
+            };
+            let bindings = bindings
+                .iter()
+                .map(|b| {
+                    format!(
+                        "  {{ name = \"{}\", ty = \"{}\", value = \"{}\" }},\n",
+                        b.name, b.ty, b.value
+                    )
+                })
+                .collect::<String>();
+            let _ = write!(
+                m,
+                "\n[[injection]]\nid = \"{id}\"\nkind = \"HEAD\"\ntarget = \"{target}\"\nhelper = \"{hook}.rs\"\nbindings = [\n{bindings}]\n",
+                id = hook.replace('_', "-"),
+                target = h.target,
+            );
+        }
         m
+    }
+
+    /// The helper for a hook from Horizon's hook table: its bindings, and a body
+    /// left to port, with the Java code that needs it named.
+    fn stub_helper(&self, hook: &str, uses: &Uses) -> Option<(String, String)> {
+        let h = hooks::hook(hook)?;
+        let bindings = h.bindings()?;
+        let params = bindings
+            .iter()
+            .map(|b| format!("{}: {}", b.name, b.ty))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let names = bindings
+            .iter()
+            .map(|b| b.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let contract = match h.contract.as_deref() {
+            Some("cancel") => "cancel: set its flag to stop what the game would do".to_string(),
+            Some("replace") => format!(
+                "replace: set `{}` to change the result",
+                h.out.as_deref().unwrap_or("its output")
+            ),
+            Some("collect") => format!(
+                "collect: add to `{}`",
+                h.out.as_deref().unwrap_or("its list")
+            ),
+            _ => "listen: it hears the event, and changes what its `&mut` parameters hold".into(),
+        };
+        let mut src = format!(
+            "// Horizon's `native_{hook}`: {doc}\n// Contract: {contract}.\n//\n// TODO: port into this function:\n",
+            doc = one_line(&h.doc),
+        );
+        for java in &uses.1 {
+            let _ = writeln!(src, "// - {}", one_line(java));
+        }
+        if !uses.0.is_empty() {
+            let _ = writeln!(
+                src,
+                "// (in {})",
+                uses.0
+                    .iter()
+                    .map(|c| short(c))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+        let _ = writeln!(src, "fn {id}_{hook}({params}) {{", id = self.id);
+        if bindings
+            .first()
+            .is_some_and(|b| b.name == "game" && b.ty.ends_with("crate::game::Game<'_>"))
+        {
+            let _ = writeln!(
+                src,
+                "    // Turned off in Options > Mods: nothing until the next build leaves it out.\n    if !game.native_on(crate::game::{module}::ID) {{\n        return;\n    }}",
+                module = self.module
+            );
+        }
+        if !names.is_empty() {
+            let _ = writeln!(src, "    let _ = ({names});");
+        }
+        src.push_str("}\n");
+        Some((format!("{hook}.rs"), src))
     }
 
     fn runtime(&self) -> String {
@@ -1145,6 +1290,32 @@ fn {id}_block_entity_tick(pos: [i32; 3], entity: &mut horizon_client::containers
             let _ = writeln!(p, "| `native_{hook}` | {calls} | {java} |");
         }
 
+        if !bundle.stubbed.is_empty() {
+            let _ = write!(
+                p,
+                "\n## Hooks to port into\n\nThese hook points have a helper with Horizon's own bindings (read from Horizon {rev}'s \
+                 source); the logic is yours to port into each. A helper runs inside the hooked function, so it \
+                 reaches the game through its parameters. A Mixin's target is mapped to the hook that does its job \
+                 where Horizon has one: a hook point holds across Horizon versions, a Mixin into Horizon's own \
+                 functions would pin the bundle to one commit.\n\n\
+                 | Hook | File | What it is | Port here |\n| --- | --- | --- | --- |\n",
+                rev = &hooks::catalog().horizon[..7]
+            );
+            for (hook, (_, java)) in &bundle.stubbed {
+                let doc = hooks::hook(hook)
+                    .map(|h| one_line(&h.doc))
+                    .unwrap_or_default();
+                let _ = writeln!(
+                    p,
+                    "| `native_{hook}` | `mixins/{id}/{hook}.rs` | {doc} | {} |",
+                    java.iter()
+                        .map(|j| one_line(j))
+                        .collect::<Vec<_>>()
+                        .join("; "),
+                    id = self.id,
+                );
+            }
+        }
         if !bundle.unwired.is_empty() {
             p.push_str("\n## Hooks to wire by hand\n\nHorizon has hook points for these, but horizon-porter does not generate them yet. Look each one up in Horizon's `native-hooks.json` (its target and contract) and add an `[[injection]]` with a helper, like the ones generated here.\n\n| Horizon hook | Replaces | Used in |\n| --- | --- | --- |\n");
             for (hook, (classes, java)) in &bundle.unwired {
@@ -1152,7 +1323,11 @@ fn {id}_block_entity_tick(pos: [i32; 3], entity: &mut horizon_client::containers
                     p,
                     "| `native_{hook}` | {} | {} |",
                     java.iter()
-                        .map(|j| format!("`{j}`"))
+                        .map(|j| if j.starts_with('`') {
+                            j.clone()
+                        } else {
+                            format!("`{j}`")
+                        })
                         .collect::<Vec<_>>()
                         .join(", "),
                     classes
@@ -1344,6 +1519,45 @@ fn bindings(hook: &str) -> &'static [(&'static str, &'static str, &'static str)]
         ],
         _ => &[],
     }
+}
+
+/// The Mixin members whose target method a Horizon hook stands for, with the hook
+/// and how it matched. Accessors, shadows and members that need nothing are left out.
+fn mixin_hooks(
+    scan: &ModScan,
+) -> Vec<(
+    &porter_model::MixinClass,
+    &porter_model::MixinMember,
+    &'static hooks::HorizonHook,
+    hooks::Match,
+)> {
+    let mut out = Vec::new();
+    for mx in &scan.mixins {
+        for member in &mx.members {
+            if matches!(member.verdict, Verdict::NotNeeded(_))
+                || ["Shadow", "Accessor", "Invoker", "Unique", "merged"]
+                    .contains(&member.annotation.as_str())
+            {
+                continue;
+            }
+            for target in &mx.targets {
+                for method in &member.target_methods {
+                    for (hook, how) in hooks::method_hooks(target, method) {
+                        out.push((mx, member, hook, how));
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Text for a comment or a table cell: on one line.
+fn one_line(s: &str) -> String {
+    s.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .replace('|', "\\|")
 }
 
 fn short(name: &str) -> &str {
