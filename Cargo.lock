@@ -3001,6 +3001,7 @@ name = "porter-report"
 version = "0.6.0"
 dependencies = [
  "porter-java",
+ "porter-map",
  "porter-model",
 ]
 
