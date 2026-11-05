@@ -155,6 +155,19 @@ tick on the server, saving what changed. Port the tick's body and the block work
 `/data get block <x y z>` shows its saved values. `PORTING.md` lists every block's
 template and why, and anything left out.
 
+A block entity that opens a menu is a **machine** (a crusher, a furnace of the mod's
+own). Its Java menu is read for its slots (`addSlot(new Slot(container, 0, 56, 35))`),
+which of them players only take from, where the player's inventory starts and how many
+data slots it syncs; its screen for its size and texture. The port gets a menu type in
+`content/`, the block's slots and menu (`native_block_entity_container`, with hoppers
+putting in from above and the sides and taking results from below), and its screen
+laid out as the Java one, drawn with the mod's own texture (`native_screen`,
+`native_screen_draw`). The machine's block copies a furnace or a barrel, which open a
+menu. Its tick gets a `Machine`: the slots, the data slots its screen shows, and the
+mod's recipes of its own types, read from their JSON files with ingredients resolved
+to items (`machine.recipe_for("grind:crushing", 0)`). The screen's progress arrows are a
+`draw_<name>` function to port, like the tick.
+
 A mod that is only content (no client hooks, no block entities) gets `content/` alone:
 nothing to build or trust.
 

@@ -65,6 +65,29 @@ pub fn generate(
     version: &str,
     description: &str,
 ) -> Content {
+    generate_with(
+        scan,
+        id,
+        java_id,
+        name,
+        version,
+        description,
+        &BTreeMap::new(),
+    )
+}
+
+/// [`generate`], with the blocks that open a menu (`machines`: block name → its
+/// menu class): Horizon opens a mod's menu only from a block whose template opens
+/// one, so they copy a furnace (a horizontal `facing`) or a barrel.
+pub fn generate_with(
+    scan: &ModScan,
+    id: &str,
+    java_id: &str,
+    name: &str,
+    version: &str,
+    description: &str,
+    machines: &BTreeMap<String, String>,
+) -> Content {
     let mut content = Content::default();
     let root = Path::new(&scan.input);
     let mut namespaces = BTreeSet::new();
@@ -142,7 +165,23 @@ pub fn generate(
             .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
             .map(|j| blockstate_properties(&j))
             .unwrap_or_default();
-        if template == DEFAULT_TEMPLATE
+        if let Some(menu) = machines.get(block_name) {
+            let horizontal = states.get("facing").is_some_and(|v| {
+                v.iter()
+                    .all(|x| ["north", "south", "east", "west"].contains(&x.as_str()))
+            });
+            let (t, like) = if horizontal {
+                (
+                    "minecraft:furnace",
+                    "a furnace, which turns the same four ways",
+                )
+            } else {
+                ("minecraft:barrel", "a barrel")
+            };
+            template = t.to_string();
+            template_from =
+                format!("it opens a menu (`{menu}`): its template must open one, as {like} does");
+        } else if template == DEFAULT_TEMPLATE
             && let Some((t, why)) = template_for_states(&states)
         {
             template = t.to_string();

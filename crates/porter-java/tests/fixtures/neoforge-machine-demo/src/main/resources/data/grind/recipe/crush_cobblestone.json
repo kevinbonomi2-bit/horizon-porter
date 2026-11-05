@@ -1,0 +1,1 @@
+{ "type": "grind:crushing", "ingredient": { "item": "minecraft:cobblestone" }, "result": { "id": "minecraft:gravel" }, "time": 100 }

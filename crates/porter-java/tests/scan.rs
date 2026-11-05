@@ -553,3 +553,30 @@ fn scans_a_jar() {
     assert_eq!(scan.bundled_jars, vec!["META-INF/jars/lib.jar"]);
     assert_eq!(scan.resources.assets(), 1);
 }
+
+#[test]
+fn reads_a_machines_menu_and_screen() {
+    let scan = porter_java::scan(&fixture("neoforge-machine-demo")).unwrap();
+    let menu = scan
+        .menus
+        .iter()
+        .find(|m| m.class.ends_with("CrusherMenu"))
+        .expect("the crusher's menu");
+    assert_eq!(
+        menu.slots
+            .iter()
+            .map(|s| (s.index, s.x, s.y, s.result))
+            .collect::<Vec<_>>(),
+        [(Some(0), 56, 35, false), (Some(1), 116, 35, true)]
+    );
+    assert_eq!(menu.inventory, Some([8, 84]));
+    assert_eq!(menu.data_slots, 2);
+    let screen = scan
+        .screens
+        .iter()
+        .find(|s| s.class.ends_with("CrusherScreen"))
+        .expect("the crusher's screen");
+    assert_eq!(screen.menu.as_deref(), Some("CrusherMenu"));
+    assert_eq!((screen.width, screen.height), (Some(176), Some(166)));
+    assert_eq!(screen.texture.as_deref(), Some("textures/gui/crusher.png"));
+}

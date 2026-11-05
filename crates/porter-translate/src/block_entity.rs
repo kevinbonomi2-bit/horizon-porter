@@ -266,8 +266,13 @@ fn lit(s: &str) -> String {
 
 /// The runtime.rs code for the block entities: the `Saved` value type, the table of
 /// blocks, a state struct per type, its tick stub, and the two functions the hook
-/// helpers call.
-pub fn runtime(entities: &[BlockEntity]) -> String {
+/// helpers call. A machine's tick also gets its slots and data slots (`machines`).
+pub fn runtime(
+    entities: &[BlockEntity],
+    machines: &[crate::machine::Machine],
+    recipe_types: &[String],
+) -> String {
+    let machine_of = |be: &BlockEntity| machines.iter().find(|m| m.entity == be.id);
     let mut r = String::from(
         r#"
 /// A value in a block entity's saved compound, as NBT holds it.
@@ -367,13 +372,49 @@ pub const BLOCK_ENTITIES: &[(&str, &str, bool)] = &[
         r.push_str("        ]\n    }\n}\n");
 
         if be.ticks {
-            let _ = write!(
-                r,
-                "\n/// A server tick of the `{id}` block entity at `pos`, 20 a second. What it\n/// changes in `state` is saved with the block.\n///\n/// TODO: port the tick of `{java}`.\npub fn tick_{snake}(pos: [i32; 3], state: &mut {ty}) {{\n    let _ = (pos, state);\n}}\n",
-                id = be.id,
-                snake = be.snake,
-                ty = be.rust
-            );
+            if let Some(m) = machine_of(be) {
+                let slots = if m.results.is_empty() {
+                    format!("{} slots", m.slots)
+                } else {
+                    format!(
+                        "{} slots (players only take from {})",
+                        m.slots,
+                        m.results
+                            .iter()
+                            .map(usize::to_string)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                };
+                let recipes = if recipe_types.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        ", and the mod's recipes ({})",
+                        recipe_types
+                            .iter()
+                            .map(|t| format!("`{t}`"))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                };
+                let _ = write!(
+                    r,
+                    "\n/// A server tick of the `{id}` machine at `pos`, 20 a second. `machine` has its\n/// {slots}, its menu's {data} data slots (`ContainerData`: what its screen\n/// shows){recipes}. What the tick changes in them and in `state` is kept.\n///\n/// TODO: port the tick of `{java}`.\npub fn tick_{snake}(pos: [i32; 3], state: &mut {ty}, machine: &mut Machine<'_>) {{\n    let _ = (pos, state, machine);\n}}\n",
+                    id = be.id,
+                    data = m.data_slots,
+                    snake = be.snake,
+                    ty = be.rust
+                );
+            } else {
+                let _ = write!(
+                    r,
+                    "\n/// A server tick of the `{id}` block entity at `pos`, 20 a second. What it\n/// changes in `state` is saved with the block.\n///\n/// TODO: port the tick of `{java}`.\npub fn tick_{snake}(pos: [i32; 3], state: &mut {ty}) {{\n    let _ = (pos, state);\n}}\n",
+                    id = be.id,
+                    snake = be.snake,
+                    ty = be.rust
+                );
+            }
         }
     }
 
@@ -384,22 +425,33 @@ pub const BLOCK_ENTITIES: &[(&str, &str, bool)] = &[
     }
     r.push_str("        _ => Vec::new(),\n    }\n}\n");
 
-    r.push_str("\n/// A server tick of block entity `id` at `pos`: `get` reads its saved compound.\n/// Returns the values to save when the tick changed them.\npub fn tick_block_entity(\n    id: &str,\n    pos: [i32; 3],\n    get: impl Fn(&str) -> Option<Saved>,\n) -> Option<Vec<(&'static str, Saved)>> {\n");
+    r.push_str("\n/// A server tick of block entity `id` at `pos`: `get` reads its saved compound, and\n/// `machine` has its slots and data slots (none for one without). Returns the values\n/// to save when the tick changed them.\npub fn tick_block_entity(\n    id: &str,\n    pos: [i32; 3],\n    get: impl Fn(&str) -> Option<Saved>,\n    machine: &mut Machine<'_>,\n) -> Option<Vec<(&'static str, Saved)>> {\n");
     let ticking: Vec<&BlockEntity> = entities.iter().filter(|b| b.ticks).collect();
     if ticking.is_empty() {
-        r.push_str("    let _ = (id, pos, get);\n    None\n}\n");
+        r.push_str("    let _ = (id, pos, get, machine);\n    None\n}\n");
     } else {
         r.push_str("    match id {\n");
         for be in ticking {
+            let machine_arg = if machine_of(be).is_some() {
+                ", machine"
+            } else {
+                ""
+            };
             let _ = writeln!(
                 r,
-                "        \"{id}\" => {{\n            let before = {ty}::load(get);\n            let mut state = before.clone();\n            tick_{snake}(pos, &mut state);\n            (state != before).then(|| state.save())\n        }}",
+                "        \"{id}\" => {{\n            let before = {ty}::load(get);\n            let mut state = before.clone();\n            tick_{snake}(pos, &mut state{machine_arg});\n            (state != before).then(|| state.save())\n        }}",
                 id = be.id,
                 ty = be.rust,
                 snake = be.snake
             );
         }
-        r.push_str("        _ => None,\n    }\n}\n");
+        r.push_str(
+            "        _ => {\n            let _ = machine;\n            None\n        }\n    }\n}\n",
+        );
+    }
+    r.push_str(crate::machine::MACHINE_TYPES);
+    if !machines.is_empty() {
+        r.push_str(&crate::machine::runtime(machines, recipe_types));
     }
     r
 }

@@ -1,0 +1,1 @@
+{ "parent": "minecraft:block/orientable", "textures": { "top": "minecraft:block/smooth_stone", "front": "minecraft:block/blast_furnace_front", "side": "minecraft:block/smooth_stone" } }

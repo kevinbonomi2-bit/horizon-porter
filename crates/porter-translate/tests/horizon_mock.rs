@@ -43,6 +43,18 @@ const HOOKS: &[(&str, &str)] = &[
         "native_block_entity_tick",
         "&mut self, pos: [i32; 3], entity: &mut ModBlockEntity",
     ),
+    (
+        "native_block_entity_container",
+        "&self, block: &str, container: &mut Option<ModContainer>",
+    ),
+    (
+        "native_screen",
+        "&self, block: &str, screen: &mut Option<NativeScreen>",
+    ),
+    (
+        "native_screen_draw",
+        "&self, block: &str, data: &[i32], batch: &mut HudBatch, origin: [f32; 2]",
+    ),
 ];
 
 const MOCK_LIB: &str = r#"
@@ -87,7 +99,7 @@ pub mod horizon_world {
 // horizon-client's containers module: ModBlockEntity derefs to its fields, and
 // each mutable access counts as a change.
 pub mod containers {
-    pub struct ItemStack;
+    use crate::items::ItemStack;
     pub struct ModBlockEntityFields {
         pub id: String,
         pub nbt: crate::horizon_world::nbt::Compound,
@@ -109,6 +121,58 @@ pub mod containers {
             self.changes += 1;
             &mut self.fields
         }
+    }
+    // containers.rs (horizon-client-render): a mod block's slots and menu.
+    pub struct ModContainer {
+        pub slots: usize,
+        pub faces: [Vec<usize>; 6],
+        pub inputs: Vec<usize>,
+        pub outputs: Vec<usize>,
+        pub menu: Option<String>,
+    }
+}
+
+// horizon-items' ItemStack (items.rs, item_data.rs).
+pub mod items {
+    use std::sync::Arc;
+    pub struct StackData;
+    pub struct ItemStack {
+        pub item: Arc<str>,
+        pub count: u32,
+        pub damage: u32,
+        pub extra: Option<Box<StackData>>,
+    }
+    impl ItemStack {
+        pub fn new(item: &str, count: u32) -> Self {
+            Self { item: item.into(), count, damage: 0, extra: None }
+        }
+    }
+}
+
+// crafting.rs: a mod's recipe as its file says, and an ingredient's items.
+pub mod crafting {
+    use std::collections::HashSet;
+    use std::sync::Arc;
+    pub struct CustomRecipe {
+        pub id: String,
+        pub json: Arc<serde_json::Value>,
+    }
+    pub struct Ingredient {
+        pub items: HashSet<String>,
+        pub order: Vec<String>,
+    }
+}
+
+// mod_api.rs: a mod block's screen.
+pub mod mod_api {
+    pub struct NativeScreen {
+        pub width: f32,
+        pub height: f32,
+        pub slots: Vec<Option<[f32; 2]>>,
+        pub inventory_y: f32,
+        pub inventory_x: f32,
+        pub own_labels: bool,
+        pub own_background: bool,
     }
 }
 
@@ -136,8 +200,11 @@ pub mod game {
     pub mod native_hooks {
         #![allow(unused_variables, dead_code)]
         use super::Game;
-        use crate::containers::ModBlockEntity;
+        use crate::containers::{ModBlockEntity, ModContainer};
+        use crate::crafting::{CustomRecipe, Ingredient};
         use crate::extras_hud::Corners;
+        use crate::items::ItemStack;
+        use crate::mod_api::NativeScreen;
         use crate::horizon_world::nbt::Compound;
         use crate::hud::HudBatch;
         // In Horizon, horizon_world is a dependency: helpers name it by its crate path.
@@ -171,6 +238,11 @@ pub mod game {
             pub fn native_chat(&mut self, text: &str) {}
             pub fn native_setting(&self, mod_id: &str, key: &str) -> Option<String> { None }
             pub fn native_set_setting(&self, mod_id: &str, key: &str, value: &str) {}
+            pub fn native_sprite(&self, batch: &mut HudBatch, name: &str, src: [f32; 4], dst: [f32; 4]) -> bool { false }
+            pub fn native_sprite_size(&self, name: &str) -> Option<[f32; 2]> { None }
+            pub fn native_recipes_of_type(&self, kind: &str) -> &[CustomRecipe] { &[] }
+            pub fn native_recipe_ingredient(&self, json: &serde_json::Value) -> Option<Ingredient> { None }
+            pub fn native_recipe_result(&self, json: &serde_json::Value) -> Option<ItemStack> { None }
         }
 
         impl Game<'_> {
@@ -216,6 +288,24 @@ fn block_entity_helpers_compile_against_horizon_api() {
         assert!(b.wired.contains_key(hook), "{hook}");
     }
     compiles_against_the_mock(&b, "blocks");
+}
+
+#[test]
+fn machine_helpers_compile_against_horizon_api() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../porter-java/tests/fixtures/neoforge-machine-demo");
+    let scan = porter_java::scan(&path).unwrap();
+    let lang = bundle::load_lang(&scan);
+    let b = bundle::generate(&scan, &lang);
+    for hook in [
+        "block_entity_container",
+        "screen",
+        "screen_draw",
+        "block_entity_tick",
+    ] {
+        assert!(b.wired.contains_key(hook), "{hook}");
+    }
+    compiles_against_the_mock(&b, "machines");
 }
 
 /// Splices the bundle's helpers into the mock's hooks and runs `cargo check` on it.
@@ -280,7 +370,7 @@ fn compiles_against_the_mock(b: &bundle::Bundle, name: &str) {
     std::fs::create_dir_all(mock.join("src")).unwrap();
     std::fs::write(
         mock.join("Cargo.toml"),
-        "[package]\nname = \"horizon-client\"\nversion = \"0.0.0\"\nedition = \"2024\"\npublish = false\n\n[workspace]\n",
+        "[package]\nname = \"horizon-client\"\nversion = \"0.0.0\"\nedition = \"2024\"\npublish = false\n\n[dependencies]\nserde_json = \"1\"\n\n[workspace]\n",
     )
     .unwrap();
     std::fs::write(mock.join("src/lib.rs"), lib).unwrap();

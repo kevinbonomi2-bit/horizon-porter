@@ -1,0 +1,1 @@
+{ "type": "grind:crushing", "ingredient": "#minecraft:sand", "result": { "id": "minecraft:white_dye", "count": 2 }, "time": 60 }

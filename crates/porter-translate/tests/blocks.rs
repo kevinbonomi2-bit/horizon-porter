@@ -168,3 +168,43 @@ fn packages_the_content_mod() {
     assert!(entries.contains(&"assets/demo/lang/en_us.json".to_string()));
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn ports_a_machine() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../porter-java/tests/fixtures/neoforge-machine-demo");
+    let scan = porter_java::scan(&path).unwrap();
+    let b = bundle::generate(&scan, &bundle::load_lang(&scan));
+    let m = &b.machines[0];
+    assert_eq!(
+        (
+            m.entity.as_str(),
+            m.menu_type.as_str(),
+            m.slots,
+            m.data_slots
+        ),
+        ("grind:crusher", "grind:crusher", 2, 2)
+    );
+    assert_eq!(m.results, [1]);
+    assert_eq!(m.layout, [Some([56, 35]), Some([116, 35])]);
+    assert_eq!(m.texture.as_deref(), Some("grind:gui/crusher"));
+
+    let menu: serde_json::Value =
+        serde_json::from_str(&b.files["content/data/grind/horizon/menu/crusher.json"]).unwrap();
+    assert_eq!(
+        menu,
+        serde_json::json!({ "slots": 2, "data_slots": 2, "results": [1] })
+    );
+    let block: serde_json::Value =
+        serde_json::from_str(&b.files["content/data/grind/horizon/block/crusher.json"]).unwrap();
+    assert_eq!(block["template"], "minecraft:furnace");
+
+    let runtime = &b.files["mixins/grind/runtime.rs"];
+    assert!(runtime.contains(
+        "pub fn tick_crusher(pos: [i32; 3], state: &mut Crusher, machine: &mut Machine<'_>)"
+    ));
+    assert!(runtime.contains(r#"pub const RECIPE_TYPES: &[&str] = &["grind:crushing"];"#));
+    assert!(runtime.contains("pub fn draw_crusher(data: &[i32]) -> Vec<Sprite>"));
+    assert!(b.hooks >= 85);
+    assert!(b.files["PORTING.md"].contains("## Machines"));
+}

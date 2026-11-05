@@ -18,6 +18,7 @@ use porter_model::{ModScan, Verdict};
 
 use crate::block_entity::{self, BlockEntity};
 use crate::content;
+use crate::machine::{self, Machine};
 use porter_map::{hooks, ledger};
 
 /// The Horizon and horizon-mixins commits Horizon's own native mods were tested on
@@ -40,6 +41,8 @@ pub struct Bundle {
     /// The content mod under `content/`: its blocks, items and what was left out.
     pub content: content::Content,
     pub block_entities: Vec<BlockEntity>,
+    /// Block entities with slots and a menu.
+    pub machines: Vec<Machine>,
     /// Hooks wired completely, with the Java classes that need each.
     pub wired: BTreeMap<&'static str, BTreeSet<String>>,
     /// Hooks with a generated helper whose body is left to port: the Java classes
@@ -177,9 +180,45 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
     }
 
     // Blocks, items and resources: a content mod. Block entities: native hooks.
-    let content = content::generate(scan, &id, &java_id, &name, &version, &description);
     let ns = content::namespace(&java_id, &id).to_string();
     let block_entities = block_entity::find(scan, &ns);
+    let mut machines = machine::find(scan, &ns, &id, &block_entities);
+    let recipe_types = machine::recipe_types(scan, &ns);
+    let machine_blocks: BTreeMap<String, String> = machines
+        .iter()
+        .flat_map(|m| {
+            let menu = m.menu_class.rsplit('.').next().unwrap_or(&m.menu_class);
+            let prefix = format!("{ns}:");
+            m.blocks.iter().filter_map(move |b| {
+                let name = b.strip_prefix(&prefix)?;
+                Some((name.to_string(), menu.to_string()))
+            })
+        })
+        .collect();
+    let mut content = content::generate_with(
+        scan,
+        &id,
+        &java_id,
+        &name,
+        &version,
+        &description,
+        &machine_blocks,
+    );
+    if !content.is_empty() {
+        content.files.extend(machine::content_files(&machines));
+    }
+    // A screen texture the mod doesn't ship: Horizon draws its plain panel instead.
+    for m in &mut machines {
+        let shipped = m.texture.as_deref().is_some_and(|t| {
+            let (tns, path) = t.split_once(':').unwrap_or((&ns, t));
+            content
+                .copies
+                .contains_key(&format!("assets/{tns}/textures/{path}.png"))
+        });
+        if !shipped {
+            m.texture = None;
+        }
+    }
     let mut hooks = 1;
     let mut stubbed: BTreeMap<&'static str, Uses> = BTreeMap::new();
     if !block_entities.is_empty() {
@@ -193,6 +232,16 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
             wired.insert("block_entity_ticks", classes.clone());
             wired.insert("block_entity_tick", classes);
         }
+    }
+    if !machines.is_empty() && !content.is_empty() {
+        let menus: BTreeSet<String> = machines.iter().map(|m| m.menu_class.clone()).collect();
+        let screens: BTreeSet<String> = machines
+            .iter()
+            .filter_map(|m| m.screen_class.clone())
+            .collect();
+        wired.insert("block_entity_container", menus);
+        wired.insert("screen", screens.clone());
+        wired.insert("screen_draw", screens);
     }
     // Every other hook Horizon has gets a helper with its bindings, to port into.
     for (hook, uses) in std::mem::take(&mut unwired) {
@@ -236,6 +285,8 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
         stubbed: &stubbed,
         hooks,
         block_entities: &block_entities,
+        machines: &machines,
+        recipe_types: &recipe_types,
         statics: &java_statics,
         ledger: horizon.map(|src| (src.to_path_buf(), unmapped_ports(scan, src))),
     };
@@ -285,6 +336,7 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
         hooks,
         content,
         block_entities: block_entities.clone(),
+        machines: machines.clone(),
         wired: if native {
             wired.clone()
         } else {
@@ -590,6 +642,9 @@ struct Ctx<'a> {
     stubbed: &'a BTreeMap<&'static str, Uses>,
     hooks: u32,
     block_entities: &'a [BlockEntity],
+    machines: &'a [Machine],
+    /// The mod's own recipe types: `grind:crushing`.
+    recipe_types: &'a [String],
     /// The Java statics the mod's code shares.
     statics: &'a [crate::statics::Module],
     /// The Horizon checkout read, and the functions that port each unmapped
@@ -811,7 +866,11 @@ pub const DESCRIPTION: &str = "{description}";
         }
 
         if !self.block_entities.is_empty() {
-            r.push_str(&block_entity::runtime(self.block_entities));
+            r.push_str(&block_entity::runtime(
+                self.block_entities,
+                self.machines,
+                self.recipe_types,
+            ));
         }
 
         r.push_str(
@@ -828,6 +887,9 @@ mod tests {
 "#,
         );
         r.push_str(&block_entity::runtime_tests(self.block_entities));
+        if !self.block_entities.is_empty() {
+            r.push_str(&machine::runtime_tests(self.machines));
+        }
         r.push_str("}\n");
         r
     }
@@ -1043,20 +1105,110 @@ fn {id}_block_entity_ticks(block: &str, ticks: &mut bool) {{
             "block_entity_tick" => (
                 "block_entity_tick.rs",
                 format!(
-                    r#"// A server tick of one of {name}'s block entities: runs its tick on the state
-// saved with it, and saves what changed.
-fn {id}_block_entity_tick(pos: [i32; 3], entity: &mut horizon_client::containers::ModBlockEntity) {{
+                    r##"// A server tick of one of {name}'s block entities: runs its tick on the state
+// saved with it, its slots and its data slots, and keeps what changed.
+fn {id}_block_entity_tick(
+    game: &crate::game::Game<'_>,
+    pos: [i32; 3],
+    entity: &mut horizon_client::containers::ModBlockEntity,
+) {{
     use crate::game::{m} as m;
     use horizon_world::nbt::{{JavaString, Tag}};
     if !m::BLOCK_ENTITIES.iter().any(|(_, id, _)| *id == entity.id) {{
         return;
     }}
+    // An ingredient as Horizon reads one: an item, a `#tag`, or a list of them.
+    // Older recipe files write `{{"item": ...}}` or `{{"tag": ...}}`.
+    fn names(v: &serde_json::Value) -> Option<serde_json::Value> {{
+        use serde_json::Value;
+        let one = |v: &Value| match v {{
+            Value::String(s) => Some(s.clone()),
+            Value::Object(o) => o
+                .get("item")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .or_else(|| o.get("tag").and_then(Value::as_str).map(|t| format!("#{{t}}"))),
+            _ => None,
+        }};
+        match v {{
+            Value::Array(a) => Some(Value::Array(a.iter().filter_map(one).map(Value::String).collect())),
+            other => one(other).map(Value::String),
+        }}
+    }}
+    let recipes = |kind: &str| -> Vec<m::Recipe> {{
+        game.native_recipes_of_type(kind)
+            .iter()
+            .map(|r| {{
+                let json = &*r.json;
+                let items = |v: &serde_json::Value| -> Vec<String> {{
+                    names(v)
+                        .and_then(|n| game.native_recipe_ingredient(&n))
+                        .map(|i| i.order)
+                        .unwrap_or_default()
+                }};
+                let mut ingredients = Vec::new();
+                for key in ["ingredient", "input"] {{
+                    if let Some(v) = json.get(key) {{
+                        ingredients.push(items(v));
+                    }}
+                }}
+                for key in ["ingredients", "inputs"] {{
+                    if let Some(serde_json::Value::Array(list)) = json.get(key) {{
+                        ingredients.extend(list.iter().map(|v| items(v)));
+                    }}
+                }}
+                let result = json.get("result").and_then(|v| {{
+                    let v = match v {{
+                        serde_json::Value::String(s) => serde_json::json!({{ "id": s }}),
+                        serde_json::Value::Object(o) if !o.contains_key("id") && o.contains_key("item") => {{
+                            let mut o = o.clone();
+                            if let Some(item) = o.remove("item") {{
+                                o.insert("id".into(), item);
+                            }}
+                            serde_json::Value::Object(o)
+                        }}
+                        other => other.clone(),
+                    }};
+                    let stack = game.native_recipe_result(&v)?;
+                    Some(m::Stack::new(&stack.item, stack.count))
+                }});
+                let values = json
+                    .as_object()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|(k, v)| match v {{
+                        serde_json::Value::String(s) => Some((k.clone(), s.clone())),
+                        serde_json::Value::Number(_) | serde_json::Value::Bool(_) => Some((k.clone(), v.to_string())),
+                        _ => None,
+                    }})
+                    .collect();
+                m::Recipe {{
+                    id: r.id.clone(),
+                    ingredients,
+                    result,
+                    values,
+                }}
+            }})
+            .collect()
+    }};
+    let slots: Vec<Option<m::Stack>> = entity
+        .items
+        .iter()
+        .map(|s| s.as_ref().map(|s| m::Stack::new(&s.item, s.count)))
+        .collect();
+    let data = entity.data.clone();
+    let mut machine = m::Machine::new(slots.clone(), data.clone(), &recipes);
     let changed = {{
         let nbt = &entity.nbt;
-        m::tick_block_entity(&entity.id, pos, |key| {{
-            let tag = nbt.get(&JavaString::from(key))?;
-            {from_tag}
-        }})
+        m::tick_block_entity(
+            &entity.id,
+            pos,
+            |key| {{
+                let tag = nbt.get(&JavaString::from(key))?;
+                {from_tag}
+            }},
+            &mut machine,
+        )
     }};
     // Only a change touches the entity: each write marks it for saving and sending.
     if let Some(values) = changed {{
@@ -1065,10 +1217,123 @@ fn {id}_block_entity_tick(pos: [i32; 3], entity: &mut horizon_client::containers
             entity.nbt.insert(key.into(), tag);
         }}
     }}
+    if machine.slots != slots {{
+        let items = &mut entity.items;
+        for (i, new) in machine.slots.iter().enumerate() {{
+            if slots.get(i) == Some(new) {{
+                continue;
+            }}
+            let Some(cell) = items.get_mut(i) else {{
+                continue;
+            }};
+            *cell = match (new, cell.take()) {{
+                (None, _) => None,
+                // The same item: keep its components, change its count.
+                (Some(n), Some(mut old)) if *old.item == *n.item => {{
+                    old.count = n.count;
+                    Some(old)
+                }}
+                (Some(n), _) => Some(horizon_client::items::ItemStack::new(&n.item, n.count)),
+            }};
+        }}
+    }}
+    if machine.data != data {{
+        entity.data = machine.data.clone();
+    }}
 }}
-"#,
+"##,
                     from_tag = block_entity::FROM_TAG,
                     to_tag = block_entity::TO_TAG,
+                ),
+            ),
+            "block_entity_container" => (
+                "block_entity_container.rs",
+                format!(
+                    r#"// {name}'s machines have item slots, and open their menu when used.
+fn {id}_block_entity_container(block: &str, container: &mut Option<horizon_client::containers::ModContainer>) {{
+    use crate::game::{m} as m;
+    if container.is_some() {{
+        return;
+    }}
+    let Some(machine) = m::MACHINES.iter().find(|x| x.block == block) else {{
+        return;
+    }};
+    let inputs: Vec<usize> = (0..machine.slots).filter(|s| !machine.results.contains(s)).collect();
+    let outputs: Vec<usize> = if machine.results.is_empty() {{
+        (0..machine.slots).collect()
+    }} else {{
+        machine.results.to_vec()
+    }};
+    // As a furnace: hoppers put in from above and the sides, and take from below.
+    *container = Some(horizon_client::containers::ModContainer {{
+        slots: machine.slots,
+        faces: [
+            outputs.clone(),
+            inputs.clone(),
+            inputs.clone(),
+            inputs.clone(),
+            inputs.clone(),
+            inputs.clone(),
+        ],
+        inputs,
+        outputs,
+        menu: Some(machine.menu.into()),
+    }});
+}}
+"#
+                ),
+            ),
+            "screen" => (
+                "screen.rs",
+                format!(
+                    r#"// The screens of {name}'s machines: where each slot sits, as their Java menus place them.
+fn {id}_screen(
+    game: &crate::game::Game<'_>,
+    block: &str,
+    screen: &mut Option<horizon_client::mod_api::NativeScreen>,
+) {{
+    use crate::game::{m} as m;
+    if screen.is_some() {{
+        return;
+    }}
+    let Some(machine) = m::MACHINES.iter().find(|x| x.block == block) else {{
+        return;
+    }};
+    // The mod's own texture, when the game has it, instead of the plain panel.
+    let own_background = machine
+        .texture
+        .is_some_and(|t| game.native_sprite_size(t).is_some());
+    *screen = Some(horizon_client::mod_api::NativeScreen {{
+        width: machine.size[0],
+        height: machine.size[1],
+        slots: machine.layout.to_vec(),
+        inventory_y: machine.inventory[1],
+        inventory_x: machine.inventory[0],
+        own_labels: false,
+        own_background,
+    }});
+}}
+"#
+                ),
+            ),
+            "screen_draw" => (
+                "screen_draw.rs",
+                format!(
+                    r#"// Draws a screen of {name}'s machines, under its slots and items.
+fn {id}_screen_draw(
+    game: &crate::game::Game<'_>,
+    block: &str,
+    data: &[i32],
+    batch: &mut horizon_client::hud::HudBatch,
+    origin: [f32; 2],
+) {{
+    use crate::game::{m} as m;
+    for sprite in m::screen_sprites(block, data) {{
+        let [x, y, w, h] = sprite.dst;
+        game.native_sprite(batch, sprite.name, sprite.src, [origin[0] + x, origin[1] + y, w, h]);
+    }}
+}}
+"#
                 ),
             ),
             other => unreachable!("no helper for hook {other}"),
@@ -1182,6 +1447,62 @@ fn {id}_block_entity_tick(pos: [i32; 3], entity: &mut horizon_client::containers
             }
             if self.block_entities.iter().any(|b| b.blocks.is_empty()) {
                 p.push_str("\nA block entity with no blocks was registered for blocks the porter could not match: add them to `BLOCK_ENTITIES`.\n");
+            }
+        }
+        if !self.machines.is_empty() {
+            p.push_str(
+                "\n## Machines\n\nEach block entity that opens a menu is a machine. Its menu is a menu type of the content \
+                 mod (`content/data/<id>/horizon/menu/`), with the Java menu's slots, data slots and result slots. \
+                 `native_block_entity_container` gives the block its slots (hoppers put in from above and the sides, \
+                 and take results from below) and opens the menu; its block copies a furnace or a barrel, whose \
+                 block opens a menu. `native_screen` places the slots where the Java menu does, and \
+                 `native_screen_draw` draws what the `draw_` function returns under them. The tick gets a `Machine`: \
+                 its slots, its menu's data slots (`ContainerData`: set them for the screen to show progress) and \
+                 the mod's recipes, read from their JSON files.\n\n\
+                 | Machine | Menu type | Slots | Results | Data slots | Screen | Texture |\n| --- | --- | --- | --- | --- | --- | --- |\n",
+            );
+            for m in self.machines {
+                let _ = writeln!(
+                    p,
+                    "| `{}` | `{}` | {}{} | {} | {} | {} | {} |",
+                    m.entity,
+                    m.menu_type,
+                    m.slots,
+                    if m.approximate {
+                        " (some placed in a loop: check `MACHINES`)"
+                    } else {
+                        ""
+                    },
+                    if m.results.is_empty() {
+                        "-".to_string()
+                    } else {
+                        m.results
+                            .iter()
+                            .map(usize::to_string)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    },
+                    m.data_slots,
+                    m.screen_class
+                        .as_deref()
+                        .map_or("not found".into(), |s| format!("`{s}`")),
+                    m.texture
+                        .as_deref()
+                        .map_or("Horizon's plain panel".into(), |t| format!("`{t}`")),
+                );
+            }
+            if !self.recipe_types.is_empty() {
+                let _ = writeln!(
+                    p,
+                    "\nThe mod's recipe types, which `Machine::recipes` reads: {}. Each recipe's \
+                     ingredients are resolved to items (tags included), its result read, and its other plain \
+                     values kept (`recipe.number(\"time\")`).",
+                    self.recipe_types
+                        .iter()
+                        .map(|t| format!("`{t}`"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
             }
         }
         p
@@ -1569,12 +1890,37 @@ fn bindings(hook: &str) -> &'static [(&'static str, &'static str, &'static str)]
             ("ticks", "&mut bool", "&mut *ticks"),
         ],
         "block_entity_tick" => &[
+            ("game", "&crate::game::Game<'_>", "&*self"),
             ("pos", "[i32; 3]", "pos"),
             (
                 "entity",
                 "&mut horizon_client::containers::ModBlockEntity",
                 "&mut *entity",
             ),
+        ],
+        "block_entity_container" => &[
+            ("block", "&str", "block"),
+            (
+                "container",
+                "&mut Option<horizon_client::containers::ModContainer>",
+                "&mut *container",
+            ),
+        ],
+        "screen" => &[
+            ("game", "&crate::game::Game<'_>", "&*self"),
+            ("block", "&str", "block"),
+            (
+                "screen",
+                "&mut Option<horizon_client::mod_api::NativeScreen>",
+                "&mut *screen",
+            ),
+        ],
+        "screen_draw" => &[
+            ("game", "&crate::game::Game<'_>", "&*self"),
+            ("block", "&str", "block"),
+            ("data", "&[i32]", "data"),
+            ("batch", "&mut horizon_client::hud::HudBatch", "&mut *batch"),
+            ("origin", "[f32; 2]", "origin"),
         ],
         _ => &[],
     }

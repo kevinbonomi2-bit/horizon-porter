@@ -7,6 +7,7 @@
 mod classfile;
 pub mod decompile;
 mod jar;
+mod machines;
 mod metadata;
 mod mixin;
 mod resources;
@@ -161,14 +162,32 @@ fn scan_tree(root: &Path) -> Result<ModScan> {
         ));
     }
 
-    Ok(assemble(
-        root,
-        mods,
-        mixin_configs,
-        resources,
-        parsed,
-        warnings,
-    ))
+    let mut scan = assemble(root, mods, mixin_configs, resources, parsed, warnings);
+    machine_guis(root, &mut scan);
+    Ok(scan)
+}
+
+/// The mod's container menus and screens, read from their source files.
+fn machine_guis(root: &Path, scan: &mut ModScan) {
+    for class in &scan.classes {
+        let Some(sup) = class.superclass.as_deref() else {
+            continue;
+        };
+        let simple = sup.rsplit('.').next().unwrap_or(sup);
+        let is_menu = simple.ends_with("ContainerMenu") || simple.ends_with("ScreenHandler");
+        let is_screen = simple.ends_with("ContainerScreen") || simple == "HandledScreen";
+        if !is_menu && !is_screen {
+            continue;
+        }
+        let Ok(text) = read_lossy(&root.join(&class.path)) else {
+            continue;
+        };
+        if is_menu {
+            scan.menus.push(machines::menu(&class.name, &text));
+        } else {
+            scan.screens.push(machines::screen(&class.name, &text));
+        }
+    }
 }
 
 /// Builds the scan from parsed files: resolves names across files, then derives
@@ -279,6 +298,8 @@ fn assemble(
         registrations,
         resources,
         bundled_jars: Vec::new(),
+        menus: Vec::new(),
+        screens: Vec::new(),
         client,
         warnings,
     }

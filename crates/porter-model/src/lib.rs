@@ -201,6 +201,12 @@ pub struct ModScan {
     /// Client features found in the code (source scans only).
     #[serde(default)]
     pub client: ClientFeatures,
+    /// The mod's container menus (`AbstractContainerMenu` subclasses): their slots.
+    #[serde(default)]
+    pub menus: Vec<MenuInfo>,
+    /// The mod's container screens (`AbstractContainerScreen` subclasses).
+    #[serde(default)]
+    pub screens: Vec<ScreenInfo>,
     /// Problems the scan hit but worked around, and things it could not read.
     pub warnings: Vec<String>,
 }
@@ -233,6 +239,46 @@ impl ModScan {
             .or_else(|| named.first().copied())
             .or_else(|| self.metadata.first())
     }
+}
+
+/// A container menu: the slots it shows, in the order it adds them.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MenuInfo {
+    /// The class, fully qualified.
+    pub class: String,
+    /// The container's own slots (the player's inventory left out).
+    pub slots: Vec<MenuSlot>,
+    /// Where the player's inventory starts: its first row's left slot.
+    pub inventory: Option<[i32; 2]>,
+    /// How many data slots it syncs (`addDataSlots`), when it could be read.
+    pub data_slots: usize,
+    /// Slots added in a loop the scanner could not unroll: the count is the
+    /// container's, not this list's.
+    pub approximate: bool,
+}
+
+/// One slot of a menu.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MenuSlot {
+    /// The container's slot it shows.
+    pub index: Option<i32>,
+    /// Its position in the screen, from the top left.
+    pub x: i32,
+    pub y: i32,
+    /// Players only take from it (a furnace's output).
+    pub result: bool,
+}
+
+/// A container screen: its size, its texture and the menu it shows.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScreenInfo {
+    pub class: String,
+    /// The menu class it shows, as written (`CrusherMenu`).
+    pub menu: Option<String>,
+    pub width: Option<i32>,
+    pub height: Option<i32>,
+    /// Its background texture: `textures/gui/crusher.png`.
+    pub texture: Option<String>,
 }
 
 /// One loader metadata file: `fabric.mod.json`, `neoforge.mods.toml` or `mods.toml`.

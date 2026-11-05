@@ -104,6 +104,15 @@ scenarios we check.
   159 helpers, far beyond the documented client set: blocks, block entities (with
   drawing helpers), entities, loot, players, screens and more. That makes M2 (content
   with behaviour) closer than this plan first assumed.
+- **M5, in progress (2026-11-05):** machines. `scan` reads each container menu's slots,
+  result slots, player inventory and data slots, and each container screen's size,
+  texture and menu. `port` makes a block entity that opens a menu a machine: a menu
+  type in the content mod, `native_block_entity_container` (its slots, faces and menu),
+  `native_screen` and `native_screen_draw` (the Java layout and texture), a furnace or
+  barrel template so the block opens it, and a tick that gets its slots, data slots and
+  the mod's recipes (`native_recipes_of_type`, ingredients resolved). The helpers are
+  type-checked against the Horizon API mock. Still to do: networking (packets to
+  `native_net_*`), config files, and the live test.
 
 ## Working with Horizon
 

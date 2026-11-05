@@ -1,0 +1,1 @@
+{ "type": "minecraft:crafting_shaped", "pattern": ["SSS", "SFS", "SSS"], "key": { "S": "minecraft:cobblestone", "F": "minecraft:flint" }, "result": { "id": "grind:crusher" } }
