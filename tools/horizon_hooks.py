@@ -180,6 +180,12 @@ def main() -> None:
             generics, params, ret, doc = found
             if not params or "self" not in params[0]:
                 continue
+            # A hook point not in native-hooks.json: it hands its arguments to the
+            # mods (`mod_api::dispatch_...`), so calling it reads nothing.
+            at = re.search(r"\bfn " + re.escape(name) + r"\b", text).start()
+            body = text[at : text.find("\n    }\n", at)]
+            if "mod_api::dispatch" in body:
+                continue
             helpers.append(
                 {
                     "name": name,
