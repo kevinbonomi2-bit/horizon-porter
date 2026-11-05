@@ -104,7 +104,7 @@ scenarios we check.
   159 helpers, far beyond the documented client set: blocks, block entities (with
   drawing helpers), entities, loot, players, screens and more. That makes M2 (content
   with behaviour) closer than this plan first assumed.
-- **M5, in progress (2026-11-05):** machines. `scan` reads each container menu's slots,
+- **M5, done (2026-11-05):** machines. `scan` reads each container menu's slots,
   result slots, player inventory and data slots, and each container screen's size,
   texture and menu. `port` makes a block entity that opens a menu a machine: a menu
   type in the content mod, `native_block_entity_container` (its slots, faces and menu),
@@ -117,8 +117,9 @@ scenarios we check.
   `Config` kept in Horizon's mod settings, with a working page in Options > Mods. The
   report now says when a mod can't be ported yet: Mixins that change how the game or
   its screens are drawn are out of reach until M6, whatever their injection kind. The
-  helpers are type-checked against the Horizon API mock. Still to do: the live test
-  (the Grind demo's Crusher).
+  helpers are type-checked against the Horizon API mock. Live-tested: the Grind demo's
+  Crusher crushes cobblestone into gravel with its progress arrow, and its settings
+  page changes its config.
 - **M6, in progress (2026-11-05):** rendering and screens. `scan` finds each
   `BlockEntityRenderer` and the block entity it draws, and each screen of the mod's own
   (`extends Screen`) with the classes that open it. A renderer becomes a `render_<name>`
@@ -127,9 +128,9 @@ scenarios we check.
   state; the generated port tests that every pose pushed is popped. A screen becomes a
   struct with `draw_`, `click_`, `key_` and `scroll_` functions, shown with
   `native_mod_screen_open` and drawn and clicked through the screen hooks. The Grind
-  demo has a spinning grindstone on its Crusher and a guide opened with G. Still to do:
-  baked and connected-texture models, item renderers, instanced rendering, overlays on
-  vanilla screens, and the live test.
+  demo has a spinning grindstone on its Crusher and a guide opened with G, both
+  live-tested in Horizon. Still to do: baked and connected-texture models, item
+  renderers, instanced rendering, and overlays on vanilla screens.
 
 ## Working with Horizon
 
