@@ -208,6 +208,12 @@ pub struct ModScan {
     /// The mod's container screens (`AbstractContainerScreen` subclasses).
     #[serde(default)]
     pub screens: Vec<ScreenInfo>,
+    /// The network messages the mod defines.
+    #[serde(default)]
+    pub payloads: Vec<PayloadInfo>,
+    /// The config values the mod defines.
+    #[serde(default)]
+    pub config: Vec<ConfigEntry>,
     /// Problems the scan hit but worked around, and things it could not read.
     pub warnings: Vec<String>,
 }
@@ -280,6 +286,62 @@ pub struct ScreenInfo {
     pub height: Option<i32>,
     /// Its background texture: `textures/gui/crusher.png`.
     pub texture: Option<String>,
+}
+
+/// A network message the mod defines: a `CustomPacketPayload` record.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PayloadInfo {
+    pub class: String,
+    /// Its channel, `namespace:path`, from its `CustomPacketPayload.Type`.
+    pub channel: Option<String>,
+    /// The record's components, in order.
+    pub fields: Vec<PayloadField>,
+    /// Whether clients send it to the server (`playToServer`, `playC2S`).
+    pub to_server: bool,
+    /// Whether the server sends it to clients (`playToClient`, `playS2C`).
+    pub to_client: bool,
+    /// The classes that register it, where its handlers are.
+    #[serde(default)]
+    pub registered_in: Vec<String>,
+}
+
+/// One component of a payload record: `BlockPos pos`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PayloadField {
+    pub name: String,
+    /// The Java type as written: `int`, `BlockPos`, `String`.
+    pub java_type: String,
+}
+
+/// One config value the mod defines with a `ModConfigSpec.Builder`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConfigEntry {
+    /// The class that defines it.
+    pub class: String,
+    /// Its key, with the sections it is pushed into: `general.maxSpeed`.
+    pub path: String,
+    pub kind: ConfigKind,
+    /// Its default, as written: `true`, `5`, `0.5`, `"text"` unquoted, `FAST`.
+    pub default: String,
+    pub min: Option<String>,
+    pub max: Option<String>,
+    /// An enum value's constants, when the enum is the mod's own.
+    #[serde(default)]
+    pub values: Vec<String>,
+    /// Its `comment(...)`.
+    pub comment: Option<String>,
+}
+
+/// The type of a config value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfigKind {
+    Bool,
+    Int,
+    Long,
+    Double,
+    String,
+    Enum,
 }
 
 /// One loader metadata file: `fabric.mod.json`, `neoforge.mods.toml` or `mods.toml`.

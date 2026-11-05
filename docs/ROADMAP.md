@@ -12,7 +12,7 @@ scenarios we check.
 | M3 | **Mixins** | Mixin translation via the port ledger, for the kinds horizon-mixins supports; blocked ones reported. | A mod that relies on several `@Inject` / `@ModifyArg` Mixins |
 | M4 | **AI translation loop** | Per-method AI translation with the compile/fix loop, resumable state, conflict-safe regeneration. | A mid-size mod (30–80 classes) mostly ported automatically |
 | M5 | **Menus, networking, config, recipes** | Container screens, client↔server packets, config files, custom recipe types. | A mod with a machine GUI and a custom recipe type |
-| M6 | **Rendering** | Block entity renderers, baked / connected-texture models, item renderers, then instanced rendering (Flywheel's role). | Animated rotating parts drawn correctly |
+| M6 | **Rendering and screens** | Block entity renderers, baked / connected-texture models, item renderers, then instanced rendering (Flywheel's role). Custom screens and overlays on vanilla screens (recipe viewers like JEI, guidebooks, menus opened by a key or an item). | Animated rotating parts drawn correctly; a custom screen that opens and takes clicks |
 | M7 | **Large mods** | Library shims (Registrate, Flywheel, Ponder), fluids and transfer APIs, moving structures. | Create's kinetics and basic machines (see [CREATE.md](CREATE.md)) |
 
 ## Status
@@ -110,9 +110,15 @@ scenarios we check.
   type in the content mod, `native_block_entity_container` (its slots, faces and menu),
   `native_screen` and `native_screen_draw` (the Java layout and texture), a furnace or
   barrel template so the block opens it, and a tick that gets its slots, data slots and
-  the mod's recipes (`native_recipes_of_type`, ingredients resolved). The helpers are
-  type-checked against the Horizon API mock. Still to do: networking (packets to
-  `native_net_*`), config files, and the live test.
+  the mod's recipes (`native_recipes_of_type`, ingredients resolved). Network
+  messages (`CustomPacketPayload` records) become Rust structs with their channel and
+  an encoding, decoded in `native_net_from_client`/`native_net_from_server` and passed
+  to handlers to port, which send through an `Outbox`. `ModConfigSpec` values become a
+  `Config` kept in Horizon's mod settings, with a working page in Options > Mods. The
+  report now says when a mod can't be ported yet: Mixins that change how the game or
+  its screens are drawn are out of reach until M6, whatever their injection kind. The
+  helpers are type-checked against the Horizon API mock. Still to do: the live test
+  (the Grind demo's Crusher).
 
 ## Working with Horizon
 

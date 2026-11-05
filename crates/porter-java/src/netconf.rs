@@ -1,0 +1,403 @@
+//! A mod's network messages and config values, read from its source.
+//!
+//! Messages are `CustomPacketPayload` records: their components, their channel (from
+//! `CustomPacketPayload.Type`), and which way they travel (NeoForge's
+//! `playToServer`/`playToClient`, Fabric's `playC2S`/`playS2C` and receivers).
+//! Config values are `ModConfigSpec.Builder` (or Forge's `ForgeConfigSpec`) chains:
+//! `push`/`pop` sections, `comment`, `define`, `defineInRange`, `defineEnum`.
+
+use porter_model::{ConfigEntry, ConfigKind, PayloadField, PayloadInfo};
+
+use crate::machines::{balanced, balanced_braces, calls, split_top};
+
+/// The payload record `class` (simple or qualified name), read from its source.
+/// `mod_id` stands in for a namespace written as a constant (`MODID`).
+pub fn payload(class: &str, source: &str, mod_id: Option<&str>) -> PayloadInfo {
+    let simple = class.rsplit('.').next().unwrap_or(class);
+    let mut fields = Vec::new();
+    if let Some(i) = find_word(source, &format!("record {simple}"))
+        && let Some(open) = source[i..].find('(').map(|o| i + o)
+        && let Some(components) = balanced(&source[open..])
+    {
+        for c in split_top(components) {
+            let words: Vec<&str> = c
+                .split_whitespace()
+                .filter(|w| !w.starts_with('@') && *w != "final")
+                .collect();
+            if let Some((name, ty)) = words.split_last()
+                && !ty.is_empty()
+            {
+                fields.push(PayloadField {
+                    name: (*name).to_string(),
+                    java_type: ty.join(" "),
+                });
+            }
+        }
+    }
+    PayloadInfo {
+        class: class.to_string(),
+        channel: channel(source, mod_id),
+        fields,
+        to_server: false,
+        to_client: false,
+        registered_in: Vec::new(),
+    }
+}
+
+/// The channel a payload's `Type` names: `fromNamespaceAndPath(MODID, "sync")`,
+/// `Identifier.of("demo", "sync")`, `ResourceLocation.parse("demo:sync")`.
+fn channel(source: &str, mod_id: Option<&str>) -> Option<String> {
+    for name in ["fromNamespaceAndPath", "of", "tryBuild"] {
+        for args in calls(source, name) {
+            let parts = split_top(&args);
+            if parts.len() != 2 {
+                continue;
+            }
+            let Some(path) = string_literal(&parts[1]) else {
+                continue;
+            };
+            let ns = string_literal(&parts[0]).or_else(|| mod_id.map(str::to_string))?;
+            return Some(format!("{ns}:{path}"));
+        }
+    }
+    for name in ["parse", "withDefaultNamespace", "ResourceLocation"] {
+        for args in calls(source, name) {
+            if let Some(id) = string_literal(&args) {
+                return Some(if id.contains(':') {
+                    id
+                } else {
+                    format!("{}:{id}", mod_id.unwrap_or("minecraft"))
+                });
+            }
+        }
+    }
+    None
+}
+
+/// Marks which way each payload travels, from the registrations in `class`'s
+/// `source`, and that `class` registers it.
+pub fn directions(payloads: &mut [PayloadInfo], class: &str, source: &str) {
+    let registrations: [(&str, bool, bool); 8] = [
+        ("playToServer", true, false),
+        ("playToClient", false, true),
+        ("playBidirectional", true, true),
+        ("commonToServer", true, false),
+        ("commonToClient", false, true),
+        ("commonBidirectional", true, true),
+        ("configurationToServer", true, false),
+        ("configurationToClient", false, true),
+    ];
+    for p in payloads.iter_mut() {
+        let simple = p.class.rsplit('.').next().unwrap_or(&p.class);
+        let named = |args: &str| {
+            find_word(args, &format!("{simple}.")).is_some()
+                || find_word(args, &format!("{simple}::")).is_some()
+        };
+        let before = (p.to_server, p.to_client);
+        let mut found = false;
+        for (call, server, client) in registrations {
+            if calls(source, call).iter().any(|a| named(a)) {
+                p.to_server |= server;
+                p.to_client |= client;
+                found = true;
+            }
+        }
+        // Fabric: PayloadTypeRegistry.playC2S().register(...), and the receivers.
+        for (marker, server) in [
+            ("playC2S()", true),
+            ("playS2C()", false),
+            ("ServerPlayNetworking.registerGlobalReceiver", true),
+            ("ClientPlayNetworking.registerGlobalReceiver", false),
+        ] {
+            let mut from = 0;
+            while let Some(i) = source[from..].find(marker).map(|i| from + i) {
+                from = i + marker.len();
+                let rest = &source[from..];
+                let args = rest
+                    .find('(')
+                    .and_then(|o| balanced(&rest[o..]))
+                    .unwrap_or_default();
+                if named(args) {
+                    found = true;
+                    if server {
+                        p.to_server = true;
+                    } else {
+                        p.to_client = true;
+                    }
+                }
+            }
+        }
+        if (found || before != (p.to_server, p.to_client))
+            && !p.registered_in.iter().any(|c| c == class)
+        {
+            p.registered_in.push(class.to_string());
+        }
+    }
+}
+
+/// The config values a class defines, in order. `enums` gives the constants of the
+/// mod's own enums by simple name.
+pub fn config(class: &str, source: &str, enums: &dyn Fn(&str) -> Vec<String>) -> Vec<ConfigEntry> {
+    let mut out = Vec::new();
+    if !source.contains("ConfigSpec") {
+        return out;
+    }
+    let mut sections: Vec<String> = Vec::new();
+    let mut comment: Option<String> = None;
+    let mut from = 0;
+    while let Some(dot) = source[from..].find('.').map(|i| from + i) {
+        from = dot + 1;
+        let rest = &source[from..];
+        let name: String = rest
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect();
+        let after = rest[name.len()..].trim_start();
+        if name.is_empty() || !after.starts_with('(') {
+            continue;
+        }
+        let Some(args) = balanced(after) else {
+            continue;
+        };
+        let parts = split_top(args);
+        match name.as_str() {
+            "push" => {
+                if let Some(s) = parts.first().and_then(|a| string_literal(a)) {
+                    sections.extend(s.split('.').map(str::to_string));
+                }
+            }
+            "pop" => {
+                let n = parts
+                    .first()
+                    .and_then(|a| a.trim().parse::<usize>().ok())
+                    .unwrap_or(1);
+                for _ in 0..n {
+                    sections.pop();
+                }
+            }
+            "comment" => {
+                let text: Vec<String> = parts.iter().filter_map(|a| string_literal(a)).collect();
+                if !text.is_empty() {
+                    comment = Some(text.join(" "));
+                }
+            }
+            "define" | "defineInRange" | "defineEnum" => {
+                let Some(key) = parts.first().and_then(|a| string_literal(a)) else {
+                    continue;
+                };
+                let Some(default) = parts.get(1).map(|d| d.trim().to_string()) else {
+                    continue;
+                };
+                let path = sections
+                    .iter()
+                    .cloned()
+                    .chain(std::iter::once(key))
+                    .collect::<Vec<_>>()
+                    .join(".");
+                let (kind, default, values) = if name == "defineEnum" {
+                    let (ty, constant) = default.rsplit_once('.').unwrap_or(("", &default));
+                    let ty = ty.rsplit('.').next().unwrap_or(ty);
+                    let mut values = enums(ty);
+                    if values.is_empty() {
+                        values.push(constant.to_string());
+                    }
+                    (ConfigKind::Enum, constant.to_string(), values)
+                } else if let Some(s) = string_literal(&default) {
+                    (ConfigKind::String, s, Vec::new())
+                } else if default == "true" || default == "false" {
+                    (ConfigKind::Bool, default, Vec::new())
+                } else if let Some(n) = number(&default) {
+                    n
+                } else {
+                    (ConfigKind::String, default, Vec::new())
+                };
+                let (min, max) = if name == "defineInRange" {
+                    (
+                        parts.get(2).map(|m| number_text(m)),
+                        parts.get(3).map(|m| number_text(m)),
+                    )
+                } else {
+                    (None, None)
+                };
+                out.push(ConfigEntry {
+                    class: class.to_string(),
+                    path,
+                    kind,
+                    default,
+                    min,
+                    max,
+                    values,
+                    comment: comment.take(),
+                });
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// The constants of `enum name { A, B(1), C; ... }` in `source`.
+pub fn enum_constants(name: &str, source: &str) -> Vec<String> {
+    let Some(i) = find_word(source, &format!("enum {name}")) else {
+        return Vec::new();
+    };
+    let Some(open) = source[i..].find('{').map(|o| i + o) else {
+        return Vec::new();
+    };
+    let Some(body) = balanced_braces(&source[open..]) else {
+        return Vec::new();
+    };
+    let head = body.split(';').next().unwrap_or(body);
+    split_top(head)
+        .iter()
+        .filter_map(|c| {
+            let id: String = c
+                .trim()
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect();
+            (!id.is_empty()).then_some(id)
+        })
+        .collect()
+}
+
+/// A numeric literal's kind and value: `5` → Int, `5L` → Long, `0.5`/`2.0D` → Double.
+fn number(text: &str) -> Option<(ConfigKind, String, Vec<String>)> {
+    let t = text.trim();
+    if let Some(v) = t.strip_suffix(['L', 'l']) {
+        v.parse::<i64>()
+            .ok()
+            .map(|_| (ConfigKind::Long, v.to_string(), Vec::new()))
+    } else if t.parse::<i64>().is_ok() {
+        Some((ConfigKind::Int, t.to_string(), Vec::new()))
+    } else {
+        let v = t.trim_end_matches(['D', 'd', 'F', 'f']);
+        v.parse::<f64>()
+            .ok()
+            .map(|_| (ConfigKind::Double, v.to_string(), Vec::new()))
+    }
+}
+
+/// A bound as written, without a type suffix (`Integer.MAX_VALUE` stays as is).
+fn number_text(text: &str) -> String {
+    number(text).map_or_else(|| text.trim().to_string(), |(_, v, _)| v)
+}
+
+/// The text of a string literal (several joined with `+` are concatenated).
+fn string_literal(text: &str) -> Option<String> {
+    let t = text.trim();
+    let mut out = String::new();
+    for part in t.split('+') {
+        let p = part.trim();
+        let inner = p.strip_prefix('"')?.strip_suffix('"')?;
+        out.push_str(&inner.replace("\\\"", "\"").replace("\\n", "\n"));
+    }
+    Some(out)
+}
+
+/// Where `word` starts in `source`, not inside a longer identifier.
+fn find_word(source: &str, word: &str) -> Option<usize> {
+    let mut from = 0;
+    while let Some(i) = source[from..].find(word).map(|i| from + i) {
+        let before = source[..i].chars().next_back();
+        let after = source[i + word.len()..].chars().next();
+        let ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
+        let word_end = word.chars().last().is_some_and(ident);
+        if !before.is_some_and(ident) && !(word_end && after.is_some_and(ident)) {
+            return Some(i);
+        }
+        from = i + word.len();
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const PAYLOAD: &str = r#"
+public record SetSpeed(BlockPos pos, int speed, @NotNull String note) implements CustomPacketPayload {
+    public static final Type<SetSpeed> TYPE =
+        new Type<>(ResourceLocation.fromNamespaceAndPath(Grind.MODID, "set_speed"));
+}
+"#;
+
+    #[test]
+    fn reads_a_payload_record() {
+        let p = payload("net.grind.net.SetSpeed", PAYLOAD, Some("grind"));
+        assert_eq!(p.channel.as_deref(), Some("grind:set_speed"));
+        let fields: Vec<(&str, &str)> = p
+            .fields
+            .iter()
+            .map(|f| (f.name.as_str(), f.java_type.as_str()))
+            .collect();
+        assert_eq!(
+            fields,
+            [("pos", "BlockPos"), ("speed", "int"), ("note", "String")]
+        );
+    }
+
+    #[test]
+    fn finds_which_way_payloads_travel() {
+        let mut ps = vec![
+            payload("SetSpeed", PAYLOAD, Some("grind")),
+            PayloadInfo {
+                class: "Synced".into(),
+                ..Default::default()
+            },
+        ];
+        directions(
+            &mut ps,
+            "Network",
+            r#"registrar.playToServer(SetSpeed.TYPE, SetSpeed.STREAM_CODEC, Handler::speed);
+               PayloadTypeRegistry.playS2C().register(Synced.ID, Synced.CODEC);"#,
+        );
+        assert!(ps[0].to_server && !ps[0].to_client);
+        assert!(!ps[1].to_server && ps[1].to_client);
+        assert_eq!(ps[0].registered_in, ["Network"]);
+    }
+
+    #[test]
+    fn reads_config_values_in_their_sections() {
+        let source = r#"
+public class Config {
+    private static final ModConfigSpec.Builder BUILDER = new ModConfigSpec.Builder();
+    static {
+        BUILDER.push("general");
+        public static final ModConfigSpec.BooleanValue LOUD = BUILDER
+            .comment("Whether the crusher makes noise")
+            .define("loud", true);
+        public static final ModConfigSpec.IntValue SPEED = BUILDER
+            .defineInRange("speed", 100, 1, 1000);
+        BUILDER.push("display");
+        MODE = BUILDER.defineEnum("mode", Mode.FAST);
+        BUILDER.pop(2);
+        RATE = BUILDER.defineInRange("rate", 0.5D, 0.0D, 1.0D);
+    }
+    enum Mode { SLOW, FAST(2), OFF; Mode() {} Mode(int x) {} }
+}
+"#;
+        let entries = config("Config", source, &|name| enum_constants(name, source));
+        let got: Vec<(&str, ConfigKind, &str)> = entries
+            .iter()
+            .map(|e| (e.path.as_str(), e.kind, e.default.as_str()))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("general.loud", ConfigKind::Bool, "true"),
+                ("general.speed", ConfigKind::Int, "100"),
+                ("general.display.mode", ConfigKind::Enum, "FAST"),
+                ("rate", ConfigKind::Double, "0.5"),
+            ]
+        );
+        assert_eq!(
+            entries[0].comment.as_deref(),
+            Some("Whether the crusher makes noise")
+        );
+        assert_eq!(entries[1].min.as_deref(), Some("1"));
+        assert_eq!(entries[1].max.as_deref(), Some("1000"));
+        assert_eq!(entries[2].values, ["SLOW", "FAST", "OFF"]);
+        assert_eq!(entries[3].max.as_deref(), Some("1.0"));
+    }
+}

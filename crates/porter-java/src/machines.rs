@@ -151,7 +151,7 @@ fn is_result(ty: &str, source: &str) -> bool {
 }
 
 /// The argument text of each call to `name` in `source` (`name(` ... `)`).
-fn calls(source: &str, name: &str) -> Vec<String> {
+pub(crate) fn calls(source: &str, name: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut from = 0;
     while let Some(i) = source[from..].find(name).map(|i| from + i) {
@@ -173,7 +173,7 @@ fn calls(source: &str, name: &str) -> Vec<String> {
 }
 
 /// What is inside the parentheses `text` opens with.
-fn balanced(text: &str) -> Option<&str> {
+pub(crate) fn balanced(text: &str) -> Option<&str> {
     let mut depth = 0;
     let mut in_str = false;
     let mut prev = ' ';
@@ -201,7 +201,7 @@ fn balanced(text: &str) -> Option<&str> {
 }
 
 /// What is inside the braces `text` opens with.
-fn balanced_braces(text: &str) -> Option<&str> {
+pub(crate) fn balanced_braces(text: &str) -> Option<&str> {
     let mut depth = 0;
     for (i, c) in text.char_indices() {
         match c {
@@ -219,7 +219,7 @@ fn balanced_braces(text: &str) -> Option<&str> {
 }
 
 /// Arguments split at commas outside parentheses.
-fn split_top(text: &str) -> Vec<String> {
+pub(crate) fn split_top(text: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut depth = 0;
     let mut cur = String::new();

@@ -580,3 +580,41 @@ fn reads_a_machines_menu_and_screen() {
     assert_eq!((screen.width, screen.height), (Some(176), Some(166)));
     assert_eq!(screen.texture.as_deref(), Some("textures/gui/crusher.png"));
 }
+
+#[test]
+fn reads_network_messages_and_config() {
+    let scan = porter_java::scan(&fixture("neoforge-machine-demo")).unwrap();
+    let speed = scan
+        .payloads
+        .iter()
+        .find(|p| p.class.ends_with("SetSpeed"))
+        .expect("SetSpeed");
+    assert_eq!(speed.channel.as_deref(), Some("grind:set_speed"));
+    assert!(speed.to_server && !speed.to_client);
+    assert_eq!(
+        speed
+            .fields
+            .iter()
+            .map(|f| (f.name.as_str(), f.java_type.as_str()))
+            .collect::<Vec<_>>(),
+        [("pos", "BlockPos"), ("speed", "int")]
+    );
+    let crushed = scan
+        .payloads
+        .iter()
+        .find(|p| p.class.ends_with("Crushed"))
+        .expect("Crushed");
+    assert!(crushed.to_client && !crushed.to_server);
+
+    let keys: Vec<&str> = scan.config.iter().map(|c| c.path.as_str()).collect();
+    assert_eq!(
+        keys,
+        [
+            "crusher.sounds",
+            "crusher.defaultTime",
+            "crusher.noise",
+            "xp"
+        ]
+    );
+    assert_eq!(scan.config[2].values, ["SILENT", "QUIET", "LOUD"]);
+}

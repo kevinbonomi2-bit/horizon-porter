@@ -168,6 +168,18 @@ mod's recipes of its own types, read from their JSON files with ingredients reso
 to items (`machine.recipe_for("grind:crushing", 0)`). The screen's progress arrows are a
 `draw_<name>` function to port, like the tick.
 
+A mod's **network messages** (`CustomPacketPayload` records) become Rust structs with
+their channel and fields, sent and received through Horizon's `native_net_*` hooks: the
+port decodes each message and calls its handler, which you (or the translation) port
+from the Java one. Its **config** (`ModConfigSpec`) becomes a `Config` kept in Horizon's
+mod settings, with a page in Options > Mods that toggles, cycles and steps each value.
+
+The report leads with whether the mod can be ported **today**. A Mixin can hook in the
+way horizon-mixins supports and still change something Horizon can't do yet: Mixins
+that change how the game or its screens are drawn reach Minecraft's renderer, which
+Horizon replaces with its own. A mod made mostly of those (a shader, a 3D GUI) is
+reported as "Not portable yet", and the app won't offer to pay for translating it.
+
 A mod that is only content (no client hooks, no block entities) gets `content/` alone:
 nothing to build or trust.
 

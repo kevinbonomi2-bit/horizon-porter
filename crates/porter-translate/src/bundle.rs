@@ -19,6 +19,7 @@ use porter_model::{ModScan, Verdict};
 use crate::block_entity::{self, BlockEntity};
 use crate::content;
 use crate::machine::{self, Machine};
+use crate::netconf::{self, Message, Setting};
 use porter_map::{hooks, ledger};
 
 /// The Horizon commit a port names, and the horizon-mixins commit Horizon's own
@@ -246,6 +247,25 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
         wired.insert("screen", screens.clone());
         wired.insert("screen_draw", screens);
     }
+    // Network messages: decoded where they arrive, handled in runtime.rs.
+    let messages = netconf::messages(&scan.payloads, &id);
+    for (hook, wanted) in [("net_from_client", true), ("net_from_server", false)] {
+        let classes: BTreeSet<String> = messages
+            .iter()
+            .filter(|m| if wanted { m.to_server } else { m.to_client })
+            .map(|m| m.class.clone())
+            .collect();
+        if !classes.is_empty() {
+            wired.insert(hook, classes);
+        }
+    }
+    // The config: kept in Horizon's mod settings, changed on the mod's page.
+    let settings = netconf::settings(&scan.config);
+    if !settings.is_empty() {
+        let classes: BTreeSet<String> = scan.config.iter().map(|c| c.class.clone()).collect();
+        wired.entry("settings").or_default().extend(classes);
+        wired.entry("settings_click").or_default();
+    }
     // Every other hook Horizon has gets a helper with its bindings, to port into.
     for (hook, uses) in std::mem::take(&mut unwired) {
         if wired.contains_key(hook) {
@@ -290,6 +310,8 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
         block_entities: &block_entities,
         machines: &machines,
         recipe_types: &recipe_types,
+        messages: &messages,
+        settings: &settings,
         statics: &java_statics,
         ledger: horizon.map(|src| (src.to_path_buf(), unmapped_ports(scan, src))),
     };
@@ -648,6 +670,10 @@ struct Ctx<'a> {
     machines: &'a [Machine],
     /// The mod's own recipe types: `grind:crushing`.
     recipe_types: &'a [String],
+    /// Its network messages.
+    messages: &'a [Message],
+    /// Its config values.
+    settings: &'a [Setting],
     /// The Java statics the mod's code shares.
     statics: &'a [crate::statics::Module],
     /// The Horizon checkout read, and the functions that port each unmapped
@@ -762,6 +788,17 @@ source = "runtime.rs"
         m
     }
 
+    /// A helper's line that loads the config the first time, if the mod has one.
+    fn ensure_config(&self, game: &str) -> String {
+        if self.settings.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "    {{\n        let game: &crate::game::Game<'_> = {game};\n        m::ensure_config(|key| game.native_setting(m::ID, key));\n    }}\n"
+            )
+        }
+    }
+
     fn stub_helper(&self, hook: &str, uses: &Uses) -> Option<(String, String)> {
         hook_helper(self.id, &self.module, hook, uses)
     }
@@ -860,7 +897,12 @@ pub const DESCRIPTION: &str = "{description}";
                 self.java_for("wheel")
             );
         }
-        if self.uses("settings") {
+        if !self.settings.is_empty() {
+            r.push_str(&netconf::config_runtime(
+                self.settings,
+                &self.java_for("settings"),
+            ));
+        } else if self.uses("settings") {
             let _ = write!(
                 r,
                 "\n/// The labels of the buttons on the mod's settings page (Options > Mods).\n/// `get` reads a saved setting.\n///\n/// TODO: port the config screen of {}.\npub fn settings_buttons(get: impl Fn(&str) -> Option<String>) -> Vec<String> {{\n    let _ = get;\n    Vec::new()\n}}\n\n/// A settings button was clicked: returns the setting to save, as (key, value).\npub fn settings_click(button: usize, get: impl Fn(&str) -> Option<String>) -> Option<(String, String)> {{\n    let _ = (button, get);\n    None\n}}\n",
@@ -875,6 +917,7 @@ pub const DESCRIPTION: &str = "{description}";
                 self.recipe_types,
             ));
         }
+        r.push_str(&netconf::net_runtime(self.messages));
 
         r.push_str(
             r#"
@@ -893,6 +936,8 @@ mod tests {
         if !self.block_entities.is_empty() {
             r.push_str(&machine::runtime_tests(self.machines));
         }
+        r.push_str(&netconf::net_tests(self.messages));
+        r.push_str(&netconf::config_tests(self.settings));
         r.push_str("}\n");
         r
     }
@@ -1339,6 +1384,51 @@ fn {id}_screen_draw(
 "#
                 ),
             ),
+            "net_from_client" => (
+                "net_from_client.rs",
+                format!(
+                    r#"// A message from a player's client to {name}: its handler runs, and what it
+// sends goes out.
+fn {id}_net_from_client(
+    game: &mut crate::game::Game<'_>,
+    player: u128,
+    channel: &str,
+    data: &[u8],
+) {{
+    use crate::game::{m} as m;
+{config}    let mut out = m::Outbox::default();
+    m::net_from_client(player, channel, data, &mut out);
+    for (channel, data) in out.to_server {{
+        let _ = game.native_net_send_to_server(channel, &data);
+    }}
+    for (to, channel, data) in out.to_players {{
+        let _ = game.native_net_send_to_player(to, channel, &data);
+    }}
+}}
+"#,
+                    config = self.ensure_config("&*game"),
+                ),
+            ),
+            "net_from_server" => (
+                "net_from_server.rs",
+                format!(
+                    r#"// A message from the server to {name}: its handler runs, and what it sends
+// goes out.
+fn {id}_net_from_server(game: &mut crate::game::Game<'_>, channel: &str, data: &[u8]) {{
+    use crate::game::{m} as m;
+{config}    let mut out = m::Outbox::default();
+    m::net_from_server(channel, data, &mut out);
+    for (channel, data) in out.to_server {{
+        let _ = game.native_net_send_to_server(channel, &data);
+    }}
+    for (to, channel, data) in out.to_players {{
+        let _ = game.native_net_send_to_player(to, channel, &data);
+    }}
+}}
+"#,
+                    config = self.ensure_config("&*game"),
+                ),
+            ),
             other => unreachable!("no helper for hook {other}"),
         }
     }
@@ -1505,6 +1595,63 @@ fn {id}_screen_draw(
                         .map(|t| format!("`{t}`"))
                         .collect::<Vec<_>>()
                         .join(", ")
+                );
+            }
+        }
+        if !self.messages.is_empty() {
+            p.push_str(
+                "\n## Network messages\n\nEach `CustomPacketPayload` record is a struct in `runtime.rs` with its channel and \
+                 an encoding of its own (both ends run this port, so it needn't match Java's). \
+                 `native_net_from_client` and `native_net_from_server` decode what arrives and call its \
+                 `on_<name>_from_client` or `on_<name>_from_server` handler: port the Java handler into it. A \
+                 handler, or any code given an `Outbox`, sends with `out.send_to_server(&msg)` or \
+                 `out.send_to_player(player, &msg)`. Horizon caps a message at 30 000 bytes and a player at 32 a tick.\n\n\
+                 | Message | Channel | Fields | Sent |\n| --- | --- | --- | --- |\n",
+            );
+            for m in self.messages {
+                let sent = match (m.to_server, m.to_client) {
+                    (true, true) => "both ways",
+                    (true, false) => "client to server",
+                    _ => "server to client",
+                };
+                let fields = m
+                    .fields
+                    .iter()
+                    .map(|(f, _, java)| format!("`{f}` ({java})"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let _ = writeln!(
+                    p,
+                    "| `{}` | `{}` | {} | {sent} |",
+                    m.name,
+                    m.channel,
+                    if fields.is_empty() {
+                        "-".into()
+                    } else {
+                        fields
+                    }
+                );
+            }
+        }
+        if !self.settings.is_empty() {
+            p.push_str(
+                "\n## Config\n\nThe mod's config values are a `Config` struct in `runtime.rs`, kept in Horizon's mod \
+                 settings under their Java keys. The mod's page in Options > Mods has a button for each: on and off \
+                 toggle, a choice moves to the next one, a number steps through its range. Ported code reads them \
+                 with `config()`; the hook helpers load them the first time they run. Text values are edited in \
+                 their setting files.\n\n| Key | Type | Default | Range |\n| --- | --- | --- | --- |\n",
+            );
+            for s in self.settings {
+                let e = &s.entry;
+                let range = match (&e.min, &e.max) {
+                    (Some(lo), Some(hi)) => format!("{lo} to {hi}"),
+                    _ if !e.values.is_empty() => e.values.join(", "),
+                    _ => "-".into(),
+                };
+                let _ = writeln!(
+                    p,
+                    "| `{}` | {:?} | `{}` | {range} |",
+                    s.key, e.kind, e.default
                 );
             }
         }
@@ -1917,6 +2064,17 @@ fn bindings(hook: &str) -> &'static [(&'static str, &'static str, &'static str)]
                 "&mut Option<horizon_client::mod_api::NativeScreen>",
                 "&mut *screen",
             ),
+        ],
+        "net_from_client" => &[
+            GAME,
+            ("player", "u128", "player"),
+            ("channel", "&str", "channel"),
+            ("data", "&[u8]", "data"),
+        ],
+        "net_from_server" => &[
+            GAME,
+            ("channel", "&str", "channel"),
+            ("data", "&[u8]", "data"),
         ],
         "screen_draw" => &[
             ("game", "&crate::game::Game<'_>", "&*self"),

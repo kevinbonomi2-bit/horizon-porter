@@ -55,6 +55,14 @@ const HOOKS: &[(&str, &str)] = &[
         "native_screen_draw",
         "&self, block: &str, data: &[i32], batch: &mut HudBatch, origin: [f32; 2]",
     ),
+    (
+        "native_net_from_client",
+        "&mut self, player: u128, channel: &str, data: &[u8]",
+    ),
+    (
+        "native_net_from_server",
+        "&mut self, channel: &str, data: &[u8]",
+    ),
 ];
 
 const MOCK_LIB: &str = r#"
@@ -243,6 +251,8 @@ pub mod game {
             pub fn native_recipes_of_type(&self, kind: &str) -> &[CustomRecipe] { &[] }
             pub fn native_recipe_ingredient(&self, json: &serde_json::Value) -> Option<Ingredient> { None }
             pub fn native_recipe_result(&self, json: &serde_json::Value) -> Option<ItemStack> { None }
+            pub fn native_net_send_to_player(&mut self, player: u128, channel: &str, data: &[u8]) -> Result<(), String> { Ok(()) }
+            pub fn native_net_send_to_server(&mut self, channel: &str, data: &[u8]) -> Result<(), String> { Ok(()) }
         }
 
         impl Game<'_> {
@@ -302,6 +312,10 @@ fn machine_helpers_compile_against_horizon_api() {
         "screen",
         "screen_draw",
         "block_entity_tick",
+        "net_from_client",
+        "net_from_server",
+        "settings",
+        "settings_click",
     ] {
         assert!(b.wired.contains_key(hook), "{hook}");
     }

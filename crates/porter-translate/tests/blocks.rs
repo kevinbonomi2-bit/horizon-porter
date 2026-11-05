@@ -208,3 +208,35 @@ fn ports_a_machine() {
     assert!(b.hooks >= 85);
     assert!(b.files["PORTING.md"].contains("## Machines"));
 }
+
+#[test]
+fn ports_network_messages_and_config() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../porter-java/tests/fixtures/neoforge-machine-demo");
+    let scan = porter_java::scan(&path).unwrap();
+    let b = bundle::generate(&scan, &bundle::load_lang(&scan));
+    for hook in [
+        "net_from_client",
+        "net_from_server",
+        "settings",
+        "settings_click",
+    ] {
+        assert!(b.wired.contains_key(hook), "{hook}");
+    }
+    let runtime = &b.files["mixins/grind/runtime.rs"];
+    assert!(
+        runtime.contains("pub struct SetSpeed {\n    pub pos: [i32; 3],\n    pub speed: i32,\n}")
+    );
+    assert!(runtime.contains("const CHANNEL: &'static str = \"grind:set_speed\";"));
+    assert!(runtime.contains(
+        "pub fn on_set_speed_from_client(player: u128, msg: SetSpeed, out: &mut Outbox)"
+    ));
+    assert!(runtime.contains("pub fn on_crushed_from_server(msg: Crushed, out: &mut Outbox)"));
+    assert!(runtime.contains("pub crusher_default_time: i32,"));
+    assert!(runtime.contains("format!(\"Default time: {}\", c.crusher_default_time)"));
+    assert!(!runtime.contains("TODO: port the config screen"));
+    // Horizon's networking came in hook points version 40.
+    assert!(b.hooks >= 40);
+    let porting = &b.files["PORTING.md"];
+    assert!(porting.contains("## Network messages") && porting.contains("## Config"));
+}

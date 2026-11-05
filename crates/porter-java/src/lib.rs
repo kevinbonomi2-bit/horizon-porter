@@ -10,6 +10,7 @@ mod jar;
 mod machines;
 mod metadata;
 mod mixin;
+mod netconf;
 mod resources;
 mod source;
 mod walk;
@@ -164,7 +165,58 @@ fn scan_tree(root: &Path) -> Result<ModScan> {
 
     let mut scan = assemble(root, mods, mixin_configs, resources, parsed, warnings);
     machine_guis(root, &mut scan);
+    network_and_config(root, &mut scan);
     Ok(scan)
+}
+
+/// The mod's network messages and config values, read from its source files.
+fn network_and_config(root: &Path, scan: &mut ModScan) {
+    let mod_id = scan.main_metadata().and_then(|m| m.id.clone());
+    let sources: Vec<(String, String)> = scan
+        .classes
+        .iter()
+        .filter(|c| !c.is_mixin)
+        .filter_map(|c| {
+            read_lossy(&root.join(&c.path))
+                .ok()
+                .map(|t| (c.name.clone(), t))
+        })
+        .collect();
+    let enums = |name: &str| {
+        sources
+            .iter()
+            .map(|(_, text)| netconf::enum_constants(name, text))
+            .find(|v| !v.is_empty())
+            .unwrap_or_default()
+    };
+    for class in &scan.classes {
+        let is_payload = class
+            .interfaces
+            .iter()
+            .any(|i| i.rsplit('.').next() == Some("CustomPacketPayload"));
+        if !is_payload {
+            continue;
+        }
+        if let Some((_, text)) = sources.iter().find(|(name, _)| *name == class.name) {
+            scan.payloads
+                .push(netconf::payload(&class.name, text, mod_id.as_deref()));
+        }
+    }
+    if !scan.payloads.is_empty() {
+        for (name, text) in &sources {
+            netconf::directions(&mut scan.payloads, name, text);
+        }
+        // Registered somewhere the scan can't see: assume both ways.
+        for p in &mut scan.payloads {
+            if !p.to_server && !p.to_client {
+                p.to_server = true;
+                p.to_client = true;
+            }
+        }
+    }
+    for (name, text) in &sources {
+        scan.config.extend(netconf::config(name, text, &enums));
+    }
 }
 
 /// The mod's container menus and screens, read from their source files.
@@ -300,6 +352,8 @@ fn assemble(
         bundled_jars: Vec::new(),
         menus: Vec::new(),
         screens: Vec::new(),
+        payloads: Vec::new(),
+        config: Vec::new(),
         client,
         warnings,
     }
