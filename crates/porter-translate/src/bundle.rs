@@ -289,7 +289,9 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
     bundle.files.insert(
         ".porter/port.json".into(),
         serde_json::to_string_pretty(&serde_json::json!({
-            "input": scan.input,
+            "input": std::path::absolute(&scan.input)
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_else(|_| scan.input.clone()),
             "id": bundle.id,
             "tool": env!("CARGO_PKG_VERSION"),
         }))
