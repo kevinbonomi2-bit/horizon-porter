@@ -25,10 +25,10 @@ use porter_map::{hooks, ledger};
 
 /// The Horizon commit a port names, and the horizon-mixins commit Horizon's own
 /// native mods were tested on (horizon-mods native/zoom, 2026-11). The Horizon one
-/// is the commit `data/horizon-hooks.json` was read from (Nightly 2026-11-04), so
+/// is the commit `data/horizon-hooks.json` was read from (Nightly 2026-11-05), so
 /// every hook a port uses is in it. The launcher builds a port on the Horizon the
 /// player plays when its hook points version is new enough; this is the fallback.
-pub const HORIZON_REVISION: &str = "6475f62f3c834b7489e1816bf47f47ea5eb2b879";
+pub const HORIZON_REVISION: &str = "66f3981f522b24c250b21523a70080965b940424";
 pub const HORIZON_MIXINS_REVISION: &str = "d9c83d7096b7ea5b83678da2efdfd6161f74997e";
 
 /// A generated bundle: files by path relative to the output folder.

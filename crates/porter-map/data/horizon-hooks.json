@@ -1,5 +1,5 @@
 {
- "horizon": "6475f62f3c834b7489e1816bf47f47ea5eb2b879",
+ "horizon": "66f3981f522b24c250b21523a70080965b940424",
  "hooks": [
   {
    "name": "frame",
@@ -7411,6 +7411,897 @@
    "cites": [
     "LivingEvent.LivingJumpEvent"
    ]
+  },
+  {
+   "name": "arrow_nock",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_arrow_nock",
+   "contract": "cancel",
+   "out": "cancel",
+   "api": 375,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "bow: &ItemStack",
+    "hand: Hand",
+    "has_ammo: bool",
+    "cancel: &mut bool"
+   ],
+   "returns": "",
+   "doc": "A player is about to nock `bow` with `hand` (`BowItem.use`, NeoForge's `ArrowNockEvent`):",
+   "cites": [
+    "BowItem.use"
+   ]
+  },
+  {
+   "name": "baby_entity_spawn",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_baby_entity_spawn",
+   "contract": "cancel",
+   "out": "cancel",
+   "api": 395,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "parent: u32",
+    "partner: u32",
+    "player: u128",
+    "kind: &str",
+    "cancel: &mut bool"
+   ],
+   "returns": "",
+   "doc": "Two animals bred and a baby is about to be made (NeoForge's `BabyEntitySpawnEvent`, vanilla's `Animal.spawnChildFromBreeding`):",
+   "cites": [
+    "Animal.spawnChildFromBreeding"
+   ]
+  },
+  {
+   "name": "can_player_sleep",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_can_player_sleep",
+   "contract": "listen",
+   "out": null,
+   "api": 393,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "pos: [i32; 3]",
+    "problem: &mut Option<String>"
+   ],
+   "returns": "",
+   "doc": "A server player tries to sleep in the bed whose head is at `pos` (NeoForge's `CanPlayerSleepEvent`, vanilla's `ServerPlayer.startSleepInBed`).",
+   "cites": [
+    "ServerPlayer.startSleepInBed"
+   ]
+  },
+  {
+   "name": "compute_fov_modifier",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_compute_fov_modifier",
+   "contract": "listen",
+   "out": null,
+   "api": 362,
+   "generics": "",
+   "params": [
+    "&self",
+    "player: &horizon_client::camera::FovPlayer",
+    "base: f32",
+    "modifier: &mut f32"
+   ],
+   "returns": "",
+   "doc": "Player FOV scale, after vanilla effects and before zoom and easing.",
+   "cites": []
+  },
+  {
+   "name": "explosion_knockback",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_explosion_knockback",
+   "contract": "collect",
+   "out": "knockback_velocity",
+   "api": 374,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "dimension: &str",
+    "center: [f64; 3]",
+    "blocks: &[[i32; 3]]",
+    "entity: Option<u32>",
+    "knockback_velocity: &mut [f64; 3]"
+   ],
+   "returns": "",
+   "doc": "An explosion at `center` in `dimension`, about to break `blocks`, pushes `entity` (None for a player, whom `native_acting_player` names):",
+   "cites": [
+    "ServerExplosion.hurtEntities"
+   ]
+  },
+  {
+   "name": "hand_drawn",
+   "version": 1,
+   "target": "horizon_client_render::gfx::native_render::native_hand_drawn",
+   "contract": "listen",
+   "out": null,
+   "api": 364,
+   "generics": "",
+   "params": [
+    "hand: &mut HandDrawn<'_>"
+   ],
+   "returns": "",
+   "doc": "The first-person hand is drawn (see [`HandDrawn`]), on every frame [`native_world_drawn`] runs, with no hand too.",
+   "cites": []
+  },
+  {
+   "name": "ingredient_test",
+   "version": 1,
+   "target": "horizon_client_lib::crafting::native_ingredient_test",
+   "contract": "listen",
+   "out": null,
+   "api": 377,
+   "generics": "",
+   "params": [
+    "kind: &str",
+    "data: &serde_json::Map<String, Value>",
+    "stack: &ItemStack",
+    "accept: &mut bool"
+   ],
+   "returns": "",
+   "doc": "A mod's own ingredient kind, matching a concrete stack at craft time:",
+   "cites": []
+  },
+  {
+   "name": "item_container",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_item_container",
+   "contract": "replace",
+   "out": "slots",
+   "api": 370,
+   "generics": "",
+   "params": [
+    "&self",
+    "item: &str",
+    "slots: &mut Option<u32>"
+   ],
+   "returns": "",
+   "doc": "Item `item` (`mod_id:name`) holds items (`Capabilities.Item.ITEM`):",
+   "cites": [
+    "Capabilities.Item.ITEM"
+   ]
+  },
+  {
+   "name": "item_model_property",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_item_model_property",
+   "contract": "listen",
+   "out": null,
+   "api": null,
+   "generics": "",
+   "params": [
+    "&self",
+    "property: &str",
+    "stack: &StackView",
+    "value: &mut bool"
+   ],
+   "returns": "",
+   "doc": "Client-side evaluation of a mod's namespaced conditional item model property.",
+   "cites": []
+  },
+  {
+   "name": "living_conversion_post",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_living_conversion_post",
+   "contract": "listen",
+   "out": null,
+   "api": 390,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "entity: u32",
+    "kind: &str",
+    "converted: u32",
+    "converted_kind: &str"
+   ],
+   "returns": "",
+   "doc": "A mob converted into another type (NeoForge's `LivingConversionEvent.Post`):",
+   "cites": [
+    "LivingConversionEvent.Post"
+   ]
+  },
+  {
+   "name": "living_conversion_pre",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_living_conversion_pre",
+   "contract": "cancel",
+   "out": "cancel",
+   "api": 391,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "entity: u32",
+    "kind: &str",
+    "outcome: &str",
+    "cancel: &mut bool"
+   ],
+   "returns": "",
+   "doc": "A mob is about to convert into another type (NeoForge's `LivingConversionEvent.Pre`, vanilla's `Mob.convertTo`):",
+   "cites": [
+    "LivingConversionEvent.Pre",
+    "Mob.convertTo"
+   ]
+  },
+  {
+   "name": "living_death",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_living_death",
+   "contract": "cancel",
+   "out": "cancel",
+   "api": 392,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "entity: u32",
+    "kind: &str",
+    "damage_type: &str",
+    "attacker: u32",
+    "cancel: &mut bool"
+   ],
+   "returns": "",
+   "doc": "A mob or server player is about to die (NeoForge's `LivingDeathEvent`, vanilla's `LivingEntity.die`):",
+   "cites": [
+    "LivingEntity.die"
+   ]
+  },
+  {
+   "name": "living_get_projectile",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_living_get_projectile",
+   "contract": "collect",
+   "out": "projectile",
+   "api": 376,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: Option<u128>",
+    "name: &str",
+    "entity: Option<u32>",
+    "kind: &str",
+    "weapon: &ItemStack",
+    "projectile: &mut Option<ItemStack>"
+   ],
+   "returns": "",
+   "doc": "`LivingEntity.getProjectile(weapon)` (NeoForge's `LivingGetProjectileEvent`) for a player (`player` and `name`) or a mob (`entity`, `kind`):",
+   "cites": [
+    "LivingEntity.getProjectile"
+   ]
+  },
+  {
+   "name": "living_incoming_damage_v2",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_living_incoming_damage_v2",
+   "contract": "cancel",
+   "out": "canceled",
+   "api": 384,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "entity: i32",
+    "kind: &str",
+    "damage_type: &str",
+    "causing: i32",
+    "source_position: Option<[f64; 3]>",
+    "victim_position: [f64; 3]",
+    "victim_view: [f64; 3]",
+    "weapon: Option<&ItemStack>",
+    "amount: &mut f32",
+    "canceled: &mut bool"
+   ],
+   "returns": "",
+   "doc": "A player's weapon hit on a mob, before `Mob::damage_with` borrows the victim:",
+   "cites": [
+    "Mob.damage_with"
+   ]
+  },
+  {
+   "name": "living_knockback_v2",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_living_knockback_v2",
+   "contract": "cancel",
+   "out": "canceled",
+   "api": 383,
+   "generics": "",
+   "params": [
+    "entity: i32",
+    "kind: &str",
+    "attacker: i32",
+    "attacker_main: Option<&ItemStack>",
+    "attacker_off: Option<&ItemStack>",
+    "strength: &mut f64",
+    "x: &mut f64",
+    "z: &mut f64",
+    "canceled: &mut bool"
+   ],
+   "returns": "",
+   "doc": "LivingEntity.knockback before resistance and motion, after the unchanged v1 hook.",
+   "cites": []
+  },
+  {
+   "name": "mob_split",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_mob_split",
+   "contract": "cancel",
+   "out": "cancel",
+   "api": 396,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "parent: u32",
+    "kind: &str",
+    "size: i32",
+    "child_size: i32",
+    "count: &mut u32",
+    "cancel: &mut bool"
+   ],
+   "returns": "",
+   "doc": "A slime or magma cube is dying and about to split into smaller ones (NeoForge's `MobSplitEvent`, vanilla's `Slime.remove`):",
+   "cites": [
+    "Slime.remove"
+   ]
+  },
+  {
+   "name": "register_configs",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_register_configs",
+   "contract": "collect",
+   "out": "configs",
+   "api": 397,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "configs: &mut Vec<NativeConfig>"
+   ],
+   "returns": "",
+   "doc": "The config files native mods keep (NeoForge's `registerConfig`):",
+   "cites": []
+  },
+  {
+   "name": "config_loading",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_config_loading",
+   "contract": "listen",
+   "out": null,
+   "api": 397,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "config: &NativeConfigFile"
+   ],
+   "returns": "",
+   "doc": "A registered config was read (`ModConfigEvent.Loading`):",
+   "cites": [
+    "ModConfigEvent.Loading"
+   ]
+  },
+  {
+   "name": "config_reloading",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_config_reloading",
+   "contract": "listen",
+   "out": null,
+   "api": 397,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "config: &NativeConfigFile"
+   ],
+   "returns": "",
+   "doc": "A loaded config's file changed on disk (`ModConfigEvent.Reloading`):",
+   "cites": [
+    "ModConfigEvent.Reloading"
+   ]
+  },
+  {
+   "name": "config_unloading",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_config_unloading",
+   "contract": "listen",
+   "out": null,
+   "api": 397,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "config: &NativeConfigFile"
+   ],
+   "returns": "",
+   "doc": "A `Server` config is dropped as its server stops (`ModConfigEvent.Unloading`), after `native_server_stopping`; the next world reads it again.",
+   "cites": [
+    "ModConfigEvent.Unloading"
+   ]
+  },
+  {
+   "name": "movement_input",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_movement_input",
+   "contract": "listen",
+   "out": null,
+   "api": null,
+   "generics": "",
+   "params": [
+    "&self",
+    "forward: &mut f32",
+    "strafe: &mut f32",
+    "jump: &mut bool",
+    "sneak: &mut bool"
+   ],
+   "returns": "",
+   "doc": "Local player movement input, after reading it and before applying it.",
+   "cites": []
+  },
+  {
+   "name": "note_block_change",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_note_block_change",
+   "contract": "cancel",
+   "out": "cancel",
+   "api": 387,
+   "generics": "",
+   "params": [
+    "&self",
+    "context: &NativeNoteBlockChange<'_>",
+    "new_note: &mut i32",
+    "cancel: &mut bool"
+   ],
+   "returns": "",
+   "doc": "A player is tuning a note block on the authoritative server, not in client prediction.",
+   "cites": []
+  },
+  {
+   "name": "potential_spawns",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_potential_spawns",
+   "contract": "cancel",
+   "out": "canceled",
+   "api": 388,
+   "generics": "",
+   "params": [
+    "&self",
+    "dimension: &str",
+    "category: &str",
+    "pos: [i32; 3]",
+    "entries: &mut Vec<SpawnEntry>",
+    "canceled: &mut bool"
+   ],
+   "returns": "",
+   "doc": "Possible natural spawns at a server position (NeoForge's `LevelEvent.PotentialSpawns`, `NaturalSpawner.mobsAt`).",
+   "cites": [
+    "LevelEvent.PotentialSpawns",
+    "NaturalSpawner.mobsAt"
+   ]
+  },
+  {
+   "name": "village_siege",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_village_siege",
+   "contract": "cancel",
+   "out": "canceled",
+   "api": 389,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "dimension: &str",
+    "player: u128",
+    "attempted_pos: [f64; 3]",
+    "canceled: &mut bool"
+   ],
+   "returns": "",
+   "doc": "A village siege found a spawn position on the server.",
+   "cites": []
+  },
+  {
+   "name": "player_chat",
+   "version": 1,
+   "target": "horizon_client_lib::lan::hub::chat::native_player_chat",
+   "contract": "cancel",
+   "out": "cancel",
+   "api": 399,
+   "generics": "",
+   "params": [
+    "player: u128",
+    "name: &str",
+    "message: &str",
+    "replies: &mut Vec<Text>",
+    "cancel: &mut bool"
+   ],
+   "returns": "",
+   "doc": "A player's chat message is about to be sent to everyone (after the secure-chat chain and the chat filter took it).",
+   "cites": []
+  },
+  {
+   "name": "player_xp_change",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player_xp_change",
+   "contract": "cancel",
+   "out": "cancel",
+   "api": 394,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "name: &str",
+    "amount: &mut i32",
+    "cancel: &mut bool"
+   ],
+   "returns": "",
+   "doc": "A server player's experience points are about to change through `Player.giveExperiencePoints` (NeoForge's `PlayerXpEvent.XpChange`):",
+   "cites": [
+    "Player.giveExperiencePoints",
+    "PlayerXpEvent.XpChange"
+   ]
+  },
+  {
+   "name": "recipe_book_categories",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_recipe_book_categories",
+   "contract": "listen",
+   "out": null,
+   "api": null,
+   "generics": "",
+   "params": [
+    "&self",
+    "categories: &mut Vec<RecipeBookCategory>"
+   ],
+   "returns": "",
+   "doc": "Declare categories for custom recipe types, with registered item icons.",
+   "cites": []
+  },
+  {
+   "name": "render_hand_pose",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_render_hand_pose",
+   "contract": "listen",
+   "out": null,
+   "api": 369,
+   "generics": "",
+   "params": [
+    "&self",
+    "hand: horizon_client::first_person::Hand",
+    "stack: Option<&ItemStack>",
+    "partial: f32",
+    "swing: f32",
+    "equip: f32",
+    "x: &mut f32",
+    "y: &mut f32",
+    "z: &mut f32",
+    "pitch: &mut f32",
+    "yaw: &mut f32",
+    "roll: &mut f32",
+    "scale: &mut f32"
+   ],
+   "returns": "",
+   "doc": "Additional first-person hand and item pose, including empty arms and maps.",
+   "cites": []
+  },
+  {
+   "name": "render_item_in_frame",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_render_item_in_frame",
+   "contract": "cancel",
+   "out": "canceled",
+   "api": null,
+   "generics": "",
+   "params": [
+    "&self",
+    "entity_id: u32",
+    "pos: [i32; 3]",
+    "stack: &ItemStack",
+    "canceled: &mut bool"
+   ],
+   "returns": "",
+   "doc": "Before a visible item frame's item or map is drawn.",
+   "cites": []
+  },
+  {
+   "name": "render_name_tag",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_render_name_tag",
+   "contract": "listen",
+   "out": null,
+   "api": 372,
+   "generics": "",
+   "params": [
+    "&self",
+    "entity_id: u32",
+    "kind: &str",
+    "vanilla_visible: bool",
+    "visible: &mut bool",
+    "text: &mut Option<String>"
+   ],
+   "returns": "",
+   "doc": "Name tag visibility and optional replacement text.",
+   "cites": []
+  },
+  {
+   "name": "screen_closing",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_screen_closing",
+   "contract": "listen",
+   "out": null,
+   "api": null,
+   "generics": "",
+   "params": [
+    "&self",
+    "screen: &NativeScreenView<'_>"
+   ],
+   "returns": "",
+   "doc": "A screen was observed closing, at most once per frame.",
+   "cites": []
+  },
+  {
+   "name": "screen_init_post",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_screen_init_post",
+   "contract": "listen",
+   "out": null,
+   "api": null,
+   "generics": "",
+   "params": [
+    "&self",
+    "screen: &NativeScreenView<'_>"
+   ],
+   "returns": "",
+   "doc": "A screen was observed opening or changing rectangle, at most once per frame.",
+   "cites": []
+  },
+  {
+   "name": "screen_opening",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_screen_opening",
+   "contract": "listen",
+   "out": null,
+   "api": null,
+   "generics": "",
+   "params": [
+    "&self",
+    "screen: &NativeScreenView<'_>"
+   ],
+   "returns": "",
+   "doc": "A screen was observed opening, at most once per frame.",
+   "cites": []
+  },
+  {
+   "name": "tooltip_color",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_tooltip_color",
+   "contract": "listen",
+   "out": null,
+   "api": null,
+   "generics": "",
+   "params": [
+    "&self",
+    "stack: Option<&ItemStack>",
+    "background: &mut u32",
+    "border_top: &mut u32",
+    "border_bottom: &mut u32"
+   ],
+   "returns": "",
+   "doc": "Change a tooltip box's background and border gradient colors, as ARGB.",
+   "cites": []
+  },
+  {
+   "name": "camera_pose",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_camera_pose",
+   "contract": "listen",
+   "out": null,
+   "api": 402,
+   "generics": "",
+   "params": [
+    "&self",
+    "partial: f32",
+    "position: &mut [f64; 3]",
+    "yaw: &mut f32",
+    "pitch: &mut f32"
+   ],
+   "returns": "",
+   "doc": "The camera this frame is drawn from, `partial` ticks past the last tick, after vanilla placed it (`Camera.setup`):",
+   "cites": [
+    "Camera.setup"
+   ]
+  },
+  {
+   "name": "client_chat_received",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_client_chat_received",
+   "contract": "cancel",
+   "out": "cancel",
+   "api": 403,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "system: bool",
+    "overlay: bool",
+    "sender: u128",
+    "chat_type: Option<&str>",
+    "message: &mut Text",
+    "cancel: &mut bool"
+   ],
+   "returns": "",
+   "doc": "NeoForge's `ClientChatReceivedEvent`:",
+   "cites": [
+    "ClientChatReceivedEvent.System",
+    "Util.NIL_UUID"
+   ]
+  },
+  {
+   "name": "client_packet",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_client_packet",
+   "contract": "listen",
+   "out": null,
+   "api": 408,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "packet: &ClientboundPlayPacket"
+   ],
+   "returns": "",
+   "doc": "A play packet from the server reached the window's game, decoded, just before the game handles it (`Connection.genericsFtw` handing it to `ClientPacketListener`):",
+   "cites": [
+    "Connection.genericsFtw"
+   ]
+  },
+  {
+   "name": "menu_extra_data",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_menu_extra_data",
+   "contract": "replace",
+   "out": "data",
+   "api": 401,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "player: u128",
+    "menu: &str",
+    "block: &str",
+    "pos: [i32; 3]",
+    "data: &mut Option<Vec<u8>>"
+   ],
+   "returns": "",
+   "doc": "Block `block` at `pos` opens its mod menu type `menu` for server player `player`:",
+   "cites": []
+  },
+  {
+   "name": "merchant_offer_traded",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_merchant_offer_traded",
+   "contract": "collect",
+   "out": "offer",
+   "api": 406,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "merchant: u32",
+    "kind: &str",
+    "offer: &mut MerchantOffer"
+   ],
+   "returns": "",
+   "doc": "A trade of a villager or a wandering trader was made and its `offer` (the live one in the trading session, not a copy) is in the state the trade left it in:",
+   "cites": [
+    "PlayerTradeEvent.getTrade"
+   ]
+  },
+  {
+   "name": "add_server_reload_listeners",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_add_server_reload_listeners",
+   "contract": "collect",
+   "out": "listeners",
+   "api": 400,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "listeners: &mut Vec<NativeReloadListener>"
+   ],
+   "returns": "",
+   "doc": "The folders of JSON files native mods read from the data (`AddServerReloadListenersEvent`):",
+   "cites": []
+  },
+  {
+   "name": "server_reload_listener_apply",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_server_reload_listener_apply",
+   "contract": "listen",
+   "out": null,
+   "api": 400,
+   "generics": "",
+   "params": [
+    "&mut self",
+    "listener: &NativeReloadListener",
+    "files: &[(String, serde_json::Value)]"
+   ],
+   "returns": "",
+   "doc": "A listener's files were read (`SimpleJsonResourceReloadListener`'s `apply`):",
+   "cites": []
+  },
+  {
+   "name": "client_start",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_client_start",
+   "contract": "listen",
+   "out": null,
+   "api": null,
+   "generics": "",
+   "params": [
+    "&mut self"
+   ],
+   "returns": "",
+   "doc": "Client initialization, before any outgoing connection; a window need not exist yet.",
+   "cites": []
+  },
+  {
+   "name": "client_disconnecting",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_client_disconnecting",
+   "contract": "listen",
+   "out": null,
+   "api": null,
+   "generics": "",
+   "params": [
+    "&self"
+   ],
+   "returns": "",
+   "doc": "Before an actual connection is discarded, not on a dimension change.",
+   "cites": []
+  },
+  {
+   "name": "client_stopping",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_client_stopping",
+   "contract": "listen",
+   "out": null,
+   "api": null,
+   "generics": "",
+   "params": [
+    "&self"
+   ],
+   "returns": "",
+   "doc": "Once before this client's final save/exit.",
+   "cites": []
+  },
+  {
+   "name": "menu_background",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_menu_background",
+   "contract": "listen",
+   "out": null,
+   "api": null,
+   "generics": "",
+   "params": [
+    "&self",
+    "radius: &mut Option<f32>"
+   ],
+   "returns": "",
+   "doc": "The normal menu blur request, before finite/range validation.",
+   "cites": []
+  },
+  {
+   "name": "gui_render_post",
+   "version": 1,
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_gui_render_post",
+   "contract": "listen",
+   "out": null,
+   "api": 410,
+   "generics": "",
+   "params": [
+    "&self",
+    "batch: &mut HudBatch",
+    "gui_hidden: bool",
+    "focused: bool"
+   ],
+   "returns": "",
+   "doc": "After the complete normal GUI batch, including screens, prompts, toasts, debug overlays, the pad cursor and IME.",
+   "cites": []
   }
  ],
  "helpers": [
@@ -8786,14 +9677,14 @@
    "doc": "The instance (game) folder, which its players share:"
   },
   {
-   "name": "native_acting_id",
-   "target": "horizon_client::game::native_hooks::Game<'_>::native_acting_id",
+   "name": "native_camera",
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_camera",
    "generics": "",
    "params": [
-    "&mut self"
+    "&self"
    ],
-   "returns": "u128",
-   "doc": "The acting player as the hook points name one:"
+   "returns": "Option<NativeCamera>",
+   "doc": "The most recently extracted world frame's camera, if one exists."
   },
   {
    "name": "native_block_collision",
@@ -8805,6 +9696,684 @@
    ],
    "returns": "Vec<[f64; 6]>",
    "doc": "Collision boxes in block-local coordinates with an empty collision context."
+  },
+  {
+   "name": "native_entity_nbt",
+   "target": "horizon_client::game::native_entity_data::Game<'_>::native_entity_nbt",
+   "generics": "",
+   "params": [
+    "&mut self",
+    "entity: EntityRef"
+   ],
+   "returns": "Option<Compound>",
+   "doc": "The entity's data as `/data get entity` shows it (`Entity.saveWithoutId`):"
+  },
+  {
+   "name": "native_entity_merge_nbt",
+   "target": "horizon_client::game::native_entity_data::Game<'_>::native_entity_merge_nbt",
+   "generics": "",
+   "params": [
+    "&mut self",
+    "entity: EntityRef",
+    "nbt: Compound"
+   ],
+   "returns": "bool",
+   "doc": "Merges `nbt` into the entity's data and loads the entity from it, as `/data merge entity` does (`EntityDataAccessor.setData`):"
+  },
+  {
+   "name": "native_entity_tags",
+   "target": "horizon_client::game::native_entity_data::Game<'_>::native_entity_tags",
+   "generics": "",
+   "params": [
+    "&self",
+    "entity: EntityRef"
+   ],
+   "returns": "Option<Vec<String>>",
+   "doc": "The entity's tags (`Entity.getTags`), as `/tag <entity> list` shows them."
+  },
+  {
+   "name": "native_entity_add_tag",
+   "target": "horizon_client::game::native_entity_data::Game<'_>::native_entity_add_tag",
+   "generics": "",
+   "params": [
+    "&mut self",
+    "entity: EntityRef",
+    "tag: &str"
+   ],
+   "returns": "bool",
+   "doc": "Adds tag `tag` (`Entity.addTag`):"
+  },
+  {
+   "name": "native_entity_remove_tag",
+   "target": "horizon_client::game::native_entity_data::Game<'_>::native_entity_remove_tag",
+   "generics": "",
+   "params": [
+    "&mut self",
+    "entity: EntityRef",
+    "tag: &str"
+   ],
+   "returns": "bool",
+   "doc": "Removes tag `tag` (`Entity.removeTag`):"
+  },
+  {
+   "name": "native_entity_name",
+   "target": "horizon_client::game::native_entity_data::Game<'_>::native_entity_name",
+   "generics": "",
+   "params": [
+    "&self",
+    "entity: EntityRef"
+   ],
+   "returns": "Option<String>",
+   "doc": "The entity's name as plain text (`Entity.getName`):"
+  },
+  {
+   "name": "native_entity",
+   "target": "horizon_client::game::native_entity_refs::Game<'_>::native_entity",
+   "generics": "",
+   "params": [
+    "&self",
+    "id: u32"
+   ],
+   "returns": "Option<EntityRef>",
+   "doc": "The entity `id` (the id events carry) as a handle for the `entity_*` methods:"
+  },
+  {
+   "name": "native_level",
+   "target": "horizon_client::game::native_entity_refs::Game<'_>::native_level",
+   "generics": "",
+   "params": [
+    "&self",
+    "dimension: &str"
+   ],
+   "returns": "Option<LevelRef>",
+   "doc": "The level `dimension` (`minecraft:the_nether`) as a handle:"
+  },
+  {
+   "name": "native_entity_position",
+   "target": "horizon_client::game::native_entity_refs::Game<'_>::native_entity_position",
+   "generics": "",
+   "params": [
+    "&self",
+    "entity: EntityRef"
+   ],
+   "returns": "Option<[f64; 3]>",
+   "doc": "The entity's position (`Entity.position`):"
+  },
+  {
+   "name": "native_entity_block_position",
+   "target": "horizon_client::game::native_entity_refs::Game<'_>::native_entity_block_position",
+   "generics": "",
+   "params": [
+    "&self",
+    "entity: EntityRef"
+   ],
+   "returns": "Option<[i32; 3]>",
+   "doc": "The block the entity's position is in (`Entity.blockPosition`)."
+  },
+  {
+   "name": "native_entity_rotation",
+   "target": "horizon_client::game::native_entity_refs::Game<'_>::native_entity_rotation",
+   "generics": "",
+   "params": [
+    "&self",
+    "entity: EntityRef"
+   ],
+   "returns": "Option<[f32; 2]>",
+   "doc": "The entity's yaw and pitch in degrees (`Entity.getYRot`, `getXRot`); 0 for the kinds that don't turn."
+  },
+  {
+   "name": "native_entity_kind",
+   "target": "horizon_client::game::native_entity_refs::Game<'_>::native_entity_kind",
+   "generics": "",
+   "params": [
+    "&self",
+    "entity: EntityRef"
+   ],
+   "returns": "Option<String>",
+   "doc": "The entity's type (`Entity.getType`):"
+  },
+  {
+   "name": "native_entity_uuid",
+   "target": "horizon_client::game::native_entity_refs::Game<'_>::native_entity_uuid",
+   "generics": "",
+   "params": [
+    "&mut self",
+    "entity: EntityRef"
+   ],
+   "returns": "Option<u128>",
+   "doc": "The entity's UUID (`Entity.getUUID`), the one it is saved with; an entity that has none yet gets it now, as a new vanilla entity does."
+  },
+  {
+   "name": "native_entity_level",
+   "target": "horizon_client::game::native_entity_refs::Game<'_>::native_entity_level",
+   "generics": "",
+   "params": [
+    "&self",
+    "entity: EntityRef"
+   ],
+   "returns": "Option<LevelRef>",
+   "doc": "The level the entity is in (`Entity.level`):"
+  },
+  {
+   "name": "native_entity_velocity",
+   "target": "horizon_client::game::native_entity_motion::Game<'_>::native_entity_velocity",
+   "generics": "",
+   "params": [
+    "&self",
+    "entity: EntityRef"
+   ],
+   "returns": "Option<[f64; 3]>",
+   "doc": "The entity's velocity in blocks a tick (`Entity.getDeltaMovement`)."
+  },
+  {
+   "name": "native_entity_set_velocity",
+   "target": "horizon_client::game::native_entity_motion::Game<'_>::native_entity_set_velocity",
+   "generics": "",
+   "params": [
+    "&mut self",
+    "entity: EntityRef",
+    "velocity: [f64; 3]"
+   ],
+   "returns": "bool",
+   "doc": "Sets the entity's velocity (`Entity.setDeltaMovement`); clients see it as they see the entity move."
+  },
+  {
+   "name": "native_entity_on_ground",
+   "target": "horizon_client::game::native_entity_motion::Game<'_>::native_entity_on_ground",
+   "generics": "",
+   "params": [
+    "&self",
+    "entity: EntityRef"
+   ],
+   "returns": "Option<bool>",
+   "doc": "Whether the entity stands on a block (`Entity.onGround`)."
+  },
+  {
+   "name": "native_entity_bounding_box",
+   "target": "horizon_client::game::native_entity_motion::Game<'_>::native_entity_bounding_box",
+   "generics": "",
+   "params": [
+    "&self",
+    "entity: EntityRef"
+   ],
+   "returns": "Option<[[f64; 3]; 2]>",
+   "doc": "The entity's box (`Entity.getBoundingBox`):"
+  },
+  {
+   "name": "native_entity_eye_height",
+   "target": "horizon_client::game::native_entity_motion::Game<'_>::native_entity_eye_height",
+   "generics": "",
+   "params": [
+    "&self",
+    "entity: EntityRef"
+   ],
+   "returns": "Option<f64>",
+   "doc": "The height of the entity's eyes above its feet (`Entity.getEyeHeight`)."
+  },
+  {
+   "name": "native_entity_eye_position",
+   "target": "horizon_client::game::native_entity_motion::Game<'_>::native_entity_eye_position",
+   "generics": "",
+   "params": [
+    "&self",
+    "entity: EntityRef"
+   ],
+   "returns": "Option<[f64; 3]>",
+   "doc": "Where the entity's eyes are (`Entity.getEyePosition`)."
+  },
+  {
+   "name": "native_entity_view_vector",
+   "target": "horizon_client::game::native_entity_motion::Game<'_>::native_entity_view_vector",
+   "generics": "",
+   "params": [
+    "&self",
+    "entity: EntityRef"
+   ],
+   "returns": "Option<[f64; 3]>",
+   "doc": "The unit vector the entity looks along (`Entity.getViewVector`, from its pitch and yaw)."
+  },
+  {
+   "name": "native_entity_distance_to_sqr",
+   "target": "horizon_client::game::native_entity_motion::Game<'_>::native_entity_distance_to_sqr",
+   "generics": "",
+   "params": [
+    "&self",
+    "entity: EntityRef",
+    "pos: [f64; 3]"
+   ],
+   "returns": "Option<f64>",
+   "doc": "The square of the distance from the entity's feet to `pos` (`Entity.distanceToSqr`)."
+  },
+  {
+   "name": "native_item_container_slots",
+   "target": "horizon_client::game::native_item_container::Game<'_>::native_item_container_slots",
+   "generics": "",
+   "params": [
+    "&self",
+    "stack: &ItemStack"
+   ],
+   "returns": "Option<Vec<Option<ItemStack>>>",
+   "doc": "`Capabilities.Item.ITEM`, read:"
+  },
+  {
+   "name": "native_item_container_insert",
+   "target": "horizon_client::game::native_item_container::Game<'_>::native_item_container_insert",
+   "generics": "",
+   "params": [
+    "&self",
+    "stack: &ItemStack",
+    "item: &ItemStack"
+   ],
+   "returns": "Option<(u32, ItemStack)>",
+   "doc": "`ResourceHandler.insert`:"
+  },
+  {
+   "name": "native_item_container_extract",
+   "target": "horizon_client::game::native_item_container::Game<'_>::native_item_container_extract",
+   "generics": "",
+   "params": [
+    "&self",
+    "stack: &ItemStack",
+    "slot: usize",
+    "max: u32"
+   ],
+   "returns": "Option<(Option<ItemStack>, ItemStack)>",
+   "doc": "`ResourceHandler.extract`:"
+  },
+  {
+   "name": "native_level_block_state",
+   "target": "horizon_client::game::native_level_refs::Game<'_>::native_level_block_state",
+   "generics": "",
+   "params": [
+    "&self",
+    "level: LevelRef",
+    "pos: [i32; 3]"
+   ],
+   "returns": "Option<String>",
+   "doc": "The block state at `pos` (`Level.getBlockState`) as `/setblock` takes it:"
+  },
+  {
+   "name": "native_level_block",
+   "target": "horizon_client::game::native_level_refs::Game<'_>::native_level_block",
+   "generics": "",
+   "params": [
+    "&self",
+    "level: LevelRef",
+    "pos: [i32; 3]"
+   ],
+   "returns": "Option<String>",
+   "doc": "The block at `pos` without its properties:"
+  },
+  {
+   "name": "native_level_block_property",
+   "target": "horizon_client::game::native_level_refs::Game<'_>::native_level_block_property",
+   "generics": "",
+   "params": [
+    "&self",
+    "level: LevelRef",
+    "pos: [i32; 3]",
+    "key: &str"
+   ],
+   "returns": "Option<String>",
+   "doc": "Property `key` of the block state at `pos` (`BlockState.getValue`):"
+  },
+  {
+   "name": "native_level_is_loaded",
+   "target": "horizon_client::game::native_level_refs::Game<'_>::native_level_is_loaded",
+   "generics": "",
+   "params": [
+    "&self",
+    "level: LevelRef",
+    "pos: [i32; 3]"
+   ],
+   "returns": "bool",
+   "doc": "Whether `pos` is inside the world's height and its chunk is loaded (`Level.isLoaded`, which is false outside `isInValidBounds`):"
+  },
+  {
+   "name": "native_level_height",
+   "target": "horizon_client::game::native_level_refs::Game<'_>::native_level_height",
+   "generics": "",
+   "params": [
+    "&self",
+    "level: LevelRef"
+   ],
+   "returns": "Option<(i32, i32)>",
+   "doc": "The lowest block `y` and the height of the level (`LevelHeightAccessor.getMinY`, `getHeight`)."
+  },
+  {
+   "name": "native_level_game_time",
+   "target": "horizon_client::game::native_level_refs::Game<'_>::native_level_game_time",
+   "generics": "",
+   "params": [
+    "&self",
+    "level: LevelRef"
+   ],
+   "returns": "Option<i64>",
+   "doc": "The ticks the server has run (`Level.getGameTime`), shared by every level as in vanilla."
+  },
+  {
+   "name": "native_level_day_time",
+   "target": "horizon_client::game::native_level_refs::Game<'_>::native_level_day_time",
+   "generics": "",
+   "params": [
+    "&self",
+    "level: LevelRef"
+   ],
+   "returns": "Option<i64>",
+   "doc": "The time of day in ticks (`Level.getOverworldClockTime`), shared by every level; it keeps counting past 24000."
+  },
+  {
+   "name": "native_living",
+   "target": "horizon_client::game::native_living_refs::Game<'_>::native_living",
+   "generics": "",
+   "params": [
+    "&self",
+    "entity: EntityRef"
+   ],
+   "returns": "Option<LivingRef>",
+   "doc": "The entity as a living entity (vanilla's `LivingEntity`:"
+  },
+  {
+   "name": "native_living_equipment",
+   "target": "horizon_client::game::native_living_refs::Game<'_>::native_living_equipment",
+   "generics": "",
+   "params": [
+    "&self",
+    "living: LivingRef",
+    "slot: EquipmentSlot"
+   ],
+   "returns": "Option<ItemStack>",
+   "doc": "The stack in equipment slot `slot` (`LivingEntity.getItemBySlot`):"
+  },
+  {
+   "name": "native_living_hand_item",
+   "target": "horizon_client::game::native_living_refs::Game<'_>::native_living_hand_item",
+   "generics": "",
+   "params": [
+    "&self",
+    "living: LivingRef",
+    "hand: Hand"
+   ],
+   "returns": "Option<ItemStack>",
+   "doc": "The stack in hand `hand` (`LivingEntity.getItemInHand`)."
+  },
+  {
+   "name": "native_living_set_equipment",
+   "target": "horizon_client::game::native_living_refs::Game<'_>::native_living_set_equipment",
+   "generics": "",
+   "params": [
+    "&mut self",
+    "living: LivingRef",
+    "slot: EquipmentSlot",
+    "stack: Option<ItemStack>"
+   ],
+   "returns": "bool",
+   "doc": "Puts `stack` (None:"
+  },
+  {
+   "name": "native_block_sprites",
+   "target": "horizon_client::game::native_block_sprites::Game<'_>::native_block_sprites",
+   "generics": "",
+   "params": [
+    "&self",
+    "blocks: &[&str]"
+   ],
+   "returns": "Vec<Option<BlockSprites>>",
+   "doc": "For a client mod:"
+  },
+  {
+   "name": "native_texture_sprites",
+   "target": "horizon_client::game::native_block_sprites::Game<'_>::native_texture_sprites",
+   "generics": "",
+   "params": [
+    "&self",
+    "textures: &[&str]"
+   ],
+   "returns": "Vec<Option<SpriteRef>>",
+   "doc": "For a client mod:"
+  },
+  {
+   "name": "native_block_sprites_version",
+   "target": "horizon_client::game::native_block_sprites::Game<'_>::native_block_sprites_version",
+   "generics": "",
+   "params": [
+    "&self"
+   ],
+   "returns": "u64",
+   "doc": "For a client mod:"
+  },
+  {
+   "name": "native_recipe_book_category",
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_recipe_book_category",
+   "generics": "",
+   "params": [
+    "&mut self",
+    "kind: &str"
+   ],
+   "returns": "Option<RecipeBookCategory>",
+   "doc": "The validated category and icon of a custom recipe type, or None for an undeclared/invalid type, before resources load, or outside a world."
+  },
+  {
+   "name": "native_screen_pos",
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_screen_pos",
+   "generics": "",
+   "params": [
+    "&self"
+   ],
+   "returns": "Option<[i32; 3]>",
+   "doc": "The block of the mod screen that is open (`native_screen`), as the server named it when the block opened its menu type; None when no mod screen is open."
+  },
+  {
+   "name": "native_screen_extra_data",
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_screen_extra_data",
+   "generics": "",
+   "params": [
+    "&self"
+   ],
+   "returns": "Option<&[u8]>",
+   "doc": "What the block's mod wrote for the mod screen that is open (`native_menu_extra_data` on the server), empty when it wrote nothing; None when no mod screen is open."
+  },
+  {
+   "name": "native_send_chat",
+   "target": "horizon_client::game::native_net::Game<'_>::native_send_chat",
+   "generics": "",
+   "params": [
+    "&mut self",
+    "message: &str"
+   ],
+   "returns": "Result<(), String>",
+   "doc": "A mod's chat line or command (`/` first), sent as `send_chat` sends it (ClientPacketListener.sendChat / sendCommand), to any server:"
+  },
+  {
+   "name": "native_send_packet",
+   "target": "horizon_client::game::native_net::Game<'_>::native_send_packet",
+   "generics": "",
+   "params": [
+    "&mut self",
+    "packet: ServerboundPlayPacket"
+   ],
+   "returns": "Result<(), String>",
+   "doc": "Sends `packet` to the server as it is, to any server, a vanilla one included:"
+  },
+  {
+   "name": "native_client_state",
+   "target": "horizon_client::game::native_client_services::Game<'_>::native_client_state",
+   "generics": "",
+   "params": [
+    "&self"
+   ],
+   "returns": "Option<NativeClientState>",
+   "doc": "Client/window/connection state, including when menus cover the world."
+  },
+  {
+   "name": "native_client_entities",
+   "target": "horizon_client::game::native_client_services::Game<'_>::native_client_entities",
+   "generics": "",
+   "params": [
+    "&self"
+   ],
+   "returns": "Vec<NativeClientEntity>",
+   "doc": "Bulk client render data."
+  },
+  {
+   "name": "native_client_heads",
+   "target": "horizon_client::game::native_client_services::Game<'_>::native_client_heads",
+   "generics": "",
+   "params": [
+    "&self",
+    "ids: &[u32]",
+    "partial: f64"
+   ],
+   "returns": "Vec<NativeClientHead>",
+   "doc": "Requested model heads at a finite partial tick in 0..=1; at most 4096 IDs."
+  },
+  {
+   "name": "native_client_profiles",
+   "target": "horizon_client::game::native_client_services::Game<'_>::native_client_profiles",
+   "generics": "",
+   "params": [
+    "&mut self"
+   ],
+   "returns": "Vec<NativeClientProfile>",
+   "doc": "Player-list profiles with skin/cosmetic resolution through the client's normal cache."
+  },
+  {
+   "name": "native_client_visual_clear",
+   "target": "horizon_client::game::native_client_services::Game<'_>::native_client_visual_clear",
+   "generics": "",
+   "params": [
+    "&self",
+    "from: [f64; 3]",
+    "to: [f64; 3]"
+   ],
+   "returns": "bool",
+   "doc": "Whether a finite segment of at most 1024 blocks meets no visual block shape."
+  },
+  {
+   "name": "native_client_block_obstruction",
+   "target": "horizon_client::game::native_client_services::Game<'_>::native_client_block_obstruction",
+   "generics": "",
+   "params": [
+    "&self",
+    "pos: [i32; 3]"
+   ],
+   "returns": "Option<(bool, bool)>",
+   "doc": "Loaded block's full-collision and render-occlusion facts, in that order."
+  },
+  {
+   "name": "native_gui_paint",
+   "target": "horizon_client::game::native_client_services::Game<'_>::native_gui_paint",
+   "generics": "",
+   "params": [
+    "&self",
+    "batch: &mut HudBatch",
+    "draws: &[GuiDraw]"
+   ],
+   "returns": "",
+   "doc": "Paint GUI extraction calls through this window's atlas, including player faces."
+  },
+  {
+   "name": "native_gui_nine_slice",
+   "target": "horizon_client::game::native_client_services::Game<'_>::native_gui_nine_slice",
+   "generics": "",
+   "params": [
+    "&self",
+    "batch: &mut HudBatch",
+    "sprite: &str",
+    "rect: [f32; 4]",
+    "color: u32"
+   ],
+   "returns": "",
+   "doc": "Vanilla's nine-slice widget rendering."
+  },
+  {
+   "name": "native_gui_tooltip",
+   "target": "horizon_client::game::native_client_services::Game<'_>::native_gui_tooltip",
+   "generics": "",
+   "params": [
+    "&self",
+    "batch: &mut HudBatch",
+    "lines: &[Text]",
+    "at: [f32; 2]"
+   ],
+   "returns": "",
+   "doc": "A vanilla tooltip at the cursor, in GUI pixels."
+  },
+  {
+   "name": "native_set_mod_key",
+   "target": "horizon_client::game::native_client_services::Game<'_>::native_set_mod_key",
+   "generics": "",
+   "params": [
+    "&mut self",
+    "mod_id: &str",
+    "name: &str",
+    "key: Option<&str>"
+   ],
+   "returns": "bool",
+   "doc": "Save a mod binding, or restore its default with None."
+  },
+  {
+   "name": "native_client_action_bar",
+   "target": "horizon_client::game::native_client_services::Game<'_>::native_client_action_bar",
+   "generics": "",
+   "params": [
+    "&mut self",
+    "text: Text",
+    "animate: bool"
+   ],
+   "returns": "",
+   "doc": "Set this client's action bar, with the normal timer; no server command or packet."
+  },
+  {
+   "name": "native_text_width",
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_text_width",
+   "generics": "",
+   "params": [
+    "&self",
+    "text: &str"
+   ],
+   "returns": "f32",
+   "doc": "The width of `text` in GUI pixels."
+  },
+  {
+   "name": "native_playing",
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_playing",
+   "generics": "",
+   "params": [
+    "&self"
+   ],
+   "returns": "bool",
+   "doc": "Playing, with nothing over the world:"
+  },
+  {
+   "name": "native_window",
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_window",
+   "generics": "",
+   "params": [
+    "&self"
+   ],
+   "returns": "bool",
+   "doc": "This `Game` is the window's, not a server's."
+  },
+  {
+   "name": "native_player",
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_player",
+   "generics": "",
+   "params": [
+    "&self"
+   ],
+   "returns": "Option<NativePlayer>",
+   "doc": "The player, in a world."
+  },
+  {
+   "name": "native_acting_id",
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_acting_id",
+   "generics": "",
+   "params": [
+    "&mut self"
+   ],
+   "returns": "u128",
+   "doc": "The acting player as the hook points name one:"
   },
   {
    "name": "native_block_drops",
@@ -8823,14 +10392,16 @@
    "doc": "The mods' say on a broken block's drops (`native_loot_drops`)."
   },
   {
-   "name": "native_camera",
-   "target": "horizon_client::game::native_hooks::Game<'_>::native_camera",
+   "name": "native_camera_pose_now",
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_camera_pose_now",
    "generics": "",
    "params": [
-    "&self"
+    "&self",
+    "partial: f32",
+    "view: (glam::DVec3, f32, f32)"
    ],
-   "returns": "Option<NativeCamera>",
-   "doc": "The most recently extracted world frame's camera, if one exists."
+   "returns": "(glam::DVec3, f32, f32)",
+   "doc": "The camera native mods draw this frame from (`native_camera_pose`), starting from `view`, vanilla's position, yaw and pitch."
   },
   {
    "name": "native_chat",
@@ -8927,6 +10498,16 @@
    "doc": "The frame counter:"
   },
   {
+   "name": "native_health_hud_state",
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_health_hud_state",
+   "generics": "",
+   "params": [
+    "&mut self"
+   ],
+   "returns": "&mut HealthHud",
+   "doc": "Horizon's own health HUD state, for a mod answering `native_health_hud`."
+  },
+  {
    "name": "native_hidden_slots",
    "target": "horizon_client::game::native_hooks::Game<'_>::native_hidden_slots",
    "generics": "",
@@ -9018,6 +10599,17 @@
    ],
    "returns": "Option<&mut horizon_core::random::LegacyRandom>",
    "doc": "This level's own random (vanilla's `Level.random`):"
+  },
+  {
+   "name": "native_local_attribute",
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_local_attribute",
+   "generics": "",
+   "params": [
+    "&mut self",
+    "name: &str"
+   ],
+   "returns": "Option<f64>",
+   "doc": "The current value, base plus modifiers, of this client's player's attribute `name` (`minecraft:armor_toughness`), as vanilla's `LivingEntity.getAttributeValue`."
   },
   {
    "name": "native_mapping",
@@ -9116,16 +10708,6 @@
    "doc": "Play a sound event for nearby players in this server level."
   },
   {
-   "name": "native_player",
-   "target": "horizon_client::game::native_hooks::Game<'_>::native_player",
-   "generics": "",
-   "params": [
-    "&self"
-   ],
-   "returns": "Option<NativePlayer>",
-   "doc": "The player, in a world."
-  },
-  {
    "name": "native_players_leaving",
    "target": "horizon_client::game::native_hooks::Game<'_>::native_players_leaving",
    "generics": "",
@@ -9134,27 +10716,6 @@
    ],
    "returns": "",
    "doc": "The players still here leave with the server (`PlayerList.removeAll`):"
-  },
-  {
-   "name": "native_playing",
-   "target": "horizon_client::game::native_hooks::Game<'_>::native_playing",
-   "generics": "",
-   "params": [
-    "&self"
-   ],
-   "returns": "bool",
-   "doc": "Playing, with nothing over the world:"
-  },
-  {
-   "name": "native_recipe_book_category",
-   "target": "horizon_client::game::native_hooks::Game<'_>::native_recipe_book_category",
-   "generics": "",
-   "params": [
-    "&mut self",
-    "kind: &str"
-   ],
-   "returns": "Option<RecipeBookCategory>",
-   "doc": "The validated category and icon of a custom recipe type, or None for an undeclared/invalid type, before resources load, or outside a world."
   },
   {
    "name": "native_recipes",
@@ -9396,17 +10957,6 @@
    "doc": "The state `state` with its property `key` set to `value`, as a mod block builds the state it is placed in:"
   },
   {
-   "name": "native_text_width",
-   "target": "horizon_client::game::native_hooks::Game<'_>::native_text_width",
-   "generics": "",
-   "params": [
-    "&self",
-    "text: &str"
-   ],
-   "returns": "f32",
-   "doc": "The width of `text` in GUI pixels."
-  },
-  {
    "name": "native_ticks",
    "target": "horizon_client::game::native_hooks::Game<'_>::native_ticks",
    "generics": "",
@@ -9443,16 +10993,6 @@
    ],
    "returns": "bool",
    "doc": "Wheel steps while playing:"
-  },
-  {
-   "name": "native_window",
-   "target": "horizon_client::game::native_hooks::Game<'_>::native_window",
-   "generics": "",
-   "params": [
-    "&self"
-   ],
-   "returns": "bool",
-   "doc": "This `Game` is the window's, not a server's."
   },
   {
    "name": "native_with_mod_block_entity",
