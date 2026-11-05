@@ -105,6 +105,23 @@ enum Command {
         #[arg(long)]
         yes: bool,
     },
+    /// Add a ported mod to one of your Horizon instances, beside its other mods
+    Install {
+        /// The folder `port` wrote
+        path: PathBuf,
+        /// The instance (default: the one the launcher's Play starts)
+        #[arg(long)]
+        instance: Option<String>,
+        /// The Horizon launcher (default: found on PATH and in its usual places)
+        #[arg(long, value_name = "PATH")]
+        launcher: Option<PathBuf>,
+        /// Build the instance's native mods afterwards (needs --trust-native-code)
+        #[arg(long)]
+        build: bool,
+        /// You read the code of the instance's native mods and trust it with full access to this computer
+        #[arg(long)]
+        trust_native_code: bool,
+    },
     /// Play a ported mod in its instance, with its content loaded, without building it again
     Play {
         /// The folder `port` wrote
@@ -463,6 +480,81 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 "Next: read what changed (each ported function says so above it), then build: horizon-porter build {} --trust-native-code",
                 path.display()
             );
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Install {
+            path,
+            instance,
+            launcher,
+            build,
+            trust_native_code,
+        } => {
+            let port = porter_verify::Port::read(&path)?;
+            if build && !trust_native_code {
+                eprintln!(
+                    "Building compiles the Rust of every native mod in the instance into Horizon, and it runs with your rights.\n\
+                     Read it, and if you trust it, run this again with --trust-native-code."
+                );
+                return Ok(ExitCode::FAILURE);
+            }
+            let launcher = porter_verify::Launcher::find(launcher.as_deref())?;
+            let list = launcher.instances()?;
+            let target = match &instance {
+                Some(name) => list
+                    .into_iter()
+                    .find(|i| i.name.eq_ignore_ascii_case(name) || i.id.eq_ignore_ascii_case(name)),
+                None => list.into_iter().find(|i| i.selected),
+            }
+            .with_context(|| match &instance {
+                Some(name) => {
+                    format!("no instance named {name}: `horizon-launcher instance list` lists them")
+                }
+                None => "no instance is selected in the launcher".to_string(),
+            })?;
+            if !target.plays_horizon() {
+                anyhow::bail!(
+                    "\"{}\" plays Java Edition: Horizon mods go in a Horizon instance",
+                    target.name
+                );
+            }
+            let home = target
+                .home
+                .clone()
+                .context("the launcher gave no game folder for that instance")?;
+            let files =
+                porter_translate::bundle::package(&path, &path.join(".porter").join("dist"))?;
+            let pick = |ext: &str| {
+                files
+                    .iter()
+                    .find(|f| f.extension().is_some_and(|e| e == ext))
+                    .cloned()
+            };
+            let installed = porter_verify::install(
+                &home,
+                &port.id,
+                pick("hmod").as_deref(),
+                pick("hnmod").as_deref(),
+            )?;
+            for f in installed.content.iter().chain(installed.native.iter()) {
+                println!("Added {}", f.display());
+            }
+            println!("Turned on {} in \"{}\".", port.id, target.name);
+            if installed.native.is_none() {
+                println!("It loads the next time \"{}\" starts.", target.name);
+            } else if build {
+                println!("Building \"{}\" with {}.", target.name, launcher.version);
+                launcher.build_instance(
+                    &target,
+                    porter_verify::Trust::given_by_player(),
+                    |line| eprintln!("{line}"),
+                )?;
+                println!("\nDone: play \"{}\" from the launcher.", target.name);
+            } else {
+                println!(
+                    "Its code is built with the instance's other native mods: the launcher's Mods page shows \"Needs rebuild\", \
+                     or run this again with --build --trust-native-code."
+                );
+            }
             Ok(ExitCode::SUCCESS)
         }
         Command::Play {

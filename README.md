@@ -14,11 +14,13 @@ Rust rewrite of Minecraft, as native Horizon mods.
 
 Drop a mod's source folder or `.jar` on the window. Horizon Porter reads it and shows
 the report: every Mixin member as a slot colored by its verdict, what the mod builds
-on, its registrations and resources. **Port to Horizon** writes the Horizon mod into a
-folder you choose, then opens it or its `PORTING.md` for you. **Translate with AI**
-ports the functions it left, showing the cost before it starts and each function as it
-goes. **Build and play** compiles it into Horizon with your Horizon launcher, into an
-instance of its own, and **Play** starts it. **Save report** keeps the report as a page
+on, its registrations and resources. **Port to Horizon** writes the Horizon mod into
+`Documents\Horizon Porter\<mod>-horizon` (**Change folder** puts it elsewhere).
+**Translate with AI** ports the functions it left, showing the cost before it starts and
+each function as it goes. **Try it** compiles the mod alone into a test instance of its
+own and plays it. **Add to my Horizon** puts it into the instance you play, beside your
+other mods and modpacks, turns it on in Options > Mods, and builds that instance's
+native mods together, as the launcher does for any native mod. **Save report** keeps the report as a page
 to share. Reading, porting and building run on your computer; only translating with
 Claude sends anything out (each function's code, to api.anthropic.com).
 
@@ -195,6 +197,24 @@ Opus 5.5) and is for what Haiku gets wrong. `--ai ollama --model <name>` runs a 
 on your own computer with [Ollama](https://ollama.com): free, and nothing leaves the
 computer. `--ai claude-code` uses your `claude` command, and `--ai "<command>"` any
 program that reads the prompt on stdin.
+
+### Adding it to your Horizon
+
+```
+horizon-porter install my-mod-horizon                          # into the instance the launcher's Play starts
+horizon-porter install my-mod-horizon --instance "My modpack" --build --trust-native-code
+```
+
+`install` packs the mod and adds it to one of your instances beside its other mods: the
+content mod (`<id>.hmod`) in its `horizon-mods/`, the code (`<id>.hnmod`) in its
+`horizon-native-mods/`, turned on in Options > Mods. Every native mod in an instance is
+built into one game, so a ported mod plays alongside other mods and modpacks. Build the
+instance with `--build`, or from the launcher's Mods page, which shows "Needs rebuild".
+
+Does a port work before its logic is translated? Its content does: blocks, items,
+models, textures, recipes, loot and tags load and play as they are. What the Java code
+*does* (a machine's tick, a HUD, keys, what a Mixin changes) waits in stubs until
+`translate` or you port it: the mod loads and nothing breaks, it just doesn't act yet.
 
 ### Building, playing and sharing it
 

@@ -35,6 +35,80 @@ pub struct Instance {
     pub version: Option<String>,
     #[serde(default)]
     pub selected: bool,
+    /// Its game folder, where `horizon-mods/` and `horizon-native-mods/` are.
+    #[serde(default)]
+    pub home: Option<PathBuf>,
+    /// `default`, `own`, or `java` for a Java Edition instance.
+    #[serde(default)]
+    pub kind: Option<String>,
+}
+
+impl Instance {
+    /// Whether it plays Horizon (not Java Edition), so Horizon mods go in it.
+    pub fn plays_horizon(&self) -> bool {
+        self.kind.as_deref() != Some("java")
+    }
+}
+
+/// What [`install`] put in an instance.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Installed {
+    /// The content mod, in `horizon-mods/`.
+    pub content: Option<PathBuf>,
+    /// The native mod, in `horizon-native-mods/`: the instance needs a native build.
+    pub native: Option<PathBuf>,
+}
+
+/// Installs a ported mod's packaged files into a Horizon instance's game folder
+/// `home`, beside its other mods: the content mod (`.hmod`) in `horizon-mods/`, the
+/// native mod (`.hnmod`) in `horizon-native-mods/`, as the launcher keeps them, and
+/// turns it on in `horizon-mods.txt` (Options > Mods' switch). Building the instance
+/// is the player's step: [`Launcher::build_instance`], or the launcher's own Mods page.
+pub fn install(
+    home: &Path,
+    id: &str,
+    hmod: Option<&Path>,
+    hnmod: Option<&Path>,
+) -> Result<Installed> {
+    if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        bail!("{id:?} is no mod id");
+    }
+    let mut installed = Installed {
+        content: None,
+        native: None,
+    };
+    let place = |from: &Path, dir: &str, ext: &str| -> Result<PathBuf> {
+        let folder = home.join(dir);
+        std::fs::create_dir_all(&folder)
+            .with_context(|| format!("creating {}", folder.display()))?;
+        let to = folder.join(format!("{id}.{ext}"));
+        std::fs::copy(from, &to)
+            .with_context(|| format!("copying {} to {}", from.display(), to.display()))?;
+        Ok(to)
+    };
+    if let Some(f) = hmod {
+        installed.content = Some(place(f, "horizon-mods", "hmod")?);
+    }
+    if let Some(f) = hnmod {
+        installed.native = Some(place(f, "horizon-native-mods", "hnmod")?);
+    }
+    turn_on(home, id)?;
+    Ok(installed)
+}
+
+/// Sets `mod.<id>:true` in the instance's `horizon-mods.txt`, keeping its other lines.
+fn turn_on(home: &Path, id: &str) -> Result<()> {
+    let file = home.join("horizon-mods.txt");
+    let text = std::fs::read_to_string(&file).unwrap_or_default();
+    let key = format!("mod.{id}:");
+    let mut lines: Vec<String> = text
+        .lines()
+        .filter(|l| !l.trim_start().starts_with(&key))
+        .map(str::to_string)
+        .collect();
+    lines.push(format!("mod.{id}:true"));
+    std::fs::write(&file, lines.join("\n") + "\n")
+        .with_context(|| format!("writing {}", file.display()))
 }
 
 /// The installed Horizon launcher.
@@ -110,12 +184,36 @@ impl Launcher {
         &self,
         folder: &Path,
         instance: &Instance,
+        trust: Trust,
+        progress: impl FnMut(&str),
+    ) -> Result<String> {
+        self.run_native_build(Some(folder), instance, trust, progress)
+    }
+
+    /// Builds every native mod turned on in `instance` (its `horizon-native-mods/`),
+    /// together: what an instance needs after [`install`] adds one.
+    pub fn build_instance(
+        &self,
+        instance: &Instance,
+        trust: Trust,
+        progress: impl FnMut(&str),
+    ) -> Result<String> {
+        self.run_native_build(None, instance, trust, progress)
+    }
+
+    fn run_native_build(
+        &self,
+        folder: Option<&Path>,
+        instance: &Instance,
         _trust: Trust,
         mut progress: impl FnMut(&str),
     ) -> Result<String> {
-        let mut child = command(&self.path)
-            .arg("native-build")
-            .arg(folder)
+        let mut cmd = command(&self.path);
+        cmd.arg("native-build");
+        if let Some(folder) = folder {
+            cmd.arg(folder);
+        }
+        let mut child = cmd
             .args(["--instance", &instance.id, "--trust-native-code"])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -357,6 +455,48 @@ fn candidates() -> Vec<PathBuf> {
         out.push(PathBuf::from("/usr/bin").join(exe));
     }
     out
+}
+
+#[cfg(test)]
+mod install_tests {
+    use super::*;
+
+    #[test]
+    fn installs_beside_other_mods_and_turns_it_on() {
+        let home = std::env::temp_dir().join(format!("porter-install-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(
+            home.join("horizon-mods.txt"),
+            "mod.other:true\nmod.demo:false\n",
+        )
+        .unwrap();
+        let src = home.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("demo-1.0.hmod"), "content").unwrap();
+        std::fs::write(src.join("demo-1.0.hnmod"), "native").unwrap();
+        let got = install(
+            &home,
+            "demo",
+            Some(&src.join("demo-1.0.hmod")),
+            Some(&src.join("demo-1.0.hnmod")),
+        )
+        .unwrap();
+        assert_eq!(
+            got.content,
+            Some(home.join("horizon-mods").join("demo.hmod"))
+        );
+        assert_eq!(
+            got.native,
+            Some(home.join("horizon-native-mods").join("demo.hnmod"))
+        );
+        assert_eq!(
+            std::fs::read_to_string(home.join("horizon-mods.txt")).unwrap(),
+            "mod.other:true\nmod.demo:true\n"
+        );
+        assert!(install(&home, "../x", None, None).is_err());
+        std::fs::remove_dir_all(&home).ok();
+    }
 }
 
 #[cfg(test)]

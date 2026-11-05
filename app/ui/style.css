@@ -138,6 +138,9 @@ body.hovering .drop-idle .i { color: var(--accent); transform: translateY(2px); 
 .notice-detail { margin: 0; color: var(--fg-3); font-size: 13px; font-family: var(--mono);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .notice-actions { display: flex; gap: 8px; flex: none; }
+/* How long a build or a translation has run: it counts every second. */
+.notice-time { flex: none; color: var(--fg-3); font-family: var(--mono); font-size: 13px;
+  font-variant-numeric: tabular-nums; }
 
 .overlay {
   position: absolute; inset: 0; display: none; place-items: center; pointer-events: none;
@@ -162,6 +165,7 @@ body.hovering .result:not([hidden]) .overlay { display: grid; }
 .sheet-head { display: flex; align-items: center; justify-content: space-between; margin: -4px -8px -8px 0; }
 h2 { font-size: 18px; line-height: 24px; font-weight: 500; margin: 0; }
 .sheet-lede { margin: 0; color: var(--fg-2); font-size: 13px; line-height: 20px; }
+.sheet-foot { display: flex; justify-content: flex-end; gap: 8px; }
 
 .choices { border: 0; margin: 0; padding: 0; display: grid; gap: 8px; }
 .choices legend, .field-label { padding: 0; margin: 0 0 8px; font-size: 13px; font-weight: 500; color: var(--fg-2); }

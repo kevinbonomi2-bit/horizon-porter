@@ -51,9 +51,26 @@ function welcomeError(message) {
   el.querySelector("span").textContent = message || "";
 }
 
-/** A notice above the report: ok or bad, a title, a detail line and buttons. */
+let ticking = null;
+
+/** "1:05" from seconds. */
+function clock(secs) {
+  const m = Math.floor(secs / 60);
+  const s = String(secs % 60).padStart(2, "0");
+  return `${m}:${s}`;
+}
+
+/** A launcher progress line without its own clock: "[ 3:47] Compiling" → "Compiling". */
+function progressText(line) {
+  return line.replace(/^\[\s*\d+:\d\d\]\s*/, "");
+}
+
+/** A notice above the report: ok or bad, a title, a detail line and buttons. A busy
+ * notice counts the seconds since it opened. */
 function notice(kind, title, detail, actions = []) {
   const el = $("notice");
+  clearInterval(ticking);
+  ticking = null;
   el.replaceChildren();
   if (!kind) {
     el.hidden = true;
@@ -82,6 +99,17 @@ function notice(kind, title, detail, actions = []) {
     text.append(d);
   }
   el.append(text);
+  if (kind === "busy") {
+    const time = document.createElement("span");
+    time.className = "notice-time";
+    time.setAttribute("aria-label", "Time so far");
+    const started = Date.now();
+    time.textContent = clock(0);
+    ticking = setInterval(() => {
+      time.textContent = clock(Math.floor((Date.now() - started) / 1000));
+    }, 1000);
+    el.append(time);
+  }
   if (actions.length) {
     const box = document.createElement("div");
     box.className = "notice-actions";
@@ -137,14 +165,14 @@ async function saveReport() {
   }
 }
 
-async function port() {
+async function port(choose = false) {
   const b = $("port");
   const label = b.lastChild.previousSibling;
   b.disabled = true;
   b.classList.add("busy");
   label.textContent = "Porting";
   try {
-    const done = await invoke("port");
+    const done = await invoke("port", { choose });
     if (done) {
       const parts = [];
       if (done.blocks) parts.push(count(done.blocks, "block"));
@@ -158,10 +186,11 @@ async function port() {
       lastPort = done;
       const actions = [
         button("Open folder", () => openPath(done.out), "folder"),
-        button("Open PORTING.md", () => openPath(done.porting)),
+        button("Change folder", () => port(true)),
       ];
-      if (done.native) actions.push(button("Translate with AI", () => estimate(done), "code"));
-      actions.push(button(done.native ? "Build and play" : "Play", () => build(done), "play"));
+      if (done.native) actions.push(button("Translate with AI", () => estimate(done), "code", "primary"));
+      actions.push(button("Try it", () => build(done), "play"));
+      actions.push(button("Add to my Horizon", () => chooseInstance(done), "plus", done.native ? "" : "primary"));
       notice("ok", `Wrote ${done.id}-horizon: ${parts.join(", ")}`, done.out, actions);
     }
   } catch (e) {
@@ -231,7 +260,8 @@ async function translate(ported) {
     if (r.inputTokens) parts.push(`${r.inputTokens.toLocaleString()} tokens in, ${r.outputTokens.toLocaleString()} out`);
     notice(r.failed.length && !done ? "bad" : "ok", `Ported ${count(done, "function")}`, parts.join(" · "), [
       button("Open folder", () => openPath(ported.out), "folder"),
-      button(ported.native ? "Build and play" : "Play", () => build(ported), "play", "primary"),
+      button("Try it", () => build(ported), "play"),
+      button("Add to my Horizon", () => chooseInstance(ported), "plus", "primary"),
     ]);
     if (r.failed.length) $("notice").querySelector(".notice-detail").title = r.failed.join("\n");
   } catch (e) {
@@ -250,6 +280,99 @@ listen("translate-progress", (e) => {
     detail.title = e.payload;
   }
 });
+
+/* Add to my Horizon: pick an instance, install the packaged mod there, then build
+   the instance's native mods together. */
+let installing = null;
+
+async function chooseInstance(ported) {
+  if (building || translating) return;
+  installing = ported;
+  const box = $("targets");
+  box.querySelectorAll(".choice, .field-note").forEach((c) => c.remove());
+  let targets = [];
+  try {
+    targets = await invoke("install_targets");
+  } catch (e) {
+    notice("bad", "Could not list your Horizon instances", String(e));
+    return;
+  }
+  for (const t of targets) {
+    const label = document.createElement("label");
+    label.className = "choice";
+    const input = document.createElement("input");
+    input.type = "radio";
+    input.name = "target";
+    input.value = t.id;
+    input.checked = t.selected;
+    const name = document.createElement("span");
+    name.className = "choice-name";
+    name.textContent = t.name;
+    const note = document.createElement("span");
+    note.className = "choice-note";
+    note.textContent = t.selected ? "The launcher's Play starts this one" : t.id.endsWith("-port") ? "A test instance Horizon Porter made" : "";
+    label.append(input, name);
+    if (note.textContent) label.append(note);
+    box.append(label);
+  }
+  if (!box.querySelector("input:checked") && box.querySelector("input")) box.querySelector("input").checked = true;
+  $("install").showModal();
+}
+
+$("install-go").addEventListener("click", async () => {
+  const picked = $("targets").querySelector("input:checked");
+  $("install").close();
+  if (!picked || !installing) return;
+  const ported = installing;
+  notice("busy", `Adding ${ported.id}`, "Packing the mod");
+  try {
+    const r = await invoke("install_port", { id: picked.value });
+    if (r.needsBuild) {
+      notice("ok", `Added ${ported.id} to "${r.instance}"`, "Its code is built with the instance's other native mods before it plays", [
+        button("Open folder", () => openPath(ported.out), "folder"),
+        button(`Build "${r.instance}"`, () => buildInstance(r), "play", "primary"),
+      ]);
+    } else {
+      notice("ok", `Added ${ported.id} to "${r.instance}"`, "Turned on: it loads the next time the instance starts", [
+        button("Play", () => playInstance(r), "play", "primary"),
+      ]);
+    }
+  } catch (e) {
+    notice("bad", "Could not add the mod", String(e));
+  }
+});
+
+async function buildInstance(r) {
+  if (building || translating) return;
+  building = true;
+  $("port").disabled = true;
+  notice("busy", `Building "${r.instance}"`, "Waiting for your answer");
+  try {
+    const result = await invoke("build_installed", { id: r.instanceId });
+    if (result) {
+      notice("ok", `Built "${r.instance}"`, result, [button("Play", () => playInstance(r), "play", "primary")]);
+    } else {
+      notice("ok", `Added to "${r.instance}", not built yet`, "Build it here or from the launcher's Mods page when you are ready", [
+        button(`Build "${r.instance}"`, () => buildInstance(r), "play", "primary"),
+      ]);
+    }
+  } catch (e) {
+    const text = String(e);
+    notice("bad", "The build failed", text.split("\n").filter(Boolean).slice(-1)[0] || text);
+    $("notice").querySelector(".notice-detail").title = text;
+  } finally {
+    building = false;
+    $("port").disabled = false;
+  }
+}
+
+async function playInstance(r) {
+  try {
+    await invoke("play_installed", { id: r.instanceId });
+  } catch (e) {
+    notice("bad", "Could not start the game", String(e));
+  }
+}
 
 /* Translation settings. The key goes to Rust once, into the credential store, and
    never comes back: the page only learns whether one is saved. */
@@ -386,6 +509,7 @@ async function build(ported) {
       notice("ok", `Built ${ported.id} into "${built.instance}"`, built.result, [
         button("Open folder", () => openPath(ported.out), "folder"),
         button("Play", play, "play"),
+        button("Add to my Horizon", () => chooseInstance(ported), "plus"),
       ]);
     } else {
       notice(null);
@@ -414,7 +538,7 @@ listen("build-progress", (e) => {
   if (!building) return;
   const detail = $("notice").querySelector(".notice-detail");
   if (detail) {
-    detail.textContent = e.payload;
+    detail.textContent = progressText(e.payload);
     detail.title = e.payload;
   }
 });
@@ -433,7 +557,7 @@ $("again").addEventListener("click", () => {
   showView("welcome");
 });
 $("save").addEventListener("click", saveReport);
-$("port").addEventListener("click", port);
+$("port").addEventListener("click", () => port(false));
 
 listen("drop-hover", (e) => {
   document.body.classList.toggle("hovering", Boolean(e.payload));

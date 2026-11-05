@@ -22,6 +22,7 @@
   <symbol id="i-settings" viewBox="0 0 24 24"><path d="M10 5H3"/><path d="M12 19H3"/><path d="M14 3v4"/><path d="M16 17v4"/><path d="M21 12h-9"/><path d="M21 19h-5"/><path d="M21 5h-7"/><path d="M8 10v4"/><path d="M8 12H3"/></symbol>
   <symbol id="i-code" viewBox="0 0 24 24"><path d="m18 16 4-4-4-4"/><path d="m6 8-4 4 4 4"/><path d="m14.5 4-5 16"/></symbol>
   <symbol id="i-key" viewBox="0 0 24 24"><path d="m15.5 7.5 2.3 2.3a1 1 0 0 0 1.4 0l2.1-2.1a1 1 0 0 0 0-1.4L19 4"/><path d="m21 2-9.6 9.6"/><circle cx="7.5" cy="15.5" r="5.5"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="M12 5v14"/></symbol>
   <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></symbol>
 </svg>
 
@@ -76,6 +77,23 @@
     <div class="overlay" id="overlay" aria-hidden="true"><p>Release to read this mod instead</p></div>
   </section>
 </main>
+
+<dialog class="sheet" id="install" aria-labelledby="install-title">
+  <form method="dialog" class="sheet-inner">
+    <div class="sheet-head">
+      <h2 id="install-title">Add to my Horizon</h2>
+      <button class="btn icon-only" value="close" aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button>
+    </div>
+    <p class="sheet-lede">The mod goes into the instance you choose, beside its other mods, and is turned on in Options &gt; Mods. Its code is built with theirs, as the launcher does for any native mod.</p>
+    <fieldset class="choices" id="targets">
+      <legend>Instance</legend>
+    </fieldset>
+    <div class="sheet-foot">
+      <button class="btn" value="close">Cancel</button>
+      <button class="btn primary" type="button" id="install-go"><svg class="i"><use href="#i-plus"/></svg>Add</button>
+    </div>
+  </form>
+</dialog>
 
 <dialog class="sheet" id="settings" aria-labelledby="settings-title">
   <form method="dialog" class="sheet-inner" id="settings-form">

@@ -7,6 +7,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod ai;
+mod install;
 
 use std::fmt::Display;
 use std::path::PathBuf;
@@ -152,7 +153,13 @@ async fn save_report(
 /// Writes the Horizon mod into `<chosen folder>/<id>-horizon`, asking before it
 /// replaces generated files in a folder that already has files.
 #[tauri::command]
-async fn port(app: AppHandle, current: State<'_, Current>) -> Result<Option<PortView>, String> {
+/// Writes the Horizon mod into `Documents/Horizon Porter/<id>-horizon`, or into a
+/// folder the player chooses when `choose` is set.
+async fn port(
+    app: AppHandle,
+    current: State<'_, Current>,
+    choose: Option<bool>,
+) -> Result<Option<PortView>, String> {
     let scan = current
         .0
         .lock()
@@ -164,15 +171,22 @@ async fn port(app: AppHandle, current: State<'_, Current>) -> Result<Option<Port
             "Porting needs the mod's source folder. A jar can be scanned, not ported.".into(),
         );
     }
-    let Some(dir) = app
-        .dialog()
-        .file()
-        .set_title("Choose where to put the Horizon mod")
-        .blocking_pick_folder()
-    else {
-        return Ok(None);
+    let parent = if choose.unwrap_or(false) {
+        let Some(dir) = app
+            .dialog()
+            .file()
+            .set_title("Choose where to put the Horizon mod")
+            .blocking_pick_folder()
+        else {
+            return Ok(None);
+        };
+        dir.into_path().map_err(message)?
+    } else {
+        app.path()
+            .document_dir()
+            .map_err(message)?
+            .join("Horizon Porter")
     };
-    let parent = dir.into_path().map_err(message)?;
     let lang = porter_translate::bundle::load_lang(&scan);
     let bundle = porter_translate::bundle::generate_with(
         &scan,
@@ -241,7 +255,7 @@ fn launcher_memory(app: &AppHandle) -> Option<PathBuf> {
 
 /// The Horizon launcher: remembered, found in its usual places, or shown by the
 /// player. None when they cancel.
-fn launcher(app: &AppHandle) -> Result<Option<Launcher>, String> {
+pub(crate) fn launcher(app: &AppHandle) -> Result<Option<Launcher>, String> {
     let horizon = app.state::<Horizon>();
     if let Some(found) = horizon.launcher.lock().map_err(message)?.clone() {
         return Ok(Some(found));
@@ -406,7 +420,11 @@ fn main() {
             ai::forget_key,
             ai::local_models,
             ai::translate_estimate,
-            ai::translate
+            ai::translate,
+            install::install_targets,
+            install::install_port,
+            install::build_installed,
+            install::play_installed
         ])
         .on_window_event(|window, event| {
             // Drops are handled natively and forwarded to the page as paths.
