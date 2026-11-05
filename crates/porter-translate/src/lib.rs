@@ -13,6 +13,7 @@ pub mod block_entity;
 pub mod bundle;
 pub mod machine;
 pub mod netconf;
+pub mod screens;
 pub mod statics;
 /// The content mod, from the `porter-content` crate.
 pub use porter_content as content;

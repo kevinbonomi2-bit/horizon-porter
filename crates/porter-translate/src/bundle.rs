@@ -20,6 +20,7 @@ use crate::block_entity::{self, BlockEntity};
 use crate::content;
 use crate::machine::{self, Machine};
 use crate::netconf::{self, Message, Setting};
+use crate::screens::{self, ModScreen};
 use porter_map::{hooks, ledger};
 
 /// The Horizon commit a port names, and the horizon-mixins commit Horizon's own
@@ -269,6 +270,15 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
             wired.insert(hook, classes);
         }
     }
+    // The mod's own screens: opened over the world, drawn and clicked through the
+    // screen hooks.
+    let mod_screens = screens::find(&scan.custom_screens);
+    if !mod_screens.is_empty() {
+        let classes: BTreeSet<String> = mod_screens.iter().map(|s| s.class.clone()).collect();
+        for hook in screens::HOOKS {
+            wired.insert(hook, classes.clone());
+        }
+    }
     // The config: kept in Horizon's mod settings, changed on the mod's page.
     let settings = netconf::settings(&scan.config);
     if !settings.is_empty() {
@@ -322,6 +332,7 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
         recipe_types: &recipe_types,
         messages: &messages,
         settings: &settings,
+        screens: &mod_screens,
         statics: &java_statics,
         ledger: horizon.map(|src| (src.to_path_buf(), unmapped_ports(scan, src))),
     };
@@ -684,6 +695,8 @@ struct Ctx<'a> {
     messages: &'a [Message],
     /// Its config values.
     settings: &'a [Setting],
+    /// Its own screens.
+    screens: &'a [ModScreen],
     /// The Java statics the mod's code shares.
     statics: &'a [crate::statics::Module],
     /// The Horizon checkout read, and the functions that port each unmapped
@@ -928,6 +941,7 @@ pub const DESCRIPTION: &str = "{description}";
             ));
         }
         r.push_str(&netconf::net_runtime(self.messages));
+        r.push_str(&screens::runtime(self.screens));
 
         r.push_str(
             r#"
@@ -948,6 +962,7 @@ mod tests {
         }
         r.push_str(&netconf::net_tests(self.messages));
         r.push_str(&netconf::config_tests(self.settings));
+        r.push_str(&screens::tests(self.screens));
         r.push_str("}\n");
         r
     }
@@ -1394,6 +1409,143 @@ fn {id}_screen_draw(
 "#
                 ),
             ),
+            "frame" => (
+                "frame.rs",
+                format!(
+                    r#"// Once a frame: opens or closes {name}'s own screen when its code asked, and
+// notices when Escape (or another screen) closed it.
+fn {id}_frame(game: &mut crate::game::Game<'_>, elapsed: std::time::Duration) {{
+    use crate::game::{m} as m;
+    let _ = elapsed;
+    if let Some(request) = m::take_screen_request() {{
+        match request {{
+            Some(screen) => {{
+                if game.native_mod_screen_open(m::ID) {{
+                    m::set_open_screen(Some(screen));
+                }}
+            }}
+            None => {{
+                game.native_mod_screen_close(m::ID);
+                m::set_open_screen(None);
+            }}
+        }}
+    }}
+    if m::screen_is_open() && game.native_mod_screen() != Some(m::ID) {{
+        m::set_open_screen(None);
+    }}
+}}
+"#
+                ),
+            ),
+            "screen_render_post" => (
+                "screen_render_post.rs",
+                format!(
+                    r#"// Draws {name}'s own screen when it is open.
+fn {id}_screen_render_post(
+    game: &crate::game::Game<'_>,
+    batch: &mut horizon_client::hud::HudBatch,
+    screen: &horizon_client::mod_api::NativeScreenView<'_>,
+) {{
+    use crate::game::{m} as m;
+    if game.native_mod_screen() != Some(m::ID) || !m::screen_is_open() {{
+        return;
+    }}
+    let [x, y, w, h] = screen.rect;
+    let mut gui = m::Gui {{
+        size: [w, h],
+        mouse: [screen.mouse[0] - x, screen.mouse[1] - y],
+        ops: Vec::new(),
+    }};
+    m::draw_open_screen(&mut gui);
+    for op in gui.ops {{
+        match op {{
+            m::GuiOp::Fill {{ rect: [a, b, c, d], argb }} => game.native_fill(batch, [x + a, y + b, c, d], argb),
+            m::GuiOp::Text {{ text, at, rgb, shadow }} => {{
+                game.native_text(batch, &text, [x + at[0], y + at[1]], rgb, shadow);
+            }}
+            m::GuiOp::Sprite {{ name, src, dst: [a, b, c, d] }} => {{
+                game.native_sprite(batch, &name, src, [x + a, y + b, c, d]);
+            }}
+            m::GuiOp::Item {{ item, at, size }} => {{
+                game.native_item(batch, &item, [x + at[0], y + at[1]], size);
+            }}
+        }}
+    }}
+}}
+"#
+                ),
+            ),
+            "screen_mouse_button_pressed_pre" => (
+                "screen_mouse_button_pressed_pre.rs",
+                format!(
+                    r#"// A click on {name}'s own screen.
+fn {id}_screen_mouse_button_pressed_pre(
+    game: &crate::game::Game<'_>,
+    screen: &horizon_client::mod_api::NativeScreenView<'_>,
+    button: i32,
+    modifiers: u32,
+    canceled: &mut bool,
+) {{
+    use crate::game::{m} as m;
+    let _ = modifiers;
+    if game.native_mod_screen() != Some(m::ID) || !m::screen_is_open() {{
+        return;
+    }}
+    let at = [screen.mouse[0] - screen.rect[0], screen.mouse[1] - screen.rect[1]];
+    if m::click_open_screen(at, button) {{
+        *canceled = true;
+    }}
+}}
+"#
+                ),
+            ),
+            "screen_key_pressed_pre" => (
+                "screen_key_pressed_pre.rs",
+                format!(
+                    r#"// A key on {name}'s own screen.
+fn {id}_screen_key_pressed_pre(
+    game: &crate::game::Game<'_>,
+    screen: &horizon_client::mod_api::NativeScreenView<'_>,
+    key: &str,
+    repeat: bool,
+    modifiers: u32,
+    canceled: &mut bool,
+) {{
+    use crate::game::{m} as m;
+    let _ = (screen, repeat, modifiers);
+    if game.native_mod_screen() != Some(m::ID) || !m::screen_is_open() {{
+        return;
+    }}
+    if m::key_open_screen(key) {{
+        *canceled = true;
+    }}
+}}
+"#
+                ),
+            ),
+            "screen_mouse_scrolled_pre" => (
+                "screen_mouse_scrolled_pre.rs",
+                format!(
+                    r#"// The wheel over {name}'s own screen.
+fn {id}_screen_mouse_scrolled_pre(
+    game: &crate::game::Game<'_>,
+    screen: &horizon_client::mod_api::NativeScreenView<'_>,
+    scroll: [f64; 2],
+    modifiers: u32,
+    canceled: &mut bool,
+) {{
+    use crate::game::{m} as m;
+    let _ = (screen, modifiers);
+    if game.native_mod_screen() != Some(m::ID) || !m::screen_is_open() {{
+        return;
+    }}
+    if m::scroll_open_screen(scroll[1] as f32) {{
+        *canceled = true;
+    }}
+}}
+"#
+                ),
+            ),
             "block_entity_update_tag" => (
                 "block_entity_update_tag.rs",
                 format!(
@@ -1733,6 +1885,56 @@ fn {id}_net_from_server(game: &mut crate::game::Game<'_>, channel: &str, data: &
                         "-".into()
                     } else {
                         fields
+                    }
+                );
+            }
+        }
+        let drawn: Vec<&BlockEntity> = self
+            .block_entities
+            .iter()
+            .filter(|b| b.renderer.is_some())
+            .collect();
+        if !drawn.is_empty() {
+            p.push_str(
+                "\n## Drawing block entities\n\nEach block entity with a Java renderer has a `render_<name>` function in \
+                 `runtime.rs`: port its `submit` (or `render`) into it. It draws under a pose stack (`push`, `pop`, \
+                 `translate`, `rotate`, `rotate_about`, `scale`, as `PoseStack` does) with block models \
+                 (`draw.block(\"minecraft:grindstone\", &[])`), cubes, and items, animated with `frame.time()`. \
+                 `native_block_entity_submit` draws it every frame; `native_block_entity_update_tag` sends clients \
+                 the state it reads. Call `draw.keep()` when nothing moves, and Horizon reuses the frame.\n\n\
+                 | Block entity | Renderer |\n| --- | --- |\n",
+            );
+            for be in drawn {
+                let _ = writeln!(
+                    p,
+                    "| `{}` | `{}` |",
+                    be.id,
+                    be.renderer.as_deref().unwrap_or_default()
+                );
+            }
+        }
+        if !self.screens.is_empty() {
+            p.push_str(
+                "\n## Screens\n\nEach screen of the mod's own (`extends Screen`) is a struct in `runtime.rs` with \
+                 `draw_`, `click_`, `key_` and `scroll_` functions to port from its `render`, `mouseClicked`, \
+                 `keyPressed` and `mouseScrolled`. Drawing records rectangles, text, sprites and items in GUI \
+                 pixels from the screen's top left. Where the Java code calls `setScreen(new ...)`, call \
+                 `open_screen(...)`; Horizon shows it over the world (`native_mod_screen_open`) and Escape closes it.\n\n\
+                 | Screen | Opened by |\n| --- | --- |\n",
+            );
+            for s in self.screens {
+                let _ = writeln!(
+                    p,
+                    "| `{}` | {} |",
+                    s.class,
+                    if s.opened_by.is_empty() {
+                        "not found".to_string()
+                    } else {
+                        s.opened_by
+                            .iter()
+                            .map(|c| format!("`{c}`"))
+                            .collect::<Vec<_>>()
+                            .join(", ")
                     }
                 );
             }
@@ -2168,6 +2370,50 @@ fn bindings(hook: &str) -> &'static [(&'static str, &'static str, &'static str)]
                 "&mut Option<horizon_client::mod_api::NativeScreen>",
                 "&mut *screen",
             ),
+        ],
+        "frame" => &[GAME, ("elapsed", "std::time::Duration", "elapsed")],
+        "screen_render_post" => &[
+            ("game", "&crate::game::Game<'_>", "&*self"),
+            ("batch", "&mut horizon_client::hud::HudBatch", "&mut *batch"),
+            (
+                "screen",
+                "&horizon_client::mod_api::NativeScreenView<'_>",
+                "screen",
+            ),
+        ],
+        "screen_mouse_button_pressed_pre" => &[
+            ("game", "&crate::game::Game<'_>", "&*self"),
+            (
+                "screen",
+                "&horizon_client::mod_api::NativeScreenView<'_>",
+                "screen",
+            ),
+            ("button", "i32", "button"),
+            ("modifiers", "u32", "modifiers"),
+            ("canceled", "&mut bool", "&mut *canceled"),
+        ],
+        "screen_key_pressed_pre" => &[
+            ("game", "&crate::game::Game<'_>", "&*self"),
+            (
+                "screen",
+                "&horizon_client::mod_api::NativeScreenView<'_>",
+                "screen",
+            ),
+            ("key", "&str", "key"),
+            ("repeat", "bool", "repeat"),
+            ("modifiers", "u32", "modifiers"),
+            ("canceled", "&mut bool", "&mut *canceled"),
+        ],
+        "screen_mouse_scrolled_pre" => &[
+            ("game", "&crate::game::Game<'_>", "&*self"),
+            (
+                "screen",
+                "&horizon_client::mod_api::NativeScreenView<'_>",
+                "screen",
+            ),
+            ("scroll", "[f64; 2]", "scroll"),
+            ("modifiers", "u32", "modifiers"),
+            ("canceled", "&mut bool", "&mut *canceled"),
         ],
         "block_entity_update_tag" => &[
             ("pos", "[i32; 3]", "pos"),

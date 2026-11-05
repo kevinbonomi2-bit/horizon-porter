@@ -260,3 +260,24 @@ fn ports_a_block_entity_renderer() {
     // Drawing block entities came in hook points version 71.
     assert!(b.hooks >= 71);
 }
+
+#[test]
+fn ports_a_screen_of_the_mods_own() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../porter-java/tests/fixtures/neoforge-machine-demo");
+    let scan = porter_java::scan(&path).unwrap();
+    assert_eq!(scan.custom_screens.len(), 1);
+    assert_eq!(
+        scan.custom_screens[0].opened_by,
+        ["net.grind.client.GrindClient"]
+    );
+    let b = bundle::generate(&scan, &bundle::load_lang(&scan));
+    for hook in porter_translate::screens::HOOKS {
+        assert!(b.wired.contains_key(hook), "{hook}");
+    }
+    let runtime = &b.files["mixins/grind/runtime.rs"];
+    assert!(runtime.contains("pub enum Screen {\n    Guide(GuideScreen),\n}"));
+    assert!(runtime.contains("pub fn draw_guide(screen: &mut GuideScreen, gui: &mut Gui)"));
+    assert!(runtime.contains("`open_screen(Screen::Guide(GuideScreen::default()))`"));
+    assert!(b.files.contains_key("mixins/grind/frame.rs"));
+}

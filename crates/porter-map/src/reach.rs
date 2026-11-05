@@ -237,7 +237,7 @@ pub fn outlook(scan: &ModScan) -> Outlook {
         (
             Portability::NotYet,
             format!(
-                "Not portable yet. {out} of its {total} Mixins change {what}. Horizon draws with its own renderer, and ports can't change how it draws yet (rendering is milestone 6). {}",
+                "Not portable yet. {out} of its {total} Mixins change {what}. Horizon draws with its own renderer: a port can draw its own blocks and screens, but not change how Horizon draws the rest. {}",
                 if has_content {
                     "Its blocks, items and data would still carry over, but what the mod is for wouldn't."
                 } else {

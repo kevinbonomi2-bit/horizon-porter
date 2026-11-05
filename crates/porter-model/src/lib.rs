@@ -211,6 +211,9 @@ pub struct ModScan {
     /// The mod's block entity renderers.
     #[serde(default)]
     pub renderers: Vec<RendererInfo>,
+    /// The mod's own screens that aren't a container's.
+    #[serde(default)]
+    pub custom_screens: Vec<CustomScreenInfo>,
     /// The network messages the mod defines.
     #[serde(default)]
     pub payloads: Vec<PayloadInfo>,
@@ -289,6 +292,15 @@ pub struct ScreenInfo {
     pub height: Option<i32>,
     /// Its background texture: `textures/gui/crusher.png`.
     pub texture: Option<String>,
+}
+
+/// A screen of the mod's own that isn't a container's: a guidebook, a menu opened
+/// by a key (`class GuideScreen extends Screen`).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CustomScreenInfo {
+    pub class: String,
+    /// The classes that open it (`setScreen(new GuideScreen())`).
+    pub opened_by: Vec<String>,
 }
 
 /// A block entity renderer: `class CrusherRenderer implements

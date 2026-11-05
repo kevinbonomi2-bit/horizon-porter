@@ -214,6 +214,27 @@ fn network_and_config(root: &Path, scan: &mut ModScan) {
             }
         }
     }
+    // Screens of the mod's own (`extends Screen`), and who opens them.
+    for class in &scan.classes {
+        let sup = class.superclass.as_deref().unwrap_or_default();
+        if sup.rsplit('.').next() != Some("Screen") {
+            continue;
+        }
+        let simple = class.name.rsplit('.').next().unwrap_or(&class.name);
+        let opened_by = sources
+            .iter()
+            .filter(|(name, text)| {
+                *name != class.name
+                    && text.contains("setScreen")
+                    && text.contains(&format!("new {simple}("))
+            })
+            .map(|(name, _)| name.clone())
+            .collect();
+        scan.custom_screens.push(porter_model::CustomScreenInfo {
+            class: class.name.clone(),
+            opened_by,
+        });
+    }
     for (name, text) in &sources {
         scan.config.extend(netconf::config(name, text, &enums));
         if let Some(r) = machines::renderer(name, text) {
@@ -356,6 +377,7 @@ fn assemble(
         menus: Vec::new(),
         screens: Vec::new(),
         renderers: Vec::new(),
+        custom_screens: Vec::new(),
         payloads: Vec::new(),
         config: Vec::new(),
         client,

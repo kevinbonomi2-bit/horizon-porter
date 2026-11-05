@@ -189,6 +189,7 @@ pub(crate) fn scan(path: &Path) -> Result<ModScan> {
         menus: Vec::new(),
         screens: Vec::new(),
         renderers: Vec::new(),
+        custom_screens: Vec::new(),
         payloads: Vec::new(),
         config: Vec::new(),
         client: Default::default(),

@@ -174,6 +174,13 @@ port decodes each message and calls its handler, which you (or the translation) 
 from the Java one. Its **config** (`ModConfigSpec`) becomes a `Config` kept in Horizon's
 mod settings, with a page in Options > Mods that toggles, cycles and steps each value.
 
+A **block entity renderer** becomes a `render_<name>` function that draws with a pose
+stack (push, pop, translate, rotate, scale) and block models, cubes and items, animated
+with the frame's time: Horizon draws it each frame (`native_block_entity_submit`) from
+the state the server sends. A **screen of the mod's own** (a guidebook, a menu opened by
+a key) becomes a struct with `draw_`, `click_`, `key_` and `scroll_` functions, shown
+over the world with Horizon's mod screens.
+
 The report leads with whether the mod can be ported **today**. A Mixin can hook in the
 way horizon-mixins supports and still change something Horizon can't do yet: Mixins
 that change how the game or its screens are drawn reach Minecraft's renderer, which

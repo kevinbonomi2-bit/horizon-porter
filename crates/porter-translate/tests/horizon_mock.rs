@@ -63,6 +63,23 @@ const HOOKS: &[(&str, &str)] = &[
         "native_net_from_server",
         "&mut self, channel: &str, data: &[u8]",
     ),
+    ("native_frame", "&mut self, elapsed: std::time::Duration"),
+    (
+        "native_screen_render_post",
+        "&self, batch: &mut HudBatch, screen: &NativeScreenView<'_>",
+    ),
+    (
+        "native_screen_mouse_button_pressed_pre",
+        "&self, screen: &NativeScreenView<'_>, button: i32, modifiers: u32, canceled: &mut bool",
+    ),
+    (
+        "native_screen_key_pressed_pre",
+        "&self, screen: &NativeScreenView<'_>, key: &str, repeat: bool, modifiers: u32, canceled: &mut bool",
+    ),
+    (
+        "native_screen_mouse_scrolled_pre",
+        "&self, screen: &NativeScreenView<'_>, scroll: [f64; 2], modifiers: u32, canceled: &mut bool",
+    ),
     (
         "native_block_entity_update_tag",
         "pos: [i32; 3], entity: &ModBlockEntity, tag: &mut Option<Compound>",
@@ -202,6 +219,14 @@ pub mod mod_api {
         pub own_labels: bool,
         pub own_background: bool,
     }
+    pub struct NativeScreenView<'a> {
+        pub id: &'static str,
+        pub menu: Option<&'a str>,
+        pub rect: [f32; 4],
+        pub slots: usize,
+        pub mouse: [f32; 2],
+        pub partial_tick: f32,
+    }
 }
 
 pub mod hud {
@@ -255,7 +280,7 @@ pub mod game {
         use crate::crafting::{CustomRecipe, Ingredient};
         use crate::extras_hud::Corners;
         use crate::items::ItemStack;
-        use crate::mod_api::NativeScreen;
+        use crate::mod_api::{NativeScreen, NativeScreenView};
         use crate::horizon_world::nbt::Compound;
         use crate::horizon_world::registry::BlockStateId;
         use super::native_block_entity_draw::{BlockEntityDraw, CubeFace};
@@ -298,6 +323,10 @@ pub mod game {
             pub fn native_recipes_of_type(&self, kind: &str) -> &[CustomRecipe] { &[] }
             pub fn native_recipe_ingredient(&self, json: &serde_json::Value) -> Option<Ingredient> { None }
             pub fn native_recipe_result(&self, json: &serde_json::Value) -> Option<ItemStack> { None }
+            pub fn native_mod_screen_open(&mut self, mod_id: &str) -> bool { false }
+            pub fn native_mod_screen_close(&mut self, mod_id: &str) {}
+            pub fn native_mod_screen(&self) -> Option<&str> { None }
+            pub fn native_item(&self, batch: &mut HudBatch, item: &str, at: [f32; 2], size: f32) -> bool { false }
             pub fn native_draw_block(&self, draw: &mut BlockEntityDraw, block: &str, properties: &[(&str, &str)]) -> bool { false }
             pub fn native_draw_cube(&self, draw: &mut BlockEntityDraw, from: [f32; 3], to: [f32; 3], faces: [Option<CubeFace<'_>>; 6], tint: u32) -> bool { false }
             pub fn native_draw_item(&self, draw: &mut BlockEntityDraw, stack: &ItemStack, display: crate::horizon_assets::item_model::DisplayContext, owner_yaw: Option<f32>, seed: i32) -> bool { false }
@@ -369,6 +398,11 @@ fn machine_helpers_compile_against_horizon_api() {
         "settings_click",
         "block_entity_update_tag",
         "block_entity_submit",
+        "frame",
+        "screen_render_post",
+        "screen_mouse_button_pressed_pre",
+        "screen_key_pressed_pre",
+        "screen_mouse_scrolled_pre",
     ] {
         assert!(b.wired.contains_key(hook), "{hook}");
     }
