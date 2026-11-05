@@ -75,6 +75,18 @@ scenarios we check.
   ported (four to hooks), two helpers and the HUD filled in, built with the launcher
   and played in Horizon: the view stays steady when sprinting and the HUD counts
   pickups.
+- **M4, done (2026-11-05):** `translate` ports the functions `port` leaves, with an
+  AI model and the compiler: each function gets the Java it replaces, the parts of the
+  mod's module it can use and, for hook helpers, Horizon's game functions (174, now in
+  the hook table); `runtime.rs` answers are compiled and tested, and failures go back
+  with the compiler's message. It never touches a function without its TODO, resumes
+  from `.porter/translate.json`, and `port --force` keeps ported functions. The Java
+  mod's static fields are carried into `runtime.rs` as Rust (constants, atomics,
+  mutexes) so ported functions share state. Claude Haiku 5.5 is the default (Create's
+  whole pass is about $0.20), with Sonnet and Opus by `--model`, a free local model
+  with `--ai ollama`, Claude Code, or any command. **Tested live:** Haiku 5.5 ported
+  Steady View's HUD, pickup counter and fixed field of view and the demo crank's tick,
+  each on its first try, for about a cent; LIVE_RESULT
 - **Desktop app (2026-11-04):** Horizon Porter (`app/`, Tauri) wraps scan, report and
   port in a drag-and-drop window, with installers for Windows, macOS and Linux in each
   release. Designed with the unslop and oil-ui skills (see the README).

@@ -153,6 +153,39 @@ table of them, read from Horizon's source, so `port`:
 
 `PORTING.md`'s Mixins table says where each Mixin went.
 
+### Translating the rest with AI
+
+`port` wires everything and leaves each function's logic marked TODO.
+`translate` ports those functions with an AI model, one at a time:
+
+```
+horizon-porter translate my-mod-horizon --dry-run   # what it would do, and what it costs
+horizon-porter translate my-mod-horizon             # Claude Haiku 5.5 (ANTHROPIC_API_KEY)
+horizon-porter translate my-mod-horizon --ai ollama --model <a local model>   # free
+```
+
+Each function goes to the model with the Java it replaces, the parts of the mod's
+Rust module it can use (the Java mod's static fields are there too, as Rust), and for
+hook helpers the game functions Horizon gives hook code. The answer replaces the
+function. Functions in `runtime.rs` are compiled and tested with `cargo test`, and
+an answer that fails goes back to the model with the compiler's message (three tries,
+then the function is left as it was). Hook helpers compile inside Horizon, so
+`build` checks them. Each ported function says so above it: read it before you trust
+it.
+
+It only touches functions that still carry their TODO, so it never overwrites one you
+wrote, and it saves each result as it comes (`.porter/translate.json`), so it can stop
+and resume. `port --force` keeps ported functions too.
+
+**What it costs.** `--dry-run` prints an estimate before anything is spent, and more
+than five functions need `--yes`. Claude Haiku 5.5 is the default: about $0.01 for a
+small mod like Farmer's Delight and about $0.20 for Create's 95 functions.
+`--model claude-sonnet-5-5` or `claude-opus-5-5` costs more (Create about $7.80 on
+Opus 5.5) and is for what Haiku gets wrong. `--ai ollama --model <name>` runs a model
+on your own computer with [Ollama](https://ollama.com): free, and nothing leaves the
+computer. `--ai claude-code` uses your `claude` command, and `--ai "<command>"` any
+program that reads the prompt on stdin.
+
 ### Building, playing and sharing it
 
 ```

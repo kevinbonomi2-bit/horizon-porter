@@ -166,7 +166,11 @@ impl Launcher {
         let mut cmd = command(&self.path);
         cmd.args(["play", "--instance", &instance.id]);
         for m in dev_mods {
-            cmd.args(["--arg", "--dev-mod", "--arg"]).arg(m);
+            // The game runs in the instance's folder: a relative path would point
+            // there, and the content mod would silently not load.
+            let full = std::path::absolute(m)
+                .with_context(|| format!("finding {}", m.display()))?;
+            cmd.args(["--arg", "--dev-mod", "--arg"]).arg(full);
         }
         cmd.stdin(Stdio::null())
             .stdout(Stdio::null())
