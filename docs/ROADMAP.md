@@ -131,8 +131,11 @@ scenarios we check.
   demo has a spinning grindstone on its Crusher and a guide opened with G, both
   live-tested in Horizon. Standalone models (`ModelEvent.RegisterStandalone`,
   Flywheel's `PartialModel`) are baked through `native_standalone_models` and drawn as
-  parts with `draw.model`. Still to do: connected-texture models, item renderers,
-  instanced rendering, and overlays on vanilla screens.
+  parts with `draw.model`. What a mod draws over game screens (`ScreenEvent.Render.Post`,
+  Fabric's `ScreenEvents`, Mixins into `Screen.render`) and the clicks it takes there
+  become `draw_over_screen` and `click_on_screen`, with the same plain drawing as its own
+  screens. Still to do: connected-texture models, item renderers and instanced
+  rendering.
 
 ## Working with Horizon
 

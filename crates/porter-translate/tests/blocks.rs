@@ -292,4 +292,12 @@ fn ports_a_screen_of_the_mods_own() {
     assert!(runtime.contains("pub fn draw_guide(screen: &mut GuideScreen, gui: &mut Gui)"));
     assert!(runtime.contains("`open_screen(Screen::Guide(GuideScreen::default()))`"));
     assert!(b.files.contains_key("mixins/grind/frame.rs"));
+    // Its badge beside the inventory (`ScreenEvent.Render.Post`) is plain drawing too.
+    assert!(runtime.contains(
+        "/// TODO: port from `net.grind.client.InventoryBadge`.
+pub fn draw_over_screen("
+    ));
+    let render = &b.files["mixins/grind/screen_render_post.rs"];
+    assert!(render.contains("m::draw_open_screen(&mut gui);"));
+    assert!(render.contains("m::draw_over_screen(screen.id, screen.menu, screen.rect, &mut gui);"));
 }

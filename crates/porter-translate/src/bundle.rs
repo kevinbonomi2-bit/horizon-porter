@@ -283,6 +283,22 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
             wired.insert(hook, classes.clone());
         }
     }
+    // What the mod draws over game screens and the clicks it takes there
+    // (`ScreenEvent.Render.Post`, Fabric's `ScreenEvents`, Mixins into
+    // `Screen.render`): ported as plain drawing, like its own screens.
+    let overlays: BTreeSet<String> = ["screen_render_post", "screen_mouse_button_pressed_pre"]
+        .iter()
+        .filter_map(|h| unwired.get(h))
+        .flat_map(|(classes, _)| classes.iter().cloned())
+        .collect();
+    if !overlays.is_empty() {
+        for hook in ["screen_render_post", "screen_mouse_button_pressed_pre"] {
+            wired
+                .entry(hook)
+                .or_default()
+                .extend(overlays.iter().cloned());
+        }
+    }
     // The config: kept in Horizon's mod settings, changed on the mod's page.
     let settings = netconf::settings(&scan.config);
     if !settings.is_empty() {
@@ -337,6 +353,7 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
         messages: &messages,
         settings: &settings,
         screens: &mod_screens,
+        overlays: &overlays,
         statics: &java_statics,
         ledger: horizon.map(|src| (src.to_path_buf(), unmapped_ports(scan, src))),
     };
@@ -701,6 +718,8 @@ struct Ctx<'a> {
     settings: &'a [Setting],
     /// Its own screens.
     screens: &'a [ModScreen],
+    /// Its classes that draw over game screens.
+    overlays: &'a BTreeSet<String>,
     /// The Java statics the mod's code shares.
     statics: &'a [crate::statics::Module],
     /// The Horizon checkout read, and the functions that port each unmapped
@@ -952,7 +971,7 @@ pub const DESCRIPTION: &str = "{description}";
             r.push_str("];\n");
         }
         r.push_str(&netconf::net_runtime(self.messages));
-        r.push_str(&screens::runtime(self.screens));
+        r.push_str(&screens::runtime(self.screens, self.overlays));
 
         r.push_str(
             r#"
@@ -1450,64 +1469,22 @@ fn {id}_frame(game: &mut crate::game::Game<'_>, elapsed: std::time::Duration) {{
             ),
             "screen_render_post" => (
                 "screen_render_post.rs",
-                format!(
-                    r#"// Draws {name}'s own screen when it is open.
-fn {id}_screen_render_post(
-    game: &crate::game::Game<'_>,
-    batch: &mut horizon_client::hud::HudBatch,
-    screen: &horizon_client::mod_api::NativeScreenView<'_>,
-) {{
-    use crate::game::{m} as m;
-    if game.native_mod_screen() != Some(m::ID) || !m::screen_is_open() {{
-        return;
-    }}
-    let [x, y, w, h] = screen.rect;
-    let mut gui = m::Gui {{
-        size: [w, h],
-        mouse: [screen.mouse[0] - x, screen.mouse[1] - y],
-        ops: Vec::new(),
-    }};
-    m::draw_open_screen(&mut gui);
-    for op in gui.ops {{
-        match op {{
-            m::GuiOp::Fill {{ rect: [a, b, c, d], argb }} => game.native_fill(batch, [x + a, y + b, c, d], argb),
-            m::GuiOp::Text {{ text, at, rgb, shadow }} => {{
-                game.native_text(batch, &text, [x + at[0], y + at[1]], rgb, shadow);
-            }}
-            m::GuiOp::Sprite {{ name, src, dst: [a, b, c, d] }} => {{
-                game.native_sprite(batch, &name, src, [x + a, y + b, c, d]);
-            }}
-            m::GuiOp::Item {{ item, at, size }} => {{
-                game.native_item(batch, &item, [x + at[0], y + at[1]], size);
-            }}
-        }}
-    }}
-}}
-"#
+                screens::render_post_helper(
+                    name,
+                    id,
+                    m,
+                    !self.screens.is_empty(),
+                    !self.overlays.is_empty(),
                 ),
             ),
             "screen_mouse_button_pressed_pre" => (
                 "screen_mouse_button_pressed_pre.rs",
-                format!(
-                    r#"// A click on {name}'s own screen.
-fn {id}_screen_mouse_button_pressed_pre(
-    game: &crate::game::Game<'_>,
-    screen: &horizon_client::mod_api::NativeScreenView<'_>,
-    button: i32,
-    modifiers: u32,
-    canceled: &mut bool,
-) {{
-    use crate::game::{m} as m;
-    let _ = modifiers;
-    if game.native_mod_screen() != Some(m::ID) || !m::screen_is_open() {{
-        return;
-    }}
-    let at = [screen.mouse[0] - screen.rect[0], screen.mouse[1] - screen.rect[1]];
-    if m::click_open_screen(at, button) {{
-        *canceled = true;
-    }}
-}}
-"#
+                screens::click_helper(
+                    name,
+                    id,
+                    m,
+                    !self.screens.is_empty(),
+                    !self.overlays.is_empty(),
                 ),
             ),
             "screen_key_pressed_pre" => (

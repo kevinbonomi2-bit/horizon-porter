@@ -8,6 +8,7 @@
 //! the helpers draw them. Ported code opens one with `open_screen(...)`, which the
 //! frame hook carries out (opening needs the game).
 
+use std::collections::BTreeSet;
 use std::fmt::Write;
 
 use porter_model::CustomScreenInfo;
@@ -63,11 +64,47 @@ pub const HOOKS: &[&str] = &[
 
 /// The generated screens: the drawing types, a struct and functions to port for
 /// each screen, and the open screen's state.
-pub fn runtime(screens: &[ModScreen]) -> String {
-    if screens.is_empty() {
+pub fn runtime(screens: &[ModScreen], overlays: &BTreeSet<String>) -> String {
+    if screens.is_empty() && overlays.is_empty() {
         return String::new();
     }
     let mut r = String::from(GUI_TYPES);
+    if !overlays.is_empty() {
+        let java = overlays
+            .iter()
+            .map(|c| format!("`{c}`"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let _ = write!(
+            r,
+            r#"
+/// Draws on a game screen once it has drawn itself (NeoForge's
+/// `ScreenEvent.Render.Post`, Fabric's `ScreenEvents.afterRender`): beside the
+/// inventory, over the pause menu. `screen` is its id (`inventory`, `creative`,
+/// `paused`, `title`...), `menu` its menu type when it has one
+/// (`minecraft:furnace`), `panel` its panel `[x, y, width, height]`; `gui` is in
+/// GUI pixels from the window's top left.
+///
+/// TODO: port from {java}.
+pub fn draw_over_screen(screen: &str, menu: Option<&str>, panel: [f32; 4], gui: &mut Gui) {{
+    let _ = (screen, menu, panel, gui);
+}}
+
+/// A click on a game screen at `at` (GUI pixels from the window's top left),
+/// before the screen sees it (`ScreenEvent.MouseButtonPressed.Pre`,
+/// `ScreenMouseEvents.allowMouseClick`). True to take it from the screen.
+///
+/// TODO: port from {java}.
+pub fn click_on_screen(screen: &str, menu: Option<&str>, panel: [f32; 4], at: [f32; 2], button: i32) -> bool {{
+    let _ = (screen, menu, panel, at, button);
+    false
+}}
+"#
+        );
+    }
+    if screens.is_empty() {
+        return r;
+    }
     r.push_str("\n/// The mod's own screens, with their state.\n#[derive(Debug, Clone, PartialEq)]\npub enum Screen {\n");
     for s in screens {
         let _ = writeln!(r, "    {}({}),", s.variant, s.rust);
@@ -267,6 +304,90 @@ pub fn screen_is_open() -> bool {
     OPEN.lock().map(|o| o.is_some()).unwrap_or(false)
 }
 "#;
+
+/// The `screen_render_post` helper: draws the mod's own screen (`own`) and what it
+/// draws over game screens (`over`).
+pub fn render_post_helper(name: &str, id: &str, m: &str, own: bool, over: bool) -> String {
+    let mut body = String::new();
+    if own {
+        body.push_str(
+            "    if game.native_mod_screen() == Some(m::ID) && m::screen_is_open() {\n        let [x, y, w, h] = screen.rect;\n        let mut gui = m::Gui {\n            size: [w, h],\n            mouse: [screen.mouse[0] - x, screen.mouse[1] - y],\n            ops: Vec::new(),\n        };\n        m::draw_open_screen(&mut gui);\n        draw(game, batch, [x, y], gui.ops);\n        return;\n    }\n",
+        );
+    }
+    if over {
+        body.push_str(
+            "    let [x, y, w, h] = screen.rect;\n    let mut gui = m::Gui {\n        size: [x + w, y + h],\n        mouse: screen.mouse,\n        ops: Vec::new(),\n    };\n    m::draw_over_screen(screen.id, screen.menu, screen.rect, &mut gui);\n    draw(game, batch, [0.0, 0.0], gui.ops);\n",
+        );
+    }
+    let what = match (own, over) {
+        (true, true) => "its own screen when it is open, and what it draws over game screens",
+        (true, false) => "its own screen when it is open",
+        _ => "what it draws over game screens",
+    };
+    format!(
+        r#"// Draws {name}'s {what}.
+fn {id}_screen_render_post(
+    game: &crate::game::Game<'_>,
+    batch: &mut horizon_client::hud::HudBatch,
+    screen: &horizon_client::mod_api::NativeScreenView<'_>,
+) {{
+    use crate::game::{m} as m;
+    fn draw(
+        game: &crate::game::Game<'_>,
+        batch: &mut horizon_client::hud::HudBatch,
+        [x, y]: [f32; 2],
+        ops: Vec<crate::game::{m}::GuiOp>,
+    ) {{
+        use crate::game::{m}::GuiOp;
+        for op in ops {{
+            match op {{
+                GuiOp::Fill {{ rect: [a, b, c, d], argb }} => game.native_fill(batch, [x + a, y + b, c, d], argb),
+                GuiOp::Text {{ text, at, rgb, shadow }} => {{
+                    game.native_text(batch, &text, [x + at[0], y + at[1]], rgb, shadow);
+                }}
+                GuiOp::Sprite {{ name, src, dst: [a, b, c, d] }} => {{
+                    game.native_sprite(batch, &name, src, [x + a, y + b, c, d]);
+                }}
+                GuiOp::Item {{ item, at, size }} => {{
+                    game.native_item(batch, &item, [x + at[0], y + at[1]], size);
+                }}
+            }}
+        }}
+    }}
+{body}}}
+"#
+    )
+}
+
+/// The `screen_mouse_button_pressed_pre` helper: clicks on the mod's own screen
+/// (`own`) and on game screens (`over`).
+pub fn click_helper(name: &str, id: &str, m: &str, own: bool, over: bool) -> String {
+    let mut body = String::new();
+    if own {
+        body.push_str(
+            "    if game.native_mod_screen() == Some(m::ID) && m::screen_is_open() {\n        let at = [screen.mouse[0] - screen.rect[0], screen.mouse[1] - screen.rect[1]];\n        if m::click_open_screen(at, button) {\n            *canceled = true;\n        }\n        return;\n    }\n",
+        );
+    }
+    if over {
+        body.push_str(
+            "    if m::click_on_screen(screen.id, screen.menu, screen.rect, screen.mouse, button) {\n        *canceled = true;\n    }\n",
+        );
+    }
+    format!(
+        r#"// A click on {name}'s own screen, or on a game screen it draws over.
+fn {id}_screen_mouse_button_pressed_pre(
+    game: &crate::game::Game<'_>,
+    screen: &horizon_client::mod_api::NativeScreenView<'_>,
+    button: i32,
+    modifiers: u32,
+    canceled: &mut bool,
+) {{
+    use crate::game::{m} as m;
+    let _ = (game, modifiers);
+{body}}}
+"#
+    )
+}
 
 /// Tests: each screen opens and draws, and requests are taken once.
 pub fn tests(screens: &[ModScreen]) -> String {
