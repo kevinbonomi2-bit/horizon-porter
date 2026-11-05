@@ -71,7 +71,10 @@ scenarios we check.
   the remaining Mixins at the Horizon functions whose comments name their target.
   On real mods: Botania's Mixins reach 22 hooks and 25 Horizon functions, Create's 3
   and 15; most of the rest target code Horizon doesn't port by name yet (Sodium's
-  renderer Mixins above all). TESTED_LIVE
+  renderer Mixins above all). **Tested live:** the Steady View fixture's six Mixins
+  ported (four to hooks), two helpers and the HUD filled in, built with the launcher
+  and played in Horizon: the view stays steady when sprinting and the HUD counts
+  pickups.
 - **Desktop app (2026-11-04):** Horizon Porter (`app/`, Tauri) wraps scan, report and
   port in a drag-and-drop window, with installers for Windows, macOS and Linux in each
   release. Designed with the unslop and oil-ui skills (see the README).
