@@ -191,11 +191,9 @@ def main() -> None:
                 }
             )
     OUT.parent.mkdir(parents=True, exist_ok=True)
-    OUT.write_text(
-        json.dumps({"horizon": commit, "hooks": hooks, "helpers": helpers}, indent=1, ensure_ascii=False)
-        + "\n",
-        encoding="utf-8",
-    )
+    with open(OUT, "w", encoding="utf-8", newline="\n") as f:
+        json.dump({"horizon": commit, "hooks": hooks, "helpers": helpers}, f, indent=1, ensure_ascii=False)
+        f.write("\n")
     print(f"{len(hooks)} hooks and {len(helpers)} helpers from {commit} to {OUT}")
     if missing:
         print("not found:", ", ".join(missing))
