@@ -29,6 +29,8 @@ pub struct BlockEntity {
     pub fields: Vec<StateField>,
     /// Whether it ticks (the Java class has a tick method).
     pub ticks: bool,
+    /// Its Java renderer (`BlockEntityRenderer`), fully qualified, when it has one.
+    pub renderer: Option<String>,
     /// Java fields the state leaves out, with why.
     pub left_out: Vec<String>,
 }
@@ -167,10 +169,17 @@ pub fn find(scan: &ModScan, ns: &str) -> Vec<BlockEntity> {
             snake,
             fields: Vec::new(),
             ticks: false,
+            renderer: None,
             left_out: Vec::new(),
         };
         if let Some(class) = class {
             state_of(class, &mut be);
+            let simple = class.name.rsplit('.').next().unwrap_or(&class.name);
+            be.renderer = scan
+                .renderers
+                .iter()
+                .find(|r| r.entity == simple)
+                .map(|r| r.class.clone());
         }
         out.push(be);
     }
@@ -449,12 +458,147 @@ pub const BLOCK_ENTITIES: &[(&str, &str, bool)] = &[
             "        _ => {\n            let _ = machine;\n            None\n        }\n    }\n}\n",
         );
     }
+    let drawn: Vec<&BlockEntity> = entities.iter().filter(|b| b.renderer.is_some()).collect();
+    if !drawn.is_empty() {
+        r.push_str(DRAW_TYPES);
+        for be in &drawn {
+            let _ = write!(
+                r,
+                "\n/// Draws block entity `{id}` on the client, once a frame while it is in view, from\n/// what the server sent of its state. `draw` starts at the block's lower north-west\n/// corner, in blocks; `frame` has the partial tick and game time to animate with.\n/// Draw nothing to leave just the block's own model.\n///\n/// TODO: port the `submit` (or `render`) of `{java}`.\npub fn render_{snake}(state: &{ty}, frame: &Frame, draw: &mut Draw) {{\n    let _ = (state, frame, draw);\n}}\n",
+                id = be.id,
+                java = be.renderer.as_deref().unwrap_or_default(),
+                snake = be.snake,
+                ty = be.rust
+            );
+        }
+        r.push_str("\n/// Draws block entity `id`: `get` reads what the server sent of its state.\npub fn render_block_entity(\n    id: &str,\n    get: impl Fn(&str) -> Option<Saved>,\n    frame: &Frame,\n    draw: &mut Draw,\n) {\n    match id {\n");
+        for be in &drawn {
+            let _ = writeln!(
+                r,
+                "        \"{id}\" => render_{snake}(&{ty}::load(get), frame, draw),",
+                id = be.id,
+                snake = be.snake,
+                ty = be.rust
+            );
+        }
+        r.push_str("        _ => {}\n    }\n}\n");
+    }
     r.push_str(crate::machine::MACHINE_TYPES);
     if !machines.is_empty() {
         r.push_str(&crate::machine::runtime(machines, recipe_types));
     }
     r
 }
+
+/// What a block entity renderer draws with: a pose stack and parts, recorded so the
+/// renderer is plain code (and testable); the `block_entity_submit` helper draws
+/// them with Horizon's `BlockEntityDraw`.
+pub const DRAW_TYPES: &str = r#"
+/// A frame of a block entity drawn on the client.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Frame {
+    pub pos: [i32; 3],
+    /// The block (`grind:crusher`) and its `facing`, if it has one.
+    pub block: String,
+    pub facing: Option<String>,
+    /// The frame's partial tick, 0 to 1, and the level's game time.
+    pub partial: f32,
+    pub game_time: i64,
+}
+
+impl Frame {
+    /// Ticks since the world began, smooth between ticks: for animations.
+    pub fn time(&self) -> f32 {
+        (self.game_time % 24_000) as f32 + self.partial
+    }
+
+    /// Degrees to turn a model that faces north to face `facing`
+    /// (`Direction.toYRot`), about the Y axis.
+    pub fn facing_degrees(&self) -> f32 {
+        match self.facing.as_deref() {
+            Some("south") => 180.0,
+            Some("west") => 90.0,
+            Some("east") => 270.0,
+            _ => 0.0,
+        }
+    }
+}
+
+/// One step of drawing.
+#[derive(Debug, Clone, PartialEq)]
+pub enum DrawOp {
+    Push,
+    Pop,
+    Translate([f32; 3]),
+    /// Degrees about `axis` (counterclockwise seen from its positive end) through
+    /// `pivot`, in blocks.
+    Rotate { axis: [f32; 3], degrees: f32, pivot: [f32; 3] },
+    Scale([f32; 3]),
+    /// A block's model in a state: `("minecraft:grindstone", [("face", "floor")])`.
+    Block { block: String, properties: Vec<(String, String)> },
+    /// A box in texels (16 a block), every face with `sprite` (`minecraft:block/stone`).
+    Cube { from: [f32; 3], to: [f32; 3], sprite: String, tint: u32 },
+    /// An item as it sits in an item frame.
+    Item { item: String, count: u32 },
+    /// What was drawn doesn't move by itself: Horizon keeps it until the state changes.
+    Keep,
+}
+
+/// A pose stack and the parts drawn under it (`PoseStack`, `SubmitNodeCollector`).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Draw {
+    pub ops: Vec<DrawOp>,
+}
+
+impl Draw {
+    /// `pose.pushPose()`.
+    pub fn push(&mut self) {
+        self.ops.push(DrawOp::Push);
+    }
+    /// `pose.popPose()`.
+    pub fn pop(&mut self) {
+        self.ops.push(DrawOp::Pop);
+    }
+    /// `pose.translate(x, y, z)`, in blocks.
+    pub fn translate(&mut self, by: [f32; 3]) {
+        self.ops.push(DrawOp::Translate(by));
+    }
+    /// `pose.mulPose(Axis.YP.rotationDegrees(d))` is `rotate([0.0, 1.0, 0.0], d)`.
+    pub fn rotate(&mut self, axis: [f32; 3], degrees: f32) {
+        self.rotate_about(axis, degrees, [0.0; 3]);
+    }
+    /// A turn through `pivot`: `[0.5; 3]` is the block's centre.
+    pub fn rotate_about(&mut self, axis: [f32; 3], degrees: f32, pivot: [f32; 3]) {
+        self.ops.push(DrawOp::Rotate { axis, degrees, pivot });
+    }
+    /// `pose.scale(x, y, z)`.
+    pub fn scale(&mut self, by: [f32; 3]) {
+        self.ops.push(DrawOp::Scale(by));
+    }
+    /// A block's model (`renderSingleBlock`, `submitBlock`): any block, any state.
+    pub fn block(&mut self, block: &str, properties: &[(&str, &str)]) {
+        self.ops.push(DrawOp::Block {
+            block: block.to_string(),
+            properties: properties
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+        });
+    }
+    /// A box from `from` to `to` in texels, its faces all `sprite`, tinted 0xRRGGBB.
+    pub fn cube(&mut self, from: [f32; 3], to: [f32; 3], sprite: &str, tint: u32) {
+        self.ops.push(DrawOp::Cube { from, to, sprite: sprite.to_string(), tint });
+    }
+    /// An item, as one on a shelf or in a frame.
+    pub fn item(&mut self, item: &str, count: u32) {
+        self.ops.push(DrawOp::Item { item: item.to_string(), count });
+    }
+    /// What this frame drew stands still until the state changes (an idle machine).
+    pub fn keep(&mut self) {
+        self.ops.push(DrawOp::Keep);
+    }
+}
+"#;
 
 /// Tests for the generated module: each state survives a save and a load.
 pub fn runtime_tests(entities: &[BlockEntity]) -> String {
@@ -467,6 +611,16 @@ pub fn runtime_tests(entities: &[BlockEntity]) -> String {
             ty = be.rust,
             id = be.id
         );
+        if be.renderer.is_some() {
+            // Every pose it pushes, it pops: at rest and mid-animation.
+            let _ = write!(
+                t,
+                "\n    #[test]\n    fn {snake}_draws_with_balanced_poses() {{\n        use super::DrawOp;\n        for game_time in [0, 37, 23_999] {{\n            let frame = super::Frame {{\n                game_time,\n                partial: 0.5,\n                block: \"{id}\".into(),\n                facing: Some(\"east\".into()),\n                ..Default::default()\n            }};\n            let mut draw = super::Draw::default();\n            super::render_{snake}(&super::{ty}::default(), &frame, &mut draw);\n            let mut depth = 0i32;\n            for op in &draw.ops {{\n                match op {{\n                    DrawOp::Push => depth += 1,\n                    DrawOp::Pop => depth -= 1,\n                    _ => {{}}\n                }}\n                assert!(depth >= 0, \"popped a pose it never pushed\");\n            }}\n            assert_eq!(depth, 0, \"pushed a pose it never popped\");\n        }}\n    }}\n",
+                snake = be.snake,
+                ty = be.rust,
+                id = be.id
+            );
+        }
     }
     t
 }

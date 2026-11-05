@@ -208,6 +208,9 @@ pub struct ModScan {
     /// The mod's container screens (`AbstractContainerScreen` subclasses).
     #[serde(default)]
     pub screens: Vec<ScreenInfo>,
+    /// The mod's block entity renderers.
+    #[serde(default)]
+    pub renderers: Vec<RendererInfo>,
     /// The network messages the mod defines.
     #[serde(default)]
     pub payloads: Vec<PayloadInfo>,
@@ -286,6 +289,15 @@ pub struct ScreenInfo {
     pub height: Option<i32>,
     /// Its background texture: `textures/gui/crusher.png`.
     pub texture: Option<String>,
+}
+
+/// A block entity renderer: `class CrusherRenderer implements
+/// BlockEntityRenderer<CrusherBlockEntity, ...>`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RendererInfo {
+    pub class: String,
+    /// The block entity class it draws, as written (`CrusherBlockEntity`).
+    pub entity: String,
 }
 
 /// A network message the mod defines: a `CustomPacketPayload` record.

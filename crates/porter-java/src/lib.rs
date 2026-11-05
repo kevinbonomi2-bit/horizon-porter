@@ -216,6 +216,9 @@ fn network_and_config(root: &Path, scan: &mut ModScan) {
     }
     for (name, text) in &sources {
         scan.config.extend(netconf::config(name, text, &enums));
+        if let Some(r) = machines::renderer(name, text) {
+            scan.renderers.push(r);
+        }
     }
 }
 
@@ -352,6 +355,7 @@ fn assemble(
         bundled_jars: Vec::new(),
         menus: Vec::new(),
         screens: Vec::new(),
+        renderers: Vec::new(),
         payloads: Vec::new(),
         config: Vec::new(),
         client,

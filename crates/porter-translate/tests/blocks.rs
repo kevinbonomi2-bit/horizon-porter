@@ -240,3 +240,23 @@ fn ports_network_messages_and_config() {
     let porting = &b.files["PORTING.md"];
     assert!(porting.contains("## Network messages") && porting.contains("## Config"));
 }
+
+#[test]
+fn ports_a_block_entity_renderer() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../porter-java/tests/fixtures/neoforge-machine-demo");
+    let scan = porter_java::scan(&path).unwrap();
+    assert_eq!(scan.renderers.len(), 1);
+    let b = bundle::generate(&scan, &bundle::load_lang(&scan));
+    assert!(b.wired.contains_key("block_entity_submit"));
+    assert!(b.wired.contains_key("block_entity_update_tag"));
+    let runtime = &b.files["mixins/grind/runtime.rs"];
+    assert!(runtime.contains(
+        "/// TODO: port the `submit` (or `render`) of `net.grind.client.CrusherRenderer`.\npub fn render_crusher(state: &Crusher, frame: &Frame, draw: &mut Draw)"
+    ));
+    assert!(
+        runtime.contains("\"grind:crusher\" => render_crusher(&Crusher::load(get), frame, draw),")
+    );
+    // Drawing block entities came in hook points version 71.
+    assert!(b.hooks >= 71);
+}

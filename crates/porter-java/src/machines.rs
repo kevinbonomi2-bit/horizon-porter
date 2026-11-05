@@ -5,7 +5,7 @@
 //!
 //! It reads the source text: the shapes mods write these in are few and regular.
 
-use porter_model::{MenuInfo, MenuSlot, ScreenInfo};
+use porter_model::{MenuInfo, MenuSlot, RendererInfo, ScreenInfo};
 
 /// The menu a class's source declares (`class` is its fully qualified name).
 pub fn menu(class: &str, source: &str) -> MenuInfo {
@@ -148,6 +148,50 @@ fn is_result(ty: &str, source: &str) -> bool {
         let end = after.find('}').unwrap_or(after.len());
         after[..end].contains("return false")
     })
+}
+
+/// A block entity renderer: the block entity class in its
+/// `BlockEntityRenderer<T>` (or `<T, S>`, with a render state) or
+/// `BlockEntityRendererProvider<T>`.
+pub fn renderer(class: &str, source: &str) -> Option<RendererInfo> {
+    for marker in ["BlockEntityRenderer<", "BlockEntityRendererProvider<"] {
+        let mut from = 0;
+        while let Some(i) = source[from..].find(marker).map(|i| from + i) {
+            from = i + marker.len();
+            let before = &source[..i];
+            // Only the class's own `implements`, not a field or a parameter.
+            let head = before.rsplit(['{', ';', '}']).next().unwrap_or(before);
+            if !head.contains("implements") {
+                continue;
+            }
+            let args: String = source[from..]
+                .chars()
+                .scan(1i32, |depth, c| {
+                    match c {
+                        '<' => *depth += 1,
+                        '>' => *depth -= 1,
+                        _ => {}
+                    }
+                    (*depth > 0).then_some(c)
+                })
+                .collect();
+            let entity = split_top(&args).into_iter().next()?;
+            let entity = entity
+                .rsplit('.')
+                .next()
+                .unwrap_or(&entity)
+                .trim()
+                .to_string();
+            if entity.is_empty() || entity.contains('?') {
+                return None;
+            }
+            return Some(RendererInfo {
+                class: class.to_string(),
+                entity,
+            });
+        }
+    }
+    None
 }
 
 /// The argument text of each call to `name` in `source` (`name(` ... `)`).

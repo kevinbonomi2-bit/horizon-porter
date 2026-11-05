@@ -237,6 +237,16 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
             wired.insert("block_entity_tick", classes);
         }
     }
+    // Block entities with a renderer: drawn on the client from what the server
+    // sends of their state.
+    let drawn: BTreeSet<String> = block_entities
+        .iter()
+        .filter_map(|b| b.renderer.clone())
+        .collect();
+    if !drawn.is_empty() {
+        wired.insert("block_entity_update_tag", drawn.clone());
+        wired.insert("block_entity_submit", drawn);
+    }
     if !machines.is_empty() && !content.is_empty() {
         let menus: BTreeSet<String> = machines.iter().map(|m| m.menu_class.clone()).collect();
         let screens: BTreeSet<String> = machines
@@ -1384,6 +1394,100 @@ fn {id}_screen_draw(
 "#
                 ),
             ),
+            "block_entity_update_tag" => (
+                "block_entity_update_tag.rs",
+                format!(
+                    r#"// What clients get of one of {name}'s block entities (`getUpdateTag`): its
+// saved state, which its renderer draws from.
+fn {id}_block_entity_update_tag(
+    pos: [i32; 3],
+    entity: &horizon_client::containers::ModBlockEntity,
+    tag: &mut Option<horizon_world::nbt::Compound>,
+) {{
+    use crate::game::{m} as m;
+    let _ = pos;
+    if m::BLOCK_ENTITIES.iter().any(|(_, id, _)| *id == entity.id) {{
+        *tag = Some(entity.nbt.clone());
+    }}
+}}
+"#
+                ),
+            ),
+            "block_entity_submit" => (
+                "block_entity_submit.rs",
+                format!(
+                    r##"// Draws one of {name}'s block entities on this client: its renderer, ported,
+// records what to draw; this draws it with Horizon's pose stack.
+fn {id}_block_entity_submit(
+    game: &crate::game::Game<'_>,
+    pos: [i32; 3],
+    block: &str,
+    state: horizon_world::registry::BlockStateId,
+    entity: &horizon_client::containers::ModBlockEntity,
+    draw: &mut crate::game::BlockEntityDraw,
+) {{
+    use crate::game::{m} as m;
+    use horizon_world::nbt::{{JavaString, Tag}};
+    if !m::BLOCK_ENTITIES.iter().any(|(_, id, _)| *id == entity.id) {{
+        return;
+    }}
+    let frame = m::Frame {{
+        pos,
+        block: block.to_string(),
+        facing: game.native_block_state_property(state, "facing").map(str::to_string),
+        partial: draw.partial,
+        game_time: draw.game_time,
+    }};
+    let mut ops = m::Draw::default();
+    {{
+        let nbt = &entity.nbt;
+        m::render_block_entity(
+            &entity.id,
+            |key| {{
+                let tag = nbt.get(&JavaString::from(key))?;
+                {from_tag}
+            }},
+            &frame,
+            &mut ops,
+        );
+    }}
+    for op in ops.ops {{
+        match op {{
+            m::DrawOp::Push => draw.push(),
+            m::DrawOp::Pop => draw.pop(),
+            m::DrawOp::Translate(by) => draw.translate(by),
+            m::DrawOp::Rotate {{ axis, degrees, pivot }} => draw.rotate_about(axis, degrees, pivot),
+            m::DrawOp::Scale(by) => draw.scale(by),
+            m::DrawOp::Block {{ block, properties }} => {{
+                let properties: Vec<(&str, &str)> =
+                    properties.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+                game.native_draw_block(draw, &block, &properties);
+            }}
+            m::DrawOp::Cube {{ from, to, sprite, tint }} => {{
+                let face = Some(crate::game::native_block_entity_draw::CubeFace {{
+                    sprite: &sprite,
+                    uv: None,
+                }});
+                game.native_draw_cube(draw, from, to, [face; 6], tint);
+            }}
+            m::DrawOp::Item {{ item, count }} => {{
+                let stack = horizon_client::items::ItemStack::new(&item, count);
+                game.native_draw_item(
+                    draw,
+                    &stack,
+                    horizon_assets::item_model::DisplayContext::Fixed,
+                    None,
+                    0,
+                );
+            }}
+            m::DrawOp::Keep => draw.keep(),
+        }}
+    }}
+}}
+"##,
+                    from_tag = block_entity::FROM_TAG,
+                ),
+            ),
             "net_from_client" => (
                 "net_from_client.rs",
                 format!(
@@ -2064,6 +2168,31 @@ fn bindings(hook: &str) -> &'static [(&'static str, &'static str, &'static str)]
                 "&mut Option<horizon_client::mod_api::NativeScreen>",
                 "&mut *screen",
             ),
+        ],
+        "block_entity_update_tag" => &[
+            ("pos", "[i32; 3]", "pos"),
+            (
+                "entity",
+                "&horizon_client::containers::ModBlockEntity",
+                "entity",
+            ),
+            (
+                "tag",
+                "&mut Option<horizon_world::nbt::Compound>",
+                "&mut *tag",
+            ),
+        ],
+        "block_entity_submit" => &[
+            ("game", "&crate::game::Game<'_>", "&*self"),
+            ("pos", "[i32; 3]", "pos"),
+            ("block", "&str", "block"),
+            ("state", "horizon_world::registry::BlockStateId", "state"),
+            (
+                "entity",
+                "&horizon_client::containers::ModBlockEntity",
+                "entity",
+            ),
+            ("draw", "&mut crate::game::BlockEntityDraw", "&mut *draw"),
         ],
         "net_from_client" => &[
             GAME,

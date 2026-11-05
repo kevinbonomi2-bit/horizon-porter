@@ -63,13 +63,33 @@ const HOOKS: &[(&str, &str)] = &[
         "native_net_from_server",
         "&mut self, channel: &str, data: &[u8]",
     ),
+    (
+        "native_block_entity_update_tag",
+        "pos: [i32; 3], entity: &ModBlockEntity, tag: &mut Option<Compound>",
+    ),
+    (
+        "native_block_entity_submit",
+        "&self, pos: [i32; 3], block: &str, state: BlockStateId, entity: &ModBlockEntity, draw: &mut BlockEntityDraw",
+    ),
 ];
 
 const MOCK_LIB: &str = r#"
 extern crate self as horizon_client;
 
+// horizon-assets' item display contexts (crates/horizon-assets/src/item_model.rs).
+pub mod horizon_assets {
+    pub mod item_model {
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        pub enum DisplayContext { None, Gui, Ground, Fixed }
+    }
+}
+
 // horizon-world's nbt module, as Horizon has it (crates/horizon-world/src/nbt.rs).
 pub mod horizon_world {
+    pub mod registry {
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+        pub struct BlockStateId(pub u32);
+    }
     pub mod nbt {
         use std::collections::BTreeMap;
         #[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -204,6 +224,29 @@ pub mod game {
     pub struct Game<'a> {
         _game: std::marker::PhantomData<&'a ()>,
     }
+    // native_block_entity_draw.rs: the pose stack a block entity is drawn under.
+    pub mod native_block_entity_draw {
+        #[derive(Clone, Copy, Debug)]
+        pub struct CubeFace<'a> {
+            pub sprite: &'a str,
+            pub uv: Option<[f32; 4]>,
+        }
+        pub struct BlockEntityDraw {
+            pub partial: f32,
+            pub game_time: i64,
+            pub light: u32,
+        }
+        #[allow(unused_variables)]
+        impl BlockEntityDraw {
+            pub fn push(&mut self) {}
+            pub fn pop(&mut self) {}
+            pub fn translate(&mut self, by: [f32; 3]) {}
+            pub fn rotate_about(&mut self, axis: [f32; 3], degrees: f32, pivot: [f32; 3]) {}
+            pub fn scale(&mut self, by: [f32; 3]) {}
+            pub fn keep(&mut self) {}
+        }
+    }
+    pub use native_block_entity_draw::BlockEntityDraw;
     __MODULE__
     pub mod native_hooks {
         #![allow(unused_variables, dead_code)]
@@ -214,7 +257,11 @@ pub mod game {
         use crate::items::ItemStack;
         use crate::mod_api::NativeScreen;
         use crate::horizon_world::nbt::Compound;
+        use crate::horizon_world::registry::BlockStateId;
+        use super::native_block_entity_draw::{BlockEntityDraw, CubeFace};
         use crate::hud::HudBatch;
+        #[allow(unused_imports)]
+        use crate::horizon_assets;
         // In Horizon, horizon_world is a dependency: helpers name it by its crate path.
         #[allow(unused_imports)]
         use crate::horizon_world;
@@ -251,6 +298,10 @@ pub mod game {
             pub fn native_recipes_of_type(&self, kind: &str) -> &[CustomRecipe] { &[] }
             pub fn native_recipe_ingredient(&self, json: &serde_json::Value) -> Option<Ingredient> { None }
             pub fn native_recipe_result(&self, json: &serde_json::Value) -> Option<ItemStack> { None }
+            pub fn native_draw_block(&self, draw: &mut BlockEntityDraw, block: &str, properties: &[(&str, &str)]) -> bool { false }
+            pub fn native_draw_cube(&self, draw: &mut BlockEntityDraw, from: [f32; 3], to: [f32; 3], faces: [Option<CubeFace<'_>>; 6], tint: u32) -> bool { false }
+            pub fn native_draw_item(&self, draw: &mut BlockEntityDraw, stack: &ItemStack, display: crate::horizon_assets::item_model::DisplayContext, owner_yaw: Option<f32>, seed: i32) -> bool { false }
+            pub fn native_block_state_property(&self, state: BlockStateId, key: &str) -> Option<&str> { None }
             pub fn native_net_send_to_player(&mut self, player: u128, channel: &str, data: &[u8]) -> Result<(), String> { Ok(()) }
             pub fn native_net_send_to_server(&mut self, channel: &str, data: &[u8]) -> Result<(), String> { Ok(()) }
         }
@@ -316,6 +367,8 @@ fn machine_helpers_compile_against_horizon_api() {
         "net_from_server",
         "settings",
         "settings_click",
+        "block_entity_update_tag",
+        "block_entity_submit",
     ] {
         assert!(b.wired.contains_key(hook), "{hook}");
     }
