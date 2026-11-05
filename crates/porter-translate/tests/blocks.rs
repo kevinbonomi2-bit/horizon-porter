@@ -259,6 +259,18 @@ fn ports_a_block_entity_renderer() {
     );
     // Drawing block entities came in hook points version 71.
     assert!(b.hooks >= 71);
+    // Its part model is baked on its own and carried in the content mod.
+    assert!(b.wired.contains_key("standalone_models"));
+    assert!(runtime.contains(
+        "pub const STANDALONE_MODELS: &[&str] = &[
+    \"grind:block/crusher_wheel\",
+];"
+    ));
+    assert!(
+        b.files["mixins/grind/block_entity_submit.rs"]
+            .contains("game.native_draw_model(draw, &model, tint);")
+    );
+    assert!(b.hooks >= 151);
 }
 
 #[test]

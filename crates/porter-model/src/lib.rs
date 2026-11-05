@@ -214,6 +214,10 @@ pub struct ModScan {
     /// The mod's own screens that aren't a container's.
     #[serde(default)]
     pub custom_screens: Vec<CustomScreenInfo>,
+    /// Models no block names that the mod bakes to draw as parts
+    /// (`ModelEvent.RegisterStandalone`, `PartialModel`): `grind:block/crusher_wheel`.
+    #[serde(default)]
+    pub standalone_models: Vec<String>,
     /// The network messages the mod defines.
     #[serde(default)]
     pub payloads: Vec<PayloadInfo>,

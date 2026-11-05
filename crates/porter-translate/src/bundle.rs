@@ -247,6 +247,10 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
     if !drawn.is_empty() {
         wired.insert("block_entity_update_tag", drawn.clone());
         wired.insert("block_entity_submit", drawn);
+        // The models its renderers draw as parts, baked beside the blocks'.
+        if !scan.standalone_models.is_empty() {
+            wired.insert("standalone_models", BTreeSet::new());
+        }
     }
     if !machines.is_empty() && !content.is_empty() {
         let menus: BTreeSet<String> = machines.iter().map(|m| m.menu_class.clone()).collect();
@@ -940,6 +944,13 @@ pub const DESCRIPTION: &str = "{description}";
                 self.recipe_types,
             ));
         }
+        if self.uses("standalone_models") {
+            r.push_str("\n/// Models baked on their own, for renderers to draw as parts (`draw.model`).\npub const STANDALONE_MODELS: &[&str] = &[\n");
+            for model in &self.scan.standalone_models {
+                let _ = writeln!(r, "    {model:?},");
+            }
+            r.push_str("];\n");
+        }
         r.push_str(&netconf::net_runtime(self.messages));
         r.push_str(&screens::runtime(self.screens));
 
@@ -1546,6 +1557,17 @@ fn {id}_screen_mouse_scrolled_pre(
 "#
                 ),
             ),
+            "standalone_models" => (
+                "standalone_models.rs",
+                format!(
+                    r#"// The models {name}'s renderers draw as parts: baked beside the block models.
+fn {id}_standalone_models(models: &mut Vec<String>) {{
+    use crate::game::{m} as m;
+    models.extend(m::STANDALONE_MODELS.iter().map(|s| s.to_string()));
+}}
+"#
+                ),
+            ),
             "block_entity_update_tag" => (
                 "block_entity_update_tag.rs",
                 format!(
@@ -1633,11 +1655,17 @@ fn {id}_block_entity_submit(
                 );
             }}
             m::DrawOp::Keep => draw.keep(),
+            {model_arm}
         }}
     }}
 }}
 "##,
                     from_tag = block_entity::FROM_TAG,
+                    model_arm = if self.uses("standalone_models") {
+                        "m::DrawOp::Model { model, tint } => {\n                game.native_draw_model(draw, &model, tint);\n            }"
+                    } else {
+                        "// No standalone models: Horizon bakes none for this mod.\n            m::DrawOp::Model { .. } => {}"
+                    },
                 ),
             ),
             "net_from_client" => (
@@ -1901,7 +1929,9 @@ fn {id}_net_from_server(game: &mut crate::game::Game<'_>, channel: &str, data: &
                  `translate`, `rotate`, `rotate_about`, `scale`, as `PoseStack` does) with block models \
                  (`draw.block(\"minecraft:grindstone\", &[])`), cubes, and items, animated with `frame.time()`. \
                  `native_block_entity_submit` draws it every frame; `native_block_entity_update_tag` sends clients \
-                 the state it reads. Call `draw.keep()` when nothing moves, and Horizon reuses the frame.\n\n\
+                 the state it reads. Parts with a model of their own (`PartialModel`, a standalone model) are \
+                 drawn with `draw.model(...)`: Horizon bakes the ones in `STANDALONE_MODELS`. Call `draw.keep()` \
+                 when nothing moves, and Horizon reuses the frame.\n\n\
                  | Block entity | Renderer |\n| --- | --- |\n",
             );
             for be in drawn {
@@ -2415,6 +2445,7 @@ fn bindings(hook: &str) -> &'static [(&'static str, &'static str, &'static str)]
             ("modifiers", "u32", "modifiers"),
             ("canceled", "&mut bool", "&mut *canceled"),
         ],
+        "standalone_models" => &[("models", "&mut Vec<String>", "&mut *models")],
         "block_entity_update_tag" => &[
             ("pos", "[i32; 3]", "pos"),
             (

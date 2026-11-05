@@ -64,6 +64,7 @@ const HOOKS: &[(&str, &str)] = &[
         "&mut self, channel: &str, data: &[u8]",
     ),
     ("native_frame", "&mut self, elapsed: std::time::Duration"),
+    ("native_standalone_models", "models: &mut Vec<String>"),
     (
         "native_screen_render_post",
         "&self, batch: &mut HudBatch, screen: &NativeScreenView<'_>",
@@ -327,6 +328,7 @@ pub mod game {
             pub fn native_mod_screen_close(&mut self, mod_id: &str) {}
             pub fn native_mod_screen(&self) -> Option<&str> { None }
             pub fn native_item(&self, batch: &mut HudBatch, item: &str, at: [f32; 2], size: f32) -> bool { false }
+            pub fn native_draw_model(&self, draw: &mut BlockEntityDraw, model: &str, tint: u32) -> bool { false }
             pub fn native_draw_block(&self, draw: &mut BlockEntityDraw, block: &str, properties: &[(&str, &str)]) -> bool { false }
             pub fn native_draw_cube(&self, draw: &mut BlockEntityDraw, from: [f32; 3], to: [f32; 3], faces: [Option<CubeFace<'_>>; 6], tint: u32) -> bool { false }
             pub fn native_draw_item(&self, draw: &mut BlockEntityDraw, stack: &ItemStack, display: crate::horizon_assets::item_model::DisplayContext, owner_yaw: Option<f32>, seed: i32) -> bool { false }
@@ -399,6 +401,7 @@ fn machine_helpers_compile_against_horizon_api() {
         "block_entity_update_tag",
         "block_entity_submit",
         "frame",
+        "standalone_models",
         "screen_render_post",
         "screen_mouse_button_pressed_pre",
         "screen_key_pressed_pre",

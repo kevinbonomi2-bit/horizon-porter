@@ -129,8 +129,10 @@ scenarios we check.
   struct with `draw_`, `click_`, `key_` and `scroll_` functions, shown with
   `native_mod_screen_open` and drawn and clicked through the screen hooks. The Grind
   demo has a spinning grindstone on its Crusher and a guide opened with G, both
-  live-tested in Horizon. Still to do: baked and connected-texture models, item
-  renderers, instanced rendering, and overlays on vanilla screens.
+  live-tested in Horizon. Standalone models (`ModelEvent.RegisterStandalone`,
+  Flywheel's `PartialModel`) are baked through `native_standalone_models` and drawn as
+  parts with `draw.model`. Still to do: connected-texture models, item renderers,
+  instanced rendering, and overlays on vanilla screens.
 
 ## Working with Horizon
 

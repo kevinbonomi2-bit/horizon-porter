@@ -536,6 +536,9 @@ pub enum DrawOp {
     Scale([f32; 3]),
     /// A block's model in a state: `("minecraft:grindstone", [("face", "floor")])`.
     Block { block: String, properties: Vec<(String, String)> },
+    /// A standalone model the mod bakes (`grind:block/crusher_wheel`, in
+    /// `STANDALONE_MODELS`), its tinted faces times 0xRRGGBB `tint`.
+    Model { model: String, tint: u32 },
     /// A box in texels (16 a block), every face with `sprite` (`minecraft:block/stone`).
     Cube { from: [f32; 3], to: [f32; 3], sprite: String, tint: u32 },
     /// An item as it sits in an item frame.
@@ -584,6 +587,11 @@ impl Draw {
                 .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect(),
         });
+    }
+    /// A part's own model (Flywheel's `PartialModel`, a standalone model), as a
+    /// block's model is drawn: `draw.model("grind:block/crusher_wheel", 0xFFFFFF)`.
+    pub fn model(&mut self, model: &str, tint: u32) {
+        self.ops.push(DrawOp::Model { model: model.to_string(), tint });
     }
     /// A box from `from` to `to` in texels, its faces all `sprite`, tinted 0xRRGGBB.
     pub fn cube(&mut self, from: [f32; 3], to: [f32; 3], sprite: &str, tint: u32) {

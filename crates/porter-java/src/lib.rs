@@ -235,6 +235,14 @@ fn network_and_config(root: &Path, scan: &mut ModScan) {
             opened_by,
         });
     }
+    // Models baked to draw as parts.
+    for (_, text) in &sources {
+        for model in netconf::standalone_models(text, mod_id.as_deref()) {
+            if !scan.standalone_models.contains(&model) {
+                scan.standalone_models.push(model);
+            }
+        }
+    }
     for (name, text) in &sources {
         scan.config.extend(netconf::config(name, text, &enums));
         if let Some(r) = machines::renderer(name, text) {
@@ -378,6 +386,7 @@ fn assemble(
         screens: Vec::new(),
         renderers: Vec::new(),
         custom_screens: Vec::new(),
+        standalone_models: Vec::new(),
         payloads: Vec::new(),
         config: Vec::new(),
         client,

@@ -135,6 +135,65 @@ pub fn directions(payloads: &mut [PayloadInfo], class: &str, source: &str) {
     }
 }
 
+/// The models a class registers to bake on their own, to draw as parts:
+/// `ModelEvent.RegisterStandalone`/`RegisterAdditional`, Flywheel's `PartialModel`.
+/// Each is a model id under `models/` (`grind:block/crusher_wheel`).
+pub fn standalone_models(source: &str, mod_id: Option<&str>) -> Vec<String> {
+    let markers = [
+        "RegisterStandalone",
+        "RegisterAdditional",
+        "PartialModel",
+        "StandaloneModel",
+    ];
+    if !markers.iter().any(|m| source.contains(m)) {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    let mut keep = |ns: &str, path: &str| {
+        let is_model = ["block/", "item/", "entity/", "models/"]
+            .iter()
+            .any(|p| path.starts_with(p));
+        let id = format!("{ns}:{}", path.trim_start_matches("models/"));
+        if is_model && !out.contains(&id) {
+            out.push(id);
+        }
+    };
+    for name in ["fromNamespaceAndPath", "of", "tryBuild"] {
+        for args in calls(source, name) {
+            let parts = split_top(&args);
+            if parts.len() != 2 {
+                continue;
+            }
+            if let Some(path) = string_literal(&parts[1]) {
+                let ns = string_literal(&parts[0])
+                    .or_else(|| mod_id.map(str::to_string))
+                    .unwrap_or_else(|| "minecraft".into());
+                keep(&ns, &path);
+            }
+        }
+    }
+    // `Create.asResource("block/shaft_half")`, `parse("demo:block/wheel")`.
+    for name in [
+        "asResource",
+        "modLoc",
+        "rl",
+        "parse",
+        "withDefaultNamespace",
+    ] {
+        for args in calls(source, name) {
+            let Some(id) = string_literal(&args) else {
+                continue;
+            };
+            match id.split_once(':') {
+                Some((ns, path)) => keep(ns, path),
+                None if name == "withDefaultNamespace" => keep("minecraft", &id),
+                None => keep(mod_id.unwrap_or("minecraft"), &id),
+            }
+        }
+    }
+    out
+}
+
 /// The config values a class defines, in order. `enums` gives the constants of the
 /// mod's own enums by simple name.
 pub fn config(class: &str, source: &str, enums: &dyn Fn(&str) -> Vec<String>) -> Vec<ConfigEntry> {
@@ -321,6 +380,22 @@ public record SetSpeed(BlockPos pos, int speed, @NotNull String note) implements
         new Type<>(ResourceLocation.fromNamespaceAndPath(Grind.MODID, "set_speed"));
 }
 "#;
+
+    #[test]
+    fn finds_standalone_models() {
+        let source = r#"
+            public static void models(ModelEvent.RegisterStandalone event) {
+                event.register(StandaloneModelKey.of(ResourceLocation.fromNamespaceAndPath(Grind.ID, "block/crusher_wheel")));
+            }
+            public static final PartialModel SHAFT = PartialModel.of(Create.asResource("block/shaft_half"));
+            String notAModel = ResourceLocation.fromNamespaceAndPath(Grind.ID, "crushing").toString();
+        "#;
+        assert_eq!(
+            standalone_models(source, Some("grind")),
+            ["grind:block/crusher_wheel", "grind:block/shaft_half"]
+        );
+        assert!(standalone_models("no models here", Some("grind")).is_empty());
+    }
 
     #[test]
     fn reads_a_payload_record() {
