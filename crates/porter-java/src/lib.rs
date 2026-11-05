@@ -248,6 +248,9 @@ fn network_and_config(root: &Path, scan: &mut ModScan) {
         if let Some(r) = machines::renderer(name, text) {
             scan.renderers.push(r);
         }
+        if let Some(s) = machines::storage(name, text) {
+            scan.storages.push(s);
+        }
     }
 }
 
@@ -387,6 +390,7 @@ fn assemble(
         renderers: Vec::new(),
         custom_screens: Vec::new(),
         standalone_models: Vec::new(),
+        storages: Vec::new(),
         payloads: Vec::new(),
         config: Vec::new(),
         client,

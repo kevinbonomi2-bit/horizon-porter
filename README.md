@@ -168,6 +168,10 @@ mod's recipes of its own types, read from their JSON files with ingredients reso
 to items (`machine.recipe_for("grind:crushing", 0)`). The screen's progress arrows are a
 `draw_<name>` function to port, like the tick.
 
+A block entity's **fluid tanks and energy buffer** (NeoForge's handlers, `FluidTank`,
+`EnergyStorage`) are declared to Horizon, so pipes and cables reach them, and its tick
+gets them to fill, drain and spend (`machine.tanks[0]`, `machine.use_energy(20)`).
+
 A mod's **network messages** (`CustomPacketPayload` records) become Rust structs with
 their channel and fields, sent and received through Horizon's `native_net_*` hooks: the
 port decodes each message and calls its handler, which you (or the translation) port

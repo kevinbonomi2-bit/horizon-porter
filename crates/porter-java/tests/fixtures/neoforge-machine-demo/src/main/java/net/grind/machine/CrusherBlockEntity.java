@@ -13,12 +13,19 @@ import net.minecraft.world.inventory.ContainerData;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
+import net.neoforged.neoforge.fluids.FluidType;
+import net.neoforged.neoforge.fluids.capability.templates.FluidTank;
 import net.neoforged.neoforge.items.ItemStackHandler;
+import net.neoforged.neoforge.transfer.energy.SimpleEnergyHandler;
 
 public class CrusherBlockEntity extends BlockEntity implements MenuProvider {
     public static final int INPUT = 0;
     public static final int OUTPUT = 1;
     public final ItemStackHandler items = new ItemStackHandler(2);
+    /** Crushing runs on power: 20 FE a tick. */
+    public final SimpleEnergyHandler energy = new SimpleEnergyHandler(10_000, 100, 0);
+    /** Water to keep the dust down. */
+    public final FluidTank water = new FluidTank(FluidType.BUCKET_VOLUME * 4);
     private int progress;
     private int maxProgress = 100;
 

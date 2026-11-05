@@ -5,7 +5,7 @@
 //!
 //! It reads the source text: the shapes mods write these in are few and regular.
 
-use porter_model::{MenuInfo, MenuSlot, RendererInfo, ScreenInfo};
+use porter_model::{MenuInfo, MenuSlot, RendererInfo, ScreenInfo, StorageInfo};
 
 /// The menu a class's source declares (`class` is its fully qualified name).
 pub fn menu(class: &str, source: &str) -> MenuInfo {
@@ -148,6 +148,78 @@ fn is_result(ty: &str, source: &str) -> bool {
         let end = after.find('}').unwrap_or(after.len());
         after[..end].contains("return false")
     })
+}
+
+/// A class's fluid tanks and energy buffer, from the handlers it builds:
+/// NeoForge's `FluidStacksResourceHandler(tanks, capacity)` and
+/// `SimpleEnergyHandler(capacity, maxInsert, maxExtract)`, the older `FluidTank`
+/// and `EnergyStorage`, and Team Reborn's `SimpleEnergyStorage` (Fabric).
+pub fn storage(class: &str, source: &str) -> Option<StorageInfo> {
+    let ints = |args: &str| -> Vec<i32> {
+        split_top(args)
+            .iter()
+            .map(|a| constant(a, source))
+            .collect::<Option<Vec<i32>>>()
+            .unwrap_or_default()
+    };
+    let mut tanks = Vec::new();
+    for args in calls(source, "new FluidTank") {
+        if let Some(cap) = ints(&args).first() {
+            tanks.push(*cap);
+        }
+    }
+    for args in calls(source, "new FluidStacksResourceHandler") {
+        if let [n, cap, ..] = ints(&args)[..] {
+            tanks.extend(std::iter::repeat_n(cap, n.clamp(0, 16) as usize));
+        }
+    }
+    let mut energy = None;
+    for name in [
+        "new SimpleEnergyHandler",
+        "new EnergyStorage",
+        "new SimpleEnergyStorage",
+    ] {
+        for args in calls(source, name) {
+            let v = ints(&args);
+            energy = match v[..] {
+                [cap] => Some([cap, cap, cap]),
+                [cap, io] => Some([cap, io, io]),
+                [cap, i, o, ..] => Some([cap, i, o]),
+                _ => energy,
+            };
+        }
+    }
+    (!tanks.is_empty() || energy.is_some()).then(|| StorageInfo {
+        class: class.to_string(),
+        tanks,
+        energy,
+    })
+}
+
+/// An int literal (`4_000`, `4000`), or a `static final int` of `source` it names.
+fn constant(text: &str, source: &str) -> Option<i32> {
+    let t = text.trim();
+    if let Ok(v) = t.replace('_', "").parse() {
+        return Some(v);
+    }
+    // `FluidType.BUCKET_VOLUME * 4`, `CAPACITY`.
+    if let Some((a, b)) = t.split_once('*') {
+        return constant(a, source)?.checked_mul(constant(b, source)?);
+    }
+    if t == "FluidType.BUCKET_VOLUME" || t == "BUCKET_VOLUME" {
+        return Some(1000);
+    }
+    let name = t.rsplit('.').next()?;
+    if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return None;
+    }
+    let decl = format!(" {name} =");
+    let i = source.find(&decl)?;
+    let value = source[i + decl.len()..].split(';').next()?;
+    if value.contains(name) {
+        return None;
+    }
+    constant(value, source)
 }
 
 /// A block entity renderer: the block entity class in its
@@ -305,6 +377,20 @@ fn first_int(text: &str) -> Option<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_tanks_and_energy() {
+        let source = r#"
+            public static final int CAPACITY = 8_000;
+            private final FluidStacksResourceHandler fluids = new FluidStacksResourceHandler(2, FluidType.BUCKET_VOLUME * 4);
+            private final FluidTank lava = new FluidTank(CAPACITY);
+            private final SimpleEnergyHandler energy = new SimpleEnergyHandler(10000, 200, 0);
+        "#;
+        let s = storage("Boiler", source).unwrap();
+        assert_eq!(s.tanks, [8000, 4000, 4000]);
+        assert_eq!(s.energy, Some([10000, 200, 0]));
+        assert_eq!(storage("Plain", "class Plain {}"), None);
+    }
 
     const MENU: &str = r#"
         addSlot(new SlotItemHandler(items, 0, 56, 35));

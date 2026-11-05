@@ -214,6 +214,9 @@ pub struct ModScan {
     /// The mod's own screens that aren't a container's.
     #[serde(default)]
     pub custom_screens: Vec<CustomScreenInfo>,
+    /// Fluid tanks and energy buffers of the mod's block entities.
+    #[serde(default)]
+    pub storages: Vec<StorageInfo>,
     /// Models no block names that the mod bakes to draw as parts
     /// (`ModelEvent.RegisterStandalone`, `PartialModel`): `grind:block/crusher_wheel`.
     #[serde(default)]
@@ -296,6 +299,18 @@ pub struct ScreenInfo {
     pub height: Option<i32>,
     /// Its background texture: `textures/gui/crusher.png`.
     pub texture: Option<String>,
+}
+
+/// What a block entity stores besides items: fluid tanks and an energy buffer.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StorageInfo {
+    pub class: String,
+    /// Each tank's capacity in millibuckets (`new FluidTank(4000)`,
+    /// `new FluidStacksResourceHandler(2, 4000)`).
+    pub tanks: Vec<i32>,
+    /// The energy buffer: capacity, most one insert moves, most one extract moves
+    /// (`new SimpleEnergyHandler(10000, 100, 100)`, `new EnergyStorage(...)`).
+    pub energy: Option<[i32; 3]>,
 }
 
 /// A screen of the mod's own that isn't a container's: a guidebook, a menu opened

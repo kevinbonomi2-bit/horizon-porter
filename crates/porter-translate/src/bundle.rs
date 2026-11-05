@@ -238,6 +238,23 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
             wired.insert("block_entity_tick", classes);
         }
     }
+    // Block entities with fluid tanks or an energy buffer.
+    let tanked: BTreeSet<String> = block_entities
+        .iter()
+        .filter(|b| !b.tanks.is_empty())
+        .filter_map(|b| b.class.clone())
+        .collect();
+    if !tanked.is_empty() {
+        wired.insert("block_entity_fluids", tanked);
+    }
+    let powered: BTreeSet<String> = block_entities
+        .iter()
+        .filter(|b| b.energy.is_some())
+        .filter_map(|b| b.class.clone())
+        .collect();
+    if !powered.is_empty() {
+        wired.insert("block_entity_energy", powered);
+    }
     // Block entities with a renderer: drawn on the client from what the server
     // sends of their state.
     let drawn: BTreeSet<String> = block_entities
@@ -1301,6 +1318,42 @@ fn {id}_block_entity_tick(
         .collect();
     let data = entity.data.clone();
     let mut machine = m::Machine::new(slots.clone(), data.clone(), &recipes);
+    // Its tanks and energy, as Horizon keeps them: `fluids` (a list of
+    // `{{Fluid, Amount}}`) and the int `energy`.
+    let storage = m::STORAGE.iter().find(|(id, _, _)| *id == entity.id);
+    if let Some((_, capacities, energy)) = storage {{
+        let list = match entity.nbt.get(&JavaString::from("fluids")) {{
+            Some(Tag::List(list)) => list.clone(),
+            _ => Vec::new(),
+        }};
+        machine.tanks = capacities
+            .iter()
+            .enumerate()
+            .map(|(i, capacity)| {{
+                let (fluid, amount) = match list.get(i) {{
+                    Some(Tag::Compound(map)) => (
+                        match map.get(&JavaString::from("Fluid")) {{
+                            Some(Tag::String(f)) if f.to_string_lossy() != "minecraft:empty" => Some(f.to_string_lossy()),
+                            _ => None,
+                        }},
+                        match map.get(&JavaString::from("Amount")) {{
+                            Some(Tag::Int(a)) => *a,
+                            _ => 0,
+                        }},
+                    ),
+                    _ => (None, 0),
+                }};
+                m::Tank {{ fluid, amount, capacity: *capacity }}
+            }})
+            .collect();
+        machine.energy_capacity = energy.map_or(0, |e| e[0]);
+        machine.energy = match entity.nbt.get(&JavaString::from("energy")) {{
+            Some(Tag::Int(e)) => (*e).clamp(0, machine.energy_capacity),
+            _ => 0,
+        }};
+    }}
+    let tanks = machine.tanks.clone();
+    let energy = machine.energy;
     let changed = {{
         let nbt = &entity.nbt;
         m::tick_block_entity(
@@ -1342,6 +1395,25 @@ fn {id}_block_entity_tick(
     }}
     if machine.data != data {{
         entity.data = machine.data.clone();
+    }}
+    if storage.is_some() && machine.tanks != tanks {{
+        let list = machine
+            .tanks
+            .iter()
+            .map(|t| {{
+                let mut map = horizon_world::nbt::Compound::new();
+                map.insert(
+                    JavaString::from("Fluid"),
+                    Tag::String(JavaString::from(t.fluid.as_deref().unwrap_or("minecraft:empty"))),
+                );
+                map.insert(JavaString::from("Amount"), Tag::Int(t.amount));
+                Tag::Compound(map)
+            }})
+            .collect();
+        entity.nbt.insert(JavaString::from("fluids"), Tag::List(list));
+    }}
+    if storage.is_some() && machine.energy != energy {{
+        entity.nbt.insert(JavaString::from("energy"), Tag::Int(machine.energy));
     }}
 }}
 "##,
@@ -1530,6 +1602,63 @@ fn {id}_screen_mouse_scrolled_pre(
     if m::scroll_open_screen(scroll[1] as f32) {{
         *canceled = true;
     }}
+}}
+"#
+                ),
+            ),
+            "block_entity_fluids" => (
+                "block_entity_fluids.rs",
+                format!(
+                    r#"// The fluid tanks of {name}'s block entities: every side reaches every tank.
+fn {id}_block_entity_fluids(
+    block: &str,
+    fluids: &mut Option<horizon_client::containers::ModFluidTanks>,
+) {{
+    use crate::game::{m} as m;
+    let Some((_, entity, _)) = m::BLOCK_ENTITIES.iter().find(|(b, _, _)| *b == block) else {{
+        return;
+    }};
+    let Some((_, tanks, _)) = m::STORAGE.iter().find(|(id, _, _)| id == entity) else {{
+        return;
+    }};
+    if tanks.is_empty() {{
+        return;
+    }}
+    let all: Vec<usize> = (0..tanks.len()).collect();
+    *fluids = Some(horizon_client::containers::ModFluidTanks {{
+        tanks: tanks.to_vec(),
+        faces: std::array::from_fn(|_| all.clone()),
+        inputs: all.clone(),
+        outputs: all,
+    }});
+}}
+"#
+                ),
+            ),
+            "block_entity_energy" => (
+                "block_entity_energy.rs",
+                format!(
+                    r#"// The energy buffers of {name}'s block entities: every side takes and gives.
+fn {id}_block_entity_energy(
+    block: &str,
+    energy: &mut Option<horizon_client::containers::ModEnergyBuffer>,
+) {{
+    use crate::game::{m} as m;
+    let Some((_, entity, _)) = m::BLOCK_ENTITIES.iter().find(|(b, _, _)| *b == block) else {{
+        return;
+    }};
+    let Some((_, _, Some([capacity, max_insert, max_extract]))) =
+        m::STORAGE.iter().find(|(id, _, _)| id == entity)
+    else {{
+        return;
+    }};
+    *energy = Some(horizon_client::containers::ModEnergyBuffer {{
+        capacity: *capacity,
+        max_insert: *max_insert,
+        max_extract: *max_extract,
+        insert_faces: [true; 6],
+        extract_faces: [true; 6],
+    }});
 }}
 "#
                 ),
@@ -2423,6 +2552,22 @@ fn bindings(hook: &str) -> &'static [(&'static str, &'static str, &'static str)]
             ("canceled", "&mut bool", "&mut *canceled"),
         ],
         "standalone_models" => &[("models", "&mut Vec<String>", "&mut *models")],
+        "block_entity_fluids" => &[
+            ("block", "&str", "block"),
+            (
+                "fluids",
+                "&mut Option<horizon_client::containers::ModFluidTanks>",
+                "&mut *fluids",
+            ),
+        ],
+        "block_entity_energy" => &[
+            ("block", "&str", "block"),
+            (
+                "energy",
+                "&mut Option<horizon_client::containers::ModEnergyBuffer>",
+                "&mut *energy",
+            ),
+        ],
         "block_entity_update_tag" => &[
             ("pos", "[i32; 3]", "pos"),
             (

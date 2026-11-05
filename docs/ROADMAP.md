@@ -136,6 +136,16 @@ scenarios we check.
   become `draw_over_screen` and `click_on_screen`, with the same plain drawing as its own
   screens. Still to do: connected-texture models, item renderers and instanced
   rendering.
+- **M7, in progress (2026-11-05):** large mods. Fluid tanks and energy buffers: `scan`
+  reads them from a block entity's handlers (NeoForge's `FluidStacksResourceHandler`
+  and `SimpleEnergyHandler`, `FluidTank`, `EnergyStorage`, Team Reborn's
+  `SimpleEnergyStorage`); `port` declares them to Horizon (`native_block_entity_fluids`,
+  `native_block_entity_energy`), so pipes and cables reach them, and the tick gets them
+  on its `Machine` (`machine.tanks[0].fill(...)`, `machine.use_energy(20)`), saved as
+  Horizon keeps them. Create itself has no 26.x version yet (its newest branch is
+  `mc1.21.1`), so M7 is proved on the porter's own demo mods until it does. Still to
+  do: item transfer between blocks, the library shims (Registrate, Catnip, Ponder) and
+  moving structures.
 
 ## Working with Horizon
 

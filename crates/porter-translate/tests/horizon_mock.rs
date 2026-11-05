@@ -66,6 +66,14 @@ const HOOKS: &[(&str, &str)] = &[
     ("native_frame", "&mut self, elapsed: std::time::Duration"),
     ("native_standalone_models", "models: &mut Vec<String>"),
     (
+        "native_block_entity_fluids",
+        "&self, block: &str, fluids: &mut Option<ModFluidTanks>",
+    ),
+    (
+        "native_block_entity_energy",
+        "&self, block: &str, energy: &mut Option<ModEnergyBuffer>",
+    ),
+    (
         "native_screen_render_post",
         "&self, batch: &mut HudBatch, screen: &NativeScreenView<'_>",
     ),
@@ -146,6 +154,21 @@ pub mod horizon_world {
 // each mutable access counts as a change.
 pub mod containers {
     use crate::items::ItemStack;
+    #[derive(Clone, Debug, Default, PartialEq, Eq)]
+    pub struct ModFluidTanks {
+        pub tanks: Vec<i32>,
+        pub faces: [Vec<usize>; 6],
+        pub inputs: Vec<usize>,
+        pub outputs: Vec<usize>,
+    }
+    #[derive(Clone, Debug, Default, PartialEq, Eq)]
+    pub struct ModEnergyBuffer {
+        pub capacity: i32,
+        pub max_insert: i32,
+        pub max_extract: i32,
+        pub insert_faces: [bool; 6],
+        pub extract_faces: [bool; 6],
+    }
     pub struct ModBlockEntityFields {
         pub id: String,
         pub nbt: crate::horizon_world::nbt::Compound,
@@ -277,7 +300,7 @@ pub mod game {
     pub mod native_hooks {
         #![allow(unused_variables, dead_code)]
         use super::Game;
-        use crate::containers::{ModBlockEntity, ModContainer};
+        use crate::containers::{ModBlockEntity, ModContainer, ModEnergyBuffer, ModFluidTanks};
         use crate::crafting::{CustomRecipe, Ingredient};
         use crate::extras_hud::Corners;
         use crate::items::ItemStack;
@@ -402,6 +425,8 @@ fn machine_helpers_compile_against_horizon_api() {
         "block_entity_submit",
         "frame",
         "standalone_models",
+        "block_entity_fluids",
+        "block_entity_energy",
         "screen_render_post",
         "screen_mouse_button_pressed_pre",
         "screen_key_pressed_pre",

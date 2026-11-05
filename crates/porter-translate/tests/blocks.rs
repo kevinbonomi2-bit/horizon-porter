@@ -301,3 +301,25 @@ pub fn draw_over_screen("
     assert!(render.contains("m::draw_open_screen(&mut gui);"));
     assert!(render.contains("m::draw_over_screen(screen.id, screen.menu, screen.rect, &mut gui);"));
 }
+
+#[test]
+fn ports_fluid_tanks_and_energy() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../porter-java/tests/fixtures/neoforge-machine-demo");
+    let scan = porter_java::scan(&path).unwrap();
+    let s = scan
+        .storages
+        .iter()
+        .find(|s| s.class.ends_with("CrusherBlockEntity"))
+        .expect("the crusher's storage");
+    assert_eq!(s.tanks, [4000]);
+    assert_eq!(s.energy, Some([10000, 100, 0]));
+    let b = bundle::generate(&scan, &bundle::load_lang(&scan));
+    assert!(b.wired.contains_key("block_entity_fluids"));
+    assert!(b.wired.contains_key("block_entity_energy"));
+    let runtime = &b.files["mixins/grind/runtime.rs"];
+    assert!(runtime.contains("    (\"grind:crusher\", &[4000], Some([10000, 100, 0])),"));
+    assert!(runtime.contains("its fluid tank (4000 mB, `machine.tanks[0]`)"));
+    // Energy buffers came in hook points version 142.
+    assert!(b.hooks >= 142);
+}

@@ -31,6 +31,10 @@ pub struct BlockEntity {
     pub ticks: bool,
     /// Its Java renderer (`BlockEntityRenderer`), fully qualified, when it has one.
     pub renderer: Option<String>,
+    /// Its fluid tanks' capacities, in millibuckets.
+    pub tanks: Vec<i32>,
+    /// Its energy buffer: capacity, most one insert moves, most one extract moves.
+    pub energy: Option<[i32; 3]>,
     /// Java fields the state leaves out, with why.
     pub left_out: Vec<String>,
 }
@@ -170,6 +174,8 @@ pub fn find(scan: &ModScan, ns: &str) -> Vec<BlockEntity> {
             fields: Vec::new(),
             ticks: false,
             renderer: None,
+            tanks: Vec::new(),
+            energy: None,
             left_out: Vec::new(),
         };
         if let Some(class) = class {
@@ -180,6 +186,10 @@ pub fn find(scan: &ModScan, ns: &str) -> Vec<BlockEntity> {
                 .iter()
                 .find(|r| r.entity == simple)
                 .map(|r| r.class.clone());
+            if let Some(s) = scan.storages.iter().find(|s| s.class == class.name) {
+                be.tanks = s.tanks.clone();
+                be.energy = s.energy;
+            }
         }
         out.push(be);
     }
@@ -380,8 +390,17 @@ pub const BLOCK_ENTITIES: &[(&str, &str, bool)] = &[
         }
         r.push_str("        ]\n    }\n}\n");
 
+        let storage = storage_text(be);
         if be.ticks {
-            if let Some(m) = machine_of(be) {
+            if machine_of(be).is_none() && !storage.is_empty() {
+                let _ = write!(
+                    r,
+                    "\n/// A server tick of the `{id}` block entity at `pos`, 20 a second. `machine` has\n/// {storage} (it has no item slots). What the tick changes in them and in\n/// `state` is kept.\n///\n/// TODO: port the tick of `{java}`.\npub fn tick_{snake}(pos: [i32; 3], state: &mut {ty}, machine: &mut Machine<'_>) {{\n    let _ = (pos, state, machine);\n}}\n",
+                    id = be.id,
+                    snake = be.snake,
+                    ty = be.rust
+                );
+            } else if let Some(m) = machine_of(be) {
                 let slots = if m.results.is_empty() {
                     format!("{} slots", m.slots)
                 } else {
@@ -395,11 +414,16 @@ pub const BLOCK_ENTITIES: &[(&str, &str, bool)] = &[
                             .join(", ")
                     )
                 };
-                let recipes = if recipe_types.is_empty() {
+                let storage = if storage.is_empty() {
                     String::new()
                 } else {
+                    format!(", {storage}")
+                };
+                let recipes = if recipe_types.is_empty() {
+                    storage
+                } else {
                     format!(
-                        ", and the mod's recipes ({})",
+                        "{storage}, and the mod's recipes ({})",
                         recipe_types
                             .iter()
                             .map(|t| format!("`{t}`"))
@@ -441,7 +465,7 @@ pub const BLOCK_ENTITIES: &[(&str, &str, bool)] = &[
     } else {
         r.push_str("    match id {\n");
         for be in ticking {
-            let machine_arg = if machine_of(be).is_some() {
+            let machine_arg = if machine_of(be).is_some() || !storage_text(be).is_empty() {
                 ", machine"
             } else {
                 ""
@@ -458,6 +482,24 @@ pub const BLOCK_ENTITIES: &[(&str, &str, bool)] = &[
             "        _ => {\n            let _ = machine;\n            None\n        }\n    }\n}\n",
         );
     }
+    // Each block entity's tanks and energy buffer, for the tick and the hooks.
+    r.push_str("\n/// Block entities' fluid tanks (capacities in millibuckets) and energy buffer\n/// (capacity, most one insert moves, most one extract moves).\npub const STORAGE: &[(&str, &[i32], Option<[i32; 3]>)] = &[\n");
+    for be in entities.iter().filter(|b| !storage_text(b).is_empty()) {
+        let _ = writeln!(
+            r,
+            "    ({:?}, &[{}], {}),",
+            be.id,
+            be.tanks
+                .iter()
+                .map(i32::to_string)
+                .collect::<Vec<_>>()
+                .join(", "),
+            be.energy.map_or("None".to_string(), |[c, i, o]| format!(
+                "Some([{c}, {i}, {o}])"
+            ))
+        );
+    }
+    r.push_str("];\n");
     let drawn: Vec<&BlockEntity> = entities.iter().filter(|b| b.renderer.is_some()).collect();
     if !drawn.is_empty() {
         r.push_str(DRAW_TYPES);
@@ -488,6 +530,29 @@ pub const BLOCK_ENTITIES: &[(&str, &str, bool)] = &[
         r.push_str(&crate::machine::runtime(machines, recipe_types));
     }
     r
+}
+
+/// "its 2 fluid tanks (4000 mB each) and its energy (10000 FE)", or nothing.
+pub fn storage_text(be: &BlockEntity) -> String {
+    let mut parts = Vec::new();
+    if !be.tanks.is_empty() {
+        let caps: Vec<String> = be.tanks.iter().map(|c| format!("{c} mB")).collect();
+        parts.push(if be.tanks.len() == 1 {
+            format!("its fluid tank ({}, `machine.tanks[0]`)", caps[0])
+        } else {
+            format!(
+                "its {} fluid tanks ({}, `machine.tanks`)",
+                be.tanks.len(),
+                caps.join(", ")
+            )
+        });
+    }
+    if let Some([cap, i, o]) = be.energy {
+        parts.push(format!(
+            "its energy (`machine.energy`, up to {cap} FE; {i} in and {o} out at most each time)"
+        ));
+    }
+    parts.join(" and ")
 }
 
 /// What a block entity renderer draws with: a pose stack and parts, recorded so the

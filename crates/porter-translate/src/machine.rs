@@ -266,7 +266,50 @@ impl Recipe {
 pub struct Machine<'a> {
     pub slots: Vec<Option<Stack>>,
     pub data: Vec<i32>,
+    /// Its fluid tanks, as `FluidTank`s or a `FluidStacksResourceHandler`.
+    pub tanks: Vec<Tank>,
+    /// Its energy, and the most it holds (`SimpleEnergyHandler`).
+    pub energy: i32,
+    pub energy_capacity: i32,
     recipes: &'a dyn Fn(&str) -> Vec<Recipe>,
+}
+
+/// A fluid tank: its fluid (`minecraft:water`), how much in millibuckets, and its
+/// capacity.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Tank {
+    pub fluid: Option<String>,
+    pub amount: i32,
+    pub capacity: i32,
+}
+
+impl Tank {
+    /// `FluidTank.fill`: how much of `amount` of `fluid` went in.
+    pub fn fill(&mut self, fluid: &str, amount: i32) -> i32 {
+        if amount <= 0 || self.fluid.as_deref().is_some_and(|f| f != fluid) {
+            return 0;
+        }
+        let moved = amount.min(self.capacity - self.amount).max(0);
+        if moved > 0 {
+            self.fluid = Some(fluid.to_string());
+            self.amount += moved;
+        }
+        moved
+    }
+
+    /// `FluidTank.drain`: up to `amount` taken out, with its fluid.
+    pub fn drain(&mut self, amount: i32) -> Option<(String, i32)> {
+        let fluid = self.fluid.clone()?;
+        let moved = amount.min(self.amount).max(0);
+        if moved == 0 {
+            return None;
+        }
+        self.amount -= moved;
+        if self.amount == 0 {
+            self.fluid = None;
+        }
+        Some((fluid, moved))
+    }
 }
 
 impl<'a> Machine<'a> {
@@ -278,8 +321,27 @@ impl<'a> Machine<'a> {
         Self {
             slots,
             data,
+            tanks: Vec::new(),
+            energy: 0,
+            energy_capacity: 0,
             recipes,
         }
+    }
+
+    /// Adds up to `amount` energy (`EnergyHandler.insert`); how much went in.
+    pub fn add_energy(&mut self, amount: i32) -> i32 {
+        let moved = amount.min(self.energy_capacity - self.energy).max(0);
+        self.energy += moved;
+        moved
+    }
+
+    /// Uses `amount` energy if there is that much (`extract` of exactly it).
+    pub fn use_energy(&mut self, amount: i32) -> bool {
+        if amount < 0 || self.energy < amount {
+            return false;
+        }
+        self.energy -= amount;
+        true
     }
 
     /// The recipes of type `kind` (`grind:crushing`), from the mod's and the
@@ -493,6 +555,22 @@ fn draw_name(m: &Machine) -> String {
 pub fn runtime_tests(machines: &[Machine]) -> String {
     let mut t = String::from(
         r#"
+    #[test]
+    fn tanks_and_energy_fill_and_drain() {
+        let none = |_: &str| Vec::new();
+        let mut m = super::Machine::new(vec![], vec![], &none);
+        m.tanks = vec![super::Tank { capacity: 1000, ..Default::default() }];
+        assert_eq!(m.tanks[0].fill("minecraft:water", 1500), 1000);
+        assert_eq!(m.tanks[0].fill("minecraft:lava", 10), 0);
+        assert_eq!(m.tanks[0].drain(400), Some(("minecraft:water".to_string(), 400)));
+        assert_eq!(m.tanks[0].drain(1000), Some(("minecraft:water".to_string(), 600)));
+        assert_eq!(m.tanks[0].fluid, None);
+        m.energy_capacity = 100;
+        assert_eq!(m.add_energy(150), 100);
+        assert!(m.use_energy(60) && !m.use_energy(60));
+        assert_eq!(m.energy, 40);
+    }
+
     #[test]
     fn machine_slots_take_and_fit() {
         let none = |_: &str| Vec::new();
