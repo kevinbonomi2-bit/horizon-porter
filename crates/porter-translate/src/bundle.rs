@@ -1237,6 +1237,36 @@ fn {id}_block_entity_tick(
     if !m::BLOCK_ENTITIES.iter().any(|(_, id, _)| *id == entity.id) {{
         return;
     }}
+    // Its own block, for a block entity several blocks share.
+    let block_here = game.native_block(pos);
+    // The blocks beside it, for a tick that looks at them: read before the tick,
+    // since a mod block entity can only be reached outside one.
+    let neighbours: Vec<Option<m::Neighbour>> = if m::NEIGHBOURS.contains(&entity.id.as_str()) {{
+        let read = |tag: &Tag| -> Option<m::Saved> {{ {from_tag} }};
+        m::Side::ALL
+            .iter()
+            .map(|side| {{
+                let [dx, dy, dz] = side.offset();
+                let at = [pos[0] + dx, pos[1] + dy, pos[2] + dz];
+                let block = game.native_block(at);
+                let found = game.native_with_mod_block_entity(at, |e| {{
+                    let values: Vec<(String, m::Saved)> = e
+                        .nbt
+                        .iter()
+                        .filter_map(|(k, tag)| read(tag).map(|v| (k.to_string_lossy(), v)))
+                        .collect();
+                    (e.id.clone(), values)
+                }});
+                Some(m::Neighbour {{
+                    block,
+                    entity: found.as_ref().map(|(id, _)| id.clone()),
+                    values: found.map(|(_, v)| v).unwrap_or_default(),
+                }})
+            }})
+            .collect()
+    }} else {{
+        (0..6).map(|_| None).collect()
+    }};
     // An ingredient as Horizon reads one: an item, a `#tag`, or a list of them.
     // Older recipe files write `{{"item": ...}}` or `{{"tag": ...}}`.
     fn names(v: &serde_json::Value) -> Option<serde_json::Value> {{
@@ -1318,6 +1348,8 @@ fn {id}_block_entity_tick(
         .collect();
     let data = entity.data.clone();
     let mut machine = m::Machine::new(slots.clone(), data.clone(), &recipes);
+    machine.neighbours = neighbours;
+    machine.block = block_here;
     // Its tanks and energy, as Horizon keeps them: `fluids` (a list of
     // `{{Fluid, Amount}}`) and the int `energy`.
     let storage = m::STORAGE.iter().find(|(id, _, _)| *id == entity.id);
@@ -1433,6 +1465,23 @@ fn {id}_block_entity_tick(
                 }}
             }}
         }}
+    }}
+    // Saved values the tick changed in the block entities beside it.
+    for (side, key, value) in std::mem::take(&mut done.neighbour_writes) {{
+        let [dx, dy, dz] = side.offset();
+        let at = [pos[0] + dx, pos[1] + dy, pos[2] + dz];
+        let tag = {to_tag};
+        if game
+            .native_with_mod_block_entity(at, |e| {{
+                e.nbt.insert(JavaString::from(key.as_str()), tag);
+            }})
+            .is_some()
+        {{
+            game.native_block_entity_sync(at);
+        }}
+    }}
+    if done.sync {{
+        game.native_block_entity_sync(pos);
     }}
     // Only a change touches the entity: each write marks it for saving and sending.
     if let Some(values) = changed {{
@@ -2140,6 +2189,32 @@ fn {id}_net_from_server(game: &mut crate::game::Game<'_>, channel: &str, data: &
                             .collect::<Vec<_>>()
                             .join(", ")
                     }
+                );
+            }
+        }
+        // Libraries large mods are built on, and what becomes of each.
+        let mut libraries: BTreeMap<&str, (&str, BTreeSet<&str>)> = BTreeMap::new();
+        for class in &self.scan.classes {
+            for r in &class.references {
+                if let Some((name, note)) = porter_map::library(r) {
+                    libraries
+                        .entry(name)
+                        .or_insert((note, BTreeSet::new()))
+                        .1
+                        .insert(class.name.as_str());
+                }
+            }
+        }
+        if !libraries.is_empty() {
+            p.push_str(
+                "\n## Libraries\n\n| Library | Used by | In the port |\n| --- | --- | --- |\n",
+            );
+            for (name, (note, classes)) in &libraries {
+                let _ = writeln!(
+                    p,
+                    "| {name} | {} classes | {} |",
+                    classes.len(),
+                    one_line(note)
                 );
             }
         }

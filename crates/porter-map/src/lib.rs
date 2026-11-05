@@ -244,6 +244,74 @@ pub fn client_hooks(fqcn: &str) -> Option<&'static HookMapping> {
         .max_by_key(|m| m.java.len())
 }
 
+/// Libraries large mods are built on, by package, and what becomes of them in a
+/// port.
+pub const LIBRARIES: &[(&str, &str, &str)] = &[
+    (
+        "com.tterrag.registrate",
+        "Registrate",
+        "read: its builder chains become the port's blocks, items and block entities, and its datagen output (`src/generated/resources`) carries over",
+    ),
+    (
+        "dev.engine_room.flywheel",
+        "Flywheel",
+        "not portable yet: its instanced rendering needs Horizon's renderer. Port its visuals as block entity renderers (`render_<name>`); its partial models are baked as standalone models",
+    ),
+    (
+        "com.jozufozu.flywheel",
+        "Flywheel",
+        "not portable yet: its instanced rendering needs Horizon's renderer. Port its visuals as block entity renderers (`render_<name>`); its partial models are baked as standalone models",
+    ),
+    (
+        "net.createmod.ponder",
+        "Ponder",
+        "left out: its tutorial scenes. The mod works without them",
+    ),
+    (
+        "net.createmod.catnip",
+        "Catnip",
+        "utility code: what the mod calls is ported with the mod's own code; there is no Horizon version of the library",
+    ),
+    (
+        "mezz.jei",
+        "JEI",
+        "optional integration, left out: the recipes still work without it",
+    ),
+    (
+        "dev.emi",
+        "EMI",
+        "optional integration, left out: the recipes still work without it",
+    ),
+    (
+        "software.bernie.geckolib",
+        "GeckoLib",
+        "not portable yet: its animated models need its own runtime",
+    ),
+    (
+        "dev.architectury",
+        "Architectury",
+        "multi-loader glue: each call is ported as the loader's own",
+    ),
+    (
+        "me.shedaniel.clothconfig2",
+        "Cloth Config",
+        "config screens: ported by hand into the mod's settings page (`settings_buttons`)",
+    ),
+    (
+        "dan200.computercraft",
+        "ComputerCraft",
+        "optional integration, left out",
+    ),
+];
+
+/// The library a referenced class belongs to, and what becomes of it in a port.
+pub fn library(fqcn: &str) -> Option<(&'static str, &'static str)> {
+    LIBRARIES
+        .iter()
+        .find(|(package, _, _)| fqcn.starts_with(package) && fqcn[package.len()..].starts_with('.'))
+        .map(|(_, name, note)| (*name, *note))
+}
+
 /// Hooks whose signatures the porter knows, so it can wire them completely.
 pub const WIRED_HOOKS: &[&str] = &[
     "mods",

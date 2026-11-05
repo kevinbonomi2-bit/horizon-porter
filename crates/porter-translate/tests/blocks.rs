@@ -323,3 +323,33 @@ fn ports_fluid_tanks_and_energy() {
     // Energy buffers came in hook points version 142.
     assert!(b.hooks >= 142);
 }
+
+#[test]
+fn ports_a_registrate_kinetic_mod() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../porter-java/tests/fixtures/neoforge-kinetic-demo");
+    let scan = porter_java::scan(&path).unwrap();
+    let b = bundle::generate(&scan, &bundle::load_lang(&scan));
+    // Registrate's builder chains: the blocks, their shared block entity, its renderer.
+    for file in [
+        "content/data/spin/horizon/block/crank.json",
+        "content/data/spin/horizon/block/shaft.json",
+        "content/data/spin/horizon/item/wrench.json",
+        // Its datagen output, from src/generated/resources.
+        "content/assets/spin/blockstates/shaft.json",
+        "content/assets/spin/lang/en_us.json",
+    ] {
+        assert!(
+            b.files.contains_key(file) || b.copies.contains_key(file),
+            "{file}"
+        );
+    }
+    let runtime = &b.files["mixins/spin/runtime.rs"];
+    assert!(runtime.contains("    (\"spin:crank\", \"spin:kinetic\", true),\n    (\"spin:shaft\", \"spin:kinetic\", true),"));
+    assert!(runtime.contains("pub const NEIGHBOURS: &[&str] = &[\"spin:kinetic\"];"));
+    assert!(runtime.contains(
+        "pub fn tick_kinetic(pos: [i32; 3], state: &mut Kinetic, machine: &mut Machine<'_>)"
+    ));
+    assert!(runtime.contains("`machine.block`, its own block (`spin:crank`, `spin:shaft`)"));
+    assert!(b.files["PORTING.md"].contains("| Registrate | 1 classes | read:"));
+}

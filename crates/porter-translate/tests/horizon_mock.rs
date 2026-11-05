@@ -364,6 +364,9 @@ pub mod game {
             pub fn native_recipe_ingredient(&self, json: &serde_json::Value) -> Option<Ingredient> { None }
             pub fn native_recipe_result(&self, json: &serde_json::Value) -> Option<ItemStack> { None }
             pub fn native_dimension(&self) -> &'static str { "minecraft:overworld" }
+            pub fn native_block(&self, pos: [i32; 3]) -> String { String::new() }
+            pub fn native_with_mod_block_entity<R>(&mut self, pos: [i32; 3], change: impl FnOnce(&mut ModBlockEntity) -> R) -> Option<R> { None }
+            pub fn native_block_entity_sync(&mut self, pos: [i32; 3]) {}
             pub fn native_insert_item(&mut self, pos: [i32; 3], face: Direction, stack: ItemStack) -> Option<ItemStack> { Some(stack) }
             pub fn native_container_slots(&self, dimension: &str, pos: [i32; 3], face: Direction) -> Option<Vec<NativeContainerSlot>> { None }
             pub fn native_extract_item(&mut self, dimension: &str, pos: [i32; 3], face: Direction, slot: usize, count: u32) -> Option<ItemStack> { None }
@@ -455,6 +458,23 @@ fn machine_helpers_compile_against_horizon_api() {
         assert!(b.wired.contains_key(hook), "{hook}");
     }
     compiles_against_the_mock(&b, "machines");
+}
+
+#[test]
+fn kinetic_helpers_compile_against_horizon_api() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../porter-java/tests/fixtures/neoforge-kinetic-demo");
+    let scan = porter_java::scan(&path).unwrap();
+    let lang = bundle::load_lang(&scan);
+    let b = bundle::generate(&scan, &lang);
+    for hook in [
+        "block_entity_tick",
+        "block_entity_submit",
+        "block_entity_update_tag",
+    ] {
+        assert!(b.wired.contains_key(hook), "{hook}");
+    }
+    compiles_against_the_mock(&b, "kinetic");
 }
 
 /// Splices the bundle's helpers into the mock's hooks and runs `cargo check` on it.

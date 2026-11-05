@@ -113,6 +113,13 @@ pub fn summary(scan: &ModScan) -> String {
             .join(", ");
         row(&mut out, "Libraries", &text);
     }
+    for (name, note, classes) in known_libraries(scan) {
+        row(
+            &mut out,
+            "",
+            &format!("{name} ({} classes): {note}", n(classes)),
+        );
+    }
     if !scan.bundled_jars.is_empty() {
         row(
             &mut out,
@@ -403,6 +410,26 @@ pub(crate) fn registry_counts(scan: &ModScan) -> Vec<(String, usize)> {
 
 /// Third-party references grouped by package root (three segments), with how many
 /// of the mod's classes use each group.
+/// The known libraries a mod uses, with what becomes of each in a port.
+pub(crate) fn known_libraries(scan: &ModScan) -> Vec<(&'static str, &'static str, usize)> {
+    let mut found: BTreeMap<&'static str, (&'static str, BTreeSet<&str>)> = BTreeMap::new();
+    for class in &scan.classes {
+        for r in &class.references {
+            if let Some((name, note)) = porter_map::library(r) {
+                found
+                    .entry(name)
+                    .or_insert((note, BTreeSet::new()))
+                    .1
+                    .insert(class.name.as_str());
+            }
+        }
+    }
+    found
+        .into_iter()
+        .map(|(name, (note, classes))| (name, note, classes.len()))
+        .collect()
+}
+
 pub(crate) fn library_groups(scan: &ModScan) -> Vec<(String, usize)> {
     let Some(libs) = porter_java::reference_counts(scan).remove(&SymbolOrigin::Library) else {
         return Vec::new();

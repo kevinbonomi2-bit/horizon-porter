@@ -35,6 +35,9 @@ pub struct BlockEntity {
     pub tanks: Vec<i32>,
     /// Its energy buffer: capacity, most one insert moves, most one extract moves.
     pub energy: Option<[i32; 3]>,
+    /// Whether its Java code looks at the blocks beside it (it uses `Direction`):
+    /// its tick then gets them (`machine.neighbour(side)`).
+    pub neighbours: bool,
     /// Java fields the state leaves out, with why.
     pub left_out: Vec<String>,
 }
@@ -176,6 +179,7 @@ pub fn find(scan: &ModScan, ns: &str) -> Vec<BlockEntity> {
             renderer: None,
             tanks: Vec::new(),
             energy: None,
+            neighbours: false,
             left_out: Vec::new(),
         };
         if let Some(class) = class {
@@ -186,6 +190,10 @@ pub fn find(scan: &ModScan, ns: &str) -> Vec<BlockEntity> {
                 .iter()
                 .find(|r| r.entity == simple)
                 .map(|r| r.class.clone());
+            be.neighbours = class
+                .references
+                .iter()
+                .any(|r| r == "net.minecraft.core.Direction");
             if let Some(s) = scan.storages.iter().find(|s| s.class == class.name) {
                 be.tanks = s.tanks.clone();
                 be.energy = s.energy;
@@ -392,11 +400,32 @@ pub const BLOCK_ENTITIES: &[(&str, &str, bool)] = &[
 
         let storage = storage_text(be);
         if be.ticks {
-            if machine_of(be).is_none() && !storage.is_empty() {
+            if machine_of(be).is_none() && takes_machine(be) {
+                let mut has = Vec::new();
+                if !storage.is_empty() {
+                    has.push(storage.clone());
+                }
+                if be.neighbours {
+                    has.push("the blocks beside it (`machine.neighbour(Side::Up)`, with their saved state; `machine.set_neighbour(...)` changes one after the tick)".to_string());
+                }
+                if be.renderer.is_some() {
+                    has.push("`machine.sync()`, which sends clients its state again for its renderer (`sendBlockUpdated`)".to_string());
+                }
+                if be.blocks.len() > 1 {
+                    has.push(format!(
+                        "`machine.block`, its own block ({})",
+                        be.blocks
+                            .iter()
+                            .map(|b| format!("`{b}`"))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ));
+                }
                 let _ = write!(
                     r,
-                    "\n/// A server tick of the `{id}` block entity at `pos`, 20 a second. `machine` has\n/// {storage} (it has no item slots). What the tick changes in them and in\n/// `state` is kept.\n///\n/// TODO: port the tick of `{java}`.\npub fn tick_{snake}(pos: [i32; 3], state: &mut {ty}, machine: &mut Machine<'_>) {{\n    let _ = (pos, state, machine);\n}}\n",
+                    "\n/// A server tick of the `{id}` block entity at `pos`, 20 a second. `machine` has\n/// {has} (it has no item slots). What the tick changes in them and in `state` is\n/// kept.\n///\n/// TODO: port the tick of `{java}`.\npub fn tick_{snake}(pos: [i32; 3], state: &mut {ty}, machine: &mut Machine<'_>) {{\n    let _ = (pos, state, machine);\n}}\n",
                     id = be.id,
+                    has = has.join("; "),
                     snake = be.snake,
                     ty = be.rust
                 );
@@ -465,7 +494,7 @@ pub const BLOCK_ENTITIES: &[(&str, &str, bool)] = &[
     } else {
         r.push_str("    match id {\n");
         for be in ticking {
-            let machine_arg = if machine_of(be).is_some() || !storage_text(be).is_empty() {
+            let machine_arg = if machine_of(be).is_some() || takes_machine(be) {
                 ", machine"
             } else {
                 ""
@@ -500,6 +529,16 @@ pub const BLOCK_ENTITIES: &[(&str, &str, bool)] = &[
         );
     }
     r.push_str("];\n");
+    r.push_str("\n/// Block entities whose tick looks at the blocks beside it.\npub const NEIGHBOURS: &[&str] = &[");
+    r.push_str(
+        &entities
+            .iter()
+            .filter(|b| b.neighbours)
+            .map(|b| format!("{:?}", b.id))
+            .collect::<Vec<_>>()
+            .join(", "),
+    );
+    r.push_str("];\n");
     let drawn: Vec<&BlockEntity> = entities.iter().filter(|b| b.renderer.is_some()).collect();
     if !drawn.is_empty() {
         r.push_str(DRAW_TYPES);
@@ -530,6 +569,12 @@ pub const BLOCK_ENTITIES: &[(&str, &str, bool)] = &[
         r.push_str(&crate::machine::runtime(machines, recipe_types));
     }
     r
+}
+
+/// Whether its tick gets a `Machine`: it has slots, tanks, energy, a renderer to
+/// send its state to, or neighbours it looks at.
+pub fn takes_machine(be: &BlockEntity) -> bool {
+    !be.tanks.is_empty() || be.energy.is_some() || be.renderer.is_some() || be.neighbours
 }
 
 /// "its 2 fluid tanks (4000 mB each) and its energy (10000 FE)", or nothing.

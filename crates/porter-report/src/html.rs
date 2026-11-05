@@ -8,8 +8,8 @@ use porter_map::reach::Portability;
 use porter_model::{InputKind, ModScan, Side, SymbolOrigin, Verdict};
 
 use crate::text::{
-    facts, library_groups, minecraft_superclasses, n, other_mod_targets, registry_counts, short,
-    verdict_tally,
+    facts, known_libraries, library_groups, minecraft_superclasses, n, other_mod_targets,
+    registry_counts, short, verdict_tally,
 };
 
 /// Entries shown before a list folds the rest into "Show all".
@@ -412,6 +412,20 @@ fn builds_on(scan: &ModScan, b: &mut String) {
         );
     }
     b.push_str("</div>\n");
+    let known = known_libraries(scan);
+    if !known.is_empty() {
+        b.push_str("<h3>Libraries in the port</h3>\n<ul class=\"warnings\">\n");
+        for (name, note, classes) in known {
+            let _ = writeln!(
+                b,
+                "<li><strong>{}</strong> ({} classes): {}</li>",
+                esc(name),
+                n(classes),
+                esc(note)
+            );
+        }
+        b.push_str("</ul>\n");
+    }
 
     if let Some(platform) = counts.get(&SymbolOrigin::Platform) {
         let lwjgl: Vec<&String> = platform

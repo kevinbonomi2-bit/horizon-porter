@@ -273,7 +273,33 @@ pub struct Machine<'a> {
     pub energy_capacity: i32,
     /// What the tick sends to and takes from the blocks beside it, done after it.
     pub transfers: Vec<Transfer>,
+    /// Its own block (`getBlockState().getBlock()`): `spin:crank`, for a block
+    /// entity several blocks share.
+    pub block: String,
+    /// The blocks beside it, by `Side` (read before the tick), for a block entity
+    /// whose tick looks at them.
+    pub neighbours: Vec<Option<Neighbour>>,
+    /// Saved values to change in the block entities beside it, after the tick.
+    pub neighbour_writes: Vec<(Side, String, Saved)>,
+    /// Whether to send clients its state again.
+    pub sync: bool,
     recipes: &'a dyn Fn(&str) -> Vec<Recipe>,
+}
+
+/// A block beside a block entity: its block, and its block entity's id and saved
+/// values when it is one of a mod's.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Neighbour {
+    pub block: String,
+    pub entity: Option<String>,
+    pub values: Vec<(String, Saved)>,
+}
+
+impl Neighbour {
+    /// One of its saved values: `State::load(|k| neighbour.get(k))` reads its state.
+    pub fn get(&self, key: &str) -> Option<Saved> {
+        self.values.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone())
+    }
 }
 
 /// A side of a block (`Direction`).
@@ -332,6 +358,8 @@ pub struct MachineParts {
     pub tanks: Vec<Tank>,
     pub energy: i32,
     pub transfers: Vec<Transfer>,
+    pub neighbour_writes: Vec<(Side, String, Saved)>,
+    pub sync: bool,
 }
 
 /// A fluid tank: its fluid (`minecraft:water`), how much in millibuckets, and its
@@ -385,8 +413,31 @@ impl<'a> Machine<'a> {
             energy: 0,
             energy_capacity: 0,
             transfers: Vec::new(),
+            block: String::new(),
+            neighbours: (0..6).map(|_| None).collect(),
+            neighbour_writes: Vec::new(),
+            sync: false,
             recipes,
         }
+    }
+
+    /// The block on `side` (`level.getBlockEntity(pos.relative(side))`): none when
+    /// this block entity's tick doesn't look at its neighbours.
+    pub fn neighbour(&self, side: Side) -> Option<&Neighbour> {
+        let i = Side::ALL.iter().position(|s| *s == side)?;
+        self.neighbours.get(i)?.as_ref()
+    }
+
+    /// Changes saved value `key` of the mod block entity on `side`, after the tick
+    /// (a generator charging the machine beside it); clients get it again.
+    pub fn set_neighbour(&mut self, side: Side, key: &str, value: Saved) {
+        self.neighbour_writes.push((side, key.to_string(), value));
+    }
+
+    /// Sends clients this block entity's state again after the tick, for its
+    /// renderer (`level.sendBlockUpdated`, `sendData`).
+    pub fn sync(&mut self) {
+        self.sync = true;
     }
 
     /// Sends up to `max` of what is in `slot` to the container on `side` (a chest,
@@ -411,6 +462,8 @@ impl<'a> Machine<'a> {
             tanks: self.tanks,
             energy: self.energy,
             transfers: self.transfers,
+            neighbour_writes: self.neighbour_writes,
+            sync: self.sync,
         }
     }
 
@@ -654,6 +707,25 @@ pub fn runtime_tests(machines: &[Machine]) -> String {
             assert_eq!(x.abs() + y.abs() + z.abs(), 1);
         }
         assert_eq!(super::Side::from_name("east"), Some(super::Side::East));
+    }
+
+    #[test]
+    fn neighbours_are_read_and_written_by_side() {
+        let none = |_: &str| Vec::new();
+        let mut m = super::Machine::new(vec![], vec![], &none);
+        m.neighbours[1] = Some(super::Neighbour {
+            block: "demo:shaft".into(),
+            entity: Some("demo:shaft".into()),
+            values: vec![("Speed".into(), super::Saved::Float(16.0))],
+        });
+        let up = m.neighbour(super::Side::Up).expect("the block above");
+        assert_eq!(up.get("Speed"), Some(super::Saved::Float(16.0)));
+        assert!(m.neighbour(super::Side::Down).is_none());
+        m.set_neighbour(super::Side::Up, "Speed", super::Saved::Float(8.0));
+        m.sync();
+        let parts = m.into_parts();
+        assert_eq!(parts.neighbour_writes.len(), 1);
+        assert!(parts.sync);
     }
 
     #[test]

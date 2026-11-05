@@ -147,8 +147,17 @@ scenarios we check.
   transfer: a tick sends items to the block beside it and takes them from it
   (`machine.push(1, Side::Down, 64)`, `machine.pull(...)`), carried out after the tick
   with Horizon's `native_insert_item`, `native_container_slots` and
-  `native_extract_item`, as a hopper does. Still to do: the library shims (Registrate,
-  Catnip, Ponder) and moving structures.
+  `native_extract_item`, as a hopper does. Kinetics: a tick that looks at the blocks
+  beside it (its Java code uses `Direction`) gets them, read before the tick through
+  `native_with_mod_block_entity` (`machine.neighbour(Side::Up)` with their saved
+  state), can change them after it (`machine.set_neighbour`), knows its own block
+  (`machine.block`) and sends clients its state again (`machine.sync()`). Libraries:
+  Registrate's builder chains and datagen output were already read; PORTING.md and the
+  report now say what becomes of each library large mods use (Registrate read,
+  Flywheel and GeckoLib not portable yet, Ponder and JEI left out, Catnip ported with
+  the mod's code). The kinetic demo (`neoforge-kinetic-demo`, Registrate) has a crank
+  whose turning spreads along shafts that spin. Still to do: moving structures, and
+  the live test of transfers and kinetics.
 
 ## Working with Horizon
 
