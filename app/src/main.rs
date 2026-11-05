@@ -60,6 +60,8 @@ struct PortView {
     /// Whether it has a native half to build; a content mod alone just plays.
     native: bool,
     wired: Vec<String>,
+    /// Hooks with a helper ready to port into.
+    stubbed: Vec<String>,
     unwired: Vec<String>,
     blocks: usize,
     items: usize,
@@ -170,7 +172,11 @@ async fn port(app: AppHandle, current: State<'_, Current>) -> Result<Option<Port
     };
     let parent = dir.into_path().map_err(message)?;
     let lang = porter_translate::bundle::load_lang(&scan);
-    let bundle = porter_translate::bundle::generate(&scan, &lang);
+    let bundle = porter_translate::bundle::generate_with(
+        &scan,
+        &lang,
+        porter_map::ledger::horizon_source().as_deref(),
+    );
     let out = parent.join(format!("{}-horizon", bundle.id));
     let has_files = std::fs::read_dir(&out)
         .map(|mut d| d.next().is_some())
@@ -201,6 +207,11 @@ async fn port(app: AppHandle, current: State<'_, Current>) -> Result<Option<Port
         porting: out.join("PORTING.md").display().to_string(),
         native: bundle.native,
         wired: bundle.wired.keys().map(|h| format!("native_{h}")).collect(),
+        stubbed: bundle
+            .stubbed
+            .keys()
+            .map(|h| format!("native_{h}"))
+            .collect(),
         unwired: bundle
             .unwired
             .keys()

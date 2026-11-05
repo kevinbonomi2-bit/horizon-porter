@@ -6,6 +6,7 @@
 //! Mixin targets and loader events to hooks.
 
 pub mod hooks;
+pub mod ledger;
 
 /// One Java API, and the Horizon hooks that take its place.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

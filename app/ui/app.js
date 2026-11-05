@@ -152,6 +152,7 @@ async function port() {
       if (done.blockEntities) parts.push(count(done.blockEntities, "block entity", "block entities"));
       if (done.native) {
         parts.push(`${done.wired.length} hooks wired`);
+        if (done.stubbed.length) parts.push(`${done.stubbed.length} to port into`);
         if (done.unwired.length) parts.push(`${done.unwired.length} to wire by hand`);
       }
       notice("ok", `Wrote ${done.id}-horizon: ${parts.join(", ")}`, done.out, [

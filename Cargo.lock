@@ -1535,6 +1535,7 @@ version = "0.4.0"
 dependencies = [
  "anyhow",
  "porter-java",
+ "porter-map",
  "porter-model",
  "porter-report",
  "porter-translate",
@@ -2703,6 +2704,7 @@ dependencies = [
  "anyhow",
  "clap",
  "porter-java",
+ "porter-map",
  "porter-model",
  "porter-report",
  "porter-translate",

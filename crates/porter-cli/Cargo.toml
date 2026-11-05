@@ -14,6 +14,7 @@ path = "src/main.rs"
 anyhow = "1.0.104"
 clap = { version = "4.6.7", features = ["derive"] }
 porter-java = { path = "../porter-java" }
+porter-map = { path = "../porter-map" }
 porter-model = { path = "../porter-model" }
 porter-report = { path = "../porter-report" }
 porter-translate = { path = "../porter-translate" }

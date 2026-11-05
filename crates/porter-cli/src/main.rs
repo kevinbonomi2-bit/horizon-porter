@@ -146,7 +146,11 @@ fn run(cli: Cli) -> Result<ExitCode> {
             }
             let scan = porter_java::scan(&path)?;
             let lang = porter_translate::bundle::load_lang(&scan);
-            let bundle = porter_translate::bundle::generate(&scan, &lang);
+            let bundle = porter_translate::bundle::generate_with(
+                &scan,
+                &lang,
+                porter_map::ledger::horizon_source().as_deref(),
+            );
             porter_translate::bundle::write(&bundle, &out, force)?;
             let what = match (bundle.native, bundle.content.is_empty()) {
                 (true, true) => "a Horizon native mod",
@@ -189,6 +193,17 @@ fn run(cli: Cli) -> Result<ExitCode> {
                     .collect::<Vec<_>>()
                     .join(", ")
             );
+            if !bundle.stubbed.is_empty() {
+                println!(
+                    "Hooks to port into (helpers ready): {}",
+                    bundle
+                        .stubbed
+                        .keys()
+                        .map(|h| format!("native_{h}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+            }
             if !bundle.unwired.is_empty() {
                 println!(
                     "To wire by hand: {}",
@@ -201,7 +216,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 );
             }
             println!(
-                "Next: port the Java logic into mixins/{}/runtime.rs; PORTING.md lists every class.",
+                "Next: port the Java logic into mixins/{}/ (runtime.rs and the hook helpers); PORTING.md lists every class and Mixin.",
                 bundle.id
             );
             Ok(ExitCode::SUCCESS)

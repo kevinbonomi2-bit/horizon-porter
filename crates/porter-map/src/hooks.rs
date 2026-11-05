@@ -311,7 +311,7 @@ pub fn method_hooks(class: &str, method: &str) -> Vec<(&'static HorizonHook, Mat
     let mut out: Vec<(&'static HorizonHook, Match)> = Vec::new();
     let mut seen = BTreeSet::new();
     for h in &catalog().hooks {
-        if h.cites.iter().any(|c| *c == key) && seen.insert(h.name.as_str()) {
+        if h.cites.contains(&key) && seen.insert(h.name.as_str()) {
             out.push((h, Match::Cited));
         }
     }

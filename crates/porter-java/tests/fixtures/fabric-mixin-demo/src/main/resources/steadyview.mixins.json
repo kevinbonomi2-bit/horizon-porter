@@ -1,0 +1,5 @@
+{
+  "package": "net.steadyview.mixin",
+  "mixins": ["PlayerMixin", "ItemEntityMixin", "FarmBlockMixin", "LivingEntityMixin"],
+  "client": ["GuiMixin", "GameRendererMixin"]
+}

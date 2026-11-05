@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "steadyview",
+  "version": "2.1.0",
+  "name": "Steady View",
+  "description": "Keeps the field of view steady, shows a pickup counter and stops eating while sneaking.",
+  "license": "MIT",
+  "environment": "*",
+  "entrypoints": {
+    "main": ["net.steadyview.SteadyView"]
+  },
+  "mixins": ["steadyview.mixins.json"],
+  "depends": {
+    "fabricloader": ">=0.17",
+    "minecraft": "~26.3"
+  }
+}
