@@ -258,11 +258,11 @@ pub fn signature(function: &str) -> String {
     head.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// `fresh` (a file `port` generated again) with each function that is ported in
-/// `existing` (no TODO above it) kept as it is there, when the function still has
-/// the same signature. A struct `port` leaves to fill in (a screen's fields), once
-/// its TODO is gone, is kept too. What `port --force` writes, so it never loses a
-/// port.
+/// `fresh` (a file `port` generated again) with each function or struct `port`
+/// leaves to port (a TODO above it in `fresh`) kept as it is in `existing`, once
+/// ported there (no TODO above it) and with the same signature. Everything `port`
+/// generates whole is fresh. What `port --force` writes, so it never loses a port
+/// and never keeps stale generated code.
 pub fn keep_ported(fresh: &str, existing: &str) -> String {
     let old: Vec<Item> = items_where(existing, true);
     let mut out = fresh.to_string();
@@ -276,11 +276,11 @@ pub fn keep_ported(fresh: &str, existing: &str) -> String {
         if prev_comment.contains(TODO) || signature(prev_fn) != signature(new_fn) {
             continue;
         }
-        // A struct is kept only where `port` asked for it to be filled in.
+        // Only what `port` left to port (a TODO in the fresh file) is yours to keep:
+        // code it generates whole (a hook helper, a dispatch) always follows the
+        // porter, so it matches the runtime it calls.
         let fresh_comment = &fresh[item.comment_start..item.fn_start];
-        let is_type =
-            type_name(fresh[item.fn_start..].lines().next().unwrap_or_default()).is_some();
-        if is_type && !fresh_comment.contains(TODO) {
+        if !fresh_comment.contains(TODO) {
             continue;
         }
         if let Some(merged) = replace_item(&out, &item.name, prev_comment, prev_fn) {
@@ -476,5 +476,15 @@ mod tests {
         let changed = RUNTIME.replace("state: &mut Crank", "state: &mut Crank2");
         let merged = keep_ported(&changed, &ported);
         assert!(merged.contains(TODO));
+    }
+
+    #[test]
+    fn regeneration_refreshes_generated_code() {
+        // A helper `port` writes whole (no TODO) follows the porter: a newer
+        // runtime's new draw step must reach it, as the Grind demo's draw helper
+        // once missed `DrawOp::Model`.
+        let old = "// Draws it.\nfn demo_submit(op: Op) {\n    match op {\n        Op::Push => {}\n    }\n}\n";
+        let fresh = "// Draws it.\nfn demo_submit(op: Op) {\n    match op {\n        Op::Push => {}\n        Op::Model => {}\n    }\n}\n";
+        assert_eq!(keep_ported(fresh, old), fresh);
     }
 }
