@@ -5,8 +5,10 @@
 //! stubs (milestone M1), a content mod with the Java mod's blocks, items and
 //! resources (`porter-content`), block entities as saved state with tick stubs
 //! ([`block_entity`], milestone M2), and a `PORTING.md` checklist of everything left.
-//! Translating method bodies (milestone M4) comes later.
+//! [`ai`] translates the functions left to port with an AI model, checking each
+//! with the compiler (milestone M4).
 
+pub mod ai;
 pub mod block_entity;
 pub mod bundle;
 /// The content mod, from the `porter-content` crate.

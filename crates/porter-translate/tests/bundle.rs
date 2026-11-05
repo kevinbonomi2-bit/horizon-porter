@@ -54,6 +54,7 @@ fn wires_the_hooks_the_mod_uses() {
     assert_eq!(
         files,
         vec![
+            ".porter/port.json",
             "Cargo.toml",
             "PORTING.md",
             "compatibility.json",

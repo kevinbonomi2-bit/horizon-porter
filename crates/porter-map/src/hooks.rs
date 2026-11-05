@@ -36,11 +36,43 @@ pub struct HorizonHook {
     pub cites: Vec<String>,
 }
 
+/// A function of the game that a hook's code calls: `game.native_set_block(...)`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct HorizonHelper {
+    /// The function's name: `native_set_block`.
+    pub name: String,
+    pub target: String,
+    pub generics: String,
+    pub params: Vec<String>,
+    pub returns: String,
+    pub doc: String,
+}
+
+impl HorizonHelper {
+    /// Its signature as Rust writes it: `fn native_chat(&mut self, text: &str)`.
+    pub fn signature(&self) -> String {
+        let ret = if self.returns.is_empty() {
+            String::new()
+        } else {
+            format!(" -> {}", self.returns)
+        };
+        format!(
+            "fn {}{}({}){ret}",
+            self.name,
+            self.generics,
+            self.params.join(", ")
+        )
+    }
+}
+
 /// The hook table and the Horizon commit it was read from.
 #[derive(Debug, Deserialize)]
 pub struct Catalog {
     pub horizon: String,
     pub hooks: Vec<HorizonHook>,
+    /// The game's functions hook code calls.
+    #[serde(default)]
+    pub helpers: Vec<HorizonHelper>,
 }
 
 /// The hook points of the Horizon commit in `data/horizon-hooks.json`.
@@ -404,6 +436,9 @@ mod tests {
         for name in crate::WIRED_HOOKS {
             assert!(hook(name).is_some(), "{name}");
         }
+        let chat = c.helpers.iter().find(|h| h.name == "native_chat").unwrap();
+        assert_eq!(chat.signature(), "fn native_chat(&mut self, text: &str)");
+        assert!(c.helpers.len() > 100);
         // Every hook can be given a helper.
         let unbindable: Vec<&str> = c
             .hooks

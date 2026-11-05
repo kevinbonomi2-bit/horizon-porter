@@ -285,6 +285,17 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
     let porting = ctx.porting_md(&bundle);
     let mut bundle = bundle;
     bundle.files.insert("PORTING.md".into(), porting);
+    // Where the Java came from, for `translate`.
+    bundle.files.insert(
+        ".porter/port.json".into(),
+        serde_json::to_string_pretty(&serde_json::json!({
+            "input": scan.input,
+            "id": bundle.id,
+            "tool": env!("CARGO_PKG_VERSION"),
+        }))
+        .unwrap_or_default()
+            + "\n",
+    );
     bundle
 }
 
@@ -308,6 +319,14 @@ pub fn write(bundle: &Bundle, out: &Path, overwrite: bool) -> Result<()> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
         }
+        // Writing a mod's Rust again keeps each function already ported in it, by
+        // hand or by `translate`: only the stubs are written over.
+        let content = match fs::read_to_string(&path) {
+            Ok(existing) if rel.ends_with(".rs") => {
+                crate::ai::units::keep_ported(content, &existing)
+            }
+            _ => content.clone(),
+        };
         fs::write(&path, content).with_context(|| format!("writing {}", path.display()))?;
     }
     for (rel, src) in &bundle.copies {

@@ -141,12 +141,62 @@ def main() -> None:
                 ),
             }
         )
+    # The helpers a hook's code calls on the game (`game.native_set_block(...)`).
+    helpers = []
+    for h in spec.get("helpers", []):
+        fn_name = h["target"].rsplit("::", 1)[1]
+        files = module_files(root, h["target"]) + sorted((root / "crates").rglob("*.rs"))
+        found = None
+        for f in files:
+            text = cache.setdefault(f, f.read_text(encoding="utf-8"))
+            if f"fn {fn_name}" in text:
+                found = find_fn(text, fn_name)
+                if found:
+                    break
+        if not found:
+            missing.append(h["name"])
+            continue
+        generics, params, ret, doc = found
+        helpers.append(
+            {
+                "name": fn_name,
+                "target": h["target"],
+                "generics": generics,
+                "params": params,
+                "returns": ret,
+                "doc": first_sentence(doc),
+            }
+        )
+    # Other `native_*` functions of `Game` mods call that the helper list leaves
+    # out (`native_player`, `native_chat`).
+    known = {"native_" + h["name"] for h in hooks} | {h["name"] for h in helpers}
+    game_file = root / "crates/horizon-client/src/game/native_hooks.rs"
+    if game_file.is_file():
+        text = cache.setdefault(game_file, game_file.read_text(encoding="utf-8"))
+        for name in sorted(set(re.findall(r"\bpub(?:\([a-z]+\))? fn (native_[a-z0-9_]+)", text)) - known):
+            found = find_fn(text, name)
+            if not found:
+                continue
+            generics, params, ret, doc = found
+            if not params or "self" not in params[0]:
+                continue
+            helpers.append(
+                {
+                    "name": name,
+                    "target": f"horizon_client::game::native_hooks::Game<'_>::{name}",
+                    "generics": generics,
+                    "params": params,
+                    "returns": ret,
+                    "doc": first_sentence(doc),
+                }
+            )
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(
-        json.dumps({"horizon": commit, "hooks": hooks}, indent=1, ensure_ascii=False) + "\n",
+        json.dumps({"horizon": commit, "hooks": hooks, "helpers": helpers}, indent=1, ensure_ascii=False)
+        + "\n",
         encoding="utf-8",
     )
-    print(f"{len(hooks)} hooks from {commit} to {OUT}")
+    print(f"{len(hooks)} hooks and {len(helpers)} helpers from {commit} to {OUT}")
     if missing:
         print("not found:", ", ".join(missing))
 

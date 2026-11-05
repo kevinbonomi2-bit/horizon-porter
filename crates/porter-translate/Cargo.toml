@@ -11,7 +11,9 @@ anyhow = "1.0.104"
 porter-content = { path = "../porter-content" }
 porter-map = { path = "../porter-map" }
 porter-model = { path = "../porter-model" }
+serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
+ureq = { version = "3", features = ["json"] }
 toml = "1.2.0"
 zip = { version = "9.3.0", default-features = false, features = ["deflate"] }
 

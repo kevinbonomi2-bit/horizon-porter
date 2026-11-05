@@ -73,6 +73,36 @@ enum Command {
         #[arg(long)]
         play: bool,
     },
+    /// Translate the functions left to port with an AI model, compiling and testing each
+    Translate {
+        /// The folder `port` wrote
+        path: PathBuf,
+        /// The model: `anthropic` (Claude through the API: ANTHROPIC_API_KEY or `ant auth login`),
+        /// `claude-code` (your `claude` command), or a command that reads the prompt on stdin
+        #[arg(long, default_value = "anthropic")]
+        ai: String,
+        /// The model's name (default: claude-opus-5-5 for `anthropic`)
+        #[arg(long)]
+        model: Option<String>,
+        /// How hard the model thinks: low, medium, high, xhigh or max (`anthropic`; default high)
+        #[arg(long)]
+        effort: Option<String>,
+        /// Only functions whose name contains this
+        #[arg(long)]
+        only: Option<String>,
+        /// At most this many functions
+        #[arg(long)]
+        limit: Option<usize>,
+        /// Tries per function
+        #[arg(long, default_value_t = 3)]
+        attempts: usize,
+        /// List what would be translated and how big each prompt is; call no model
+        #[arg(long)]
+        dry_run: bool,
+        /// Go ahead without the estimate (it asks when there are more than 5 functions)
+        #[arg(long)]
+        yes: bool,
+    },
     /// Play a ported mod in its instance, with its content loaded, without building it again
     Play {
         /// The folder `port` wrote
@@ -94,6 +124,19 @@ enum Command {
     },
     /// Show the port's progress, class by class (not implemented yet)
     Status { path: PathBuf },
+}
+
+/// 1234567 → "1,234,567".
+fn thousands(n: usize) -> String {
+    let digits = n.to_string();
+    let mut out = String::new();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
 }
 
 fn main() -> ExitCode {
@@ -281,6 +324,123 @@ fn run(cli: Cli) -> Result<ExitCode> {
                     instance.name
                 );
             }
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Translate {
+            path,
+            ai,
+            model,
+            effort,
+            only,
+            limit,
+            attempts,
+            dry_run,
+            yes,
+        } => {
+            let info: serde_json::Value = serde_json::from_str(
+                &fs::read_to_string(path.join(".porter").join("port.json")).with_context(|| {
+                    format!(
+                        "{} has no .porter/port.json: port the mod again with this version of horizon-porter",
+                        path.display()
+                    )
+                })?,
+            )?;
+            let input = PathBuf::from(info["input"].as_str().unwrap_or_default());
+            if !input.is_dir() {
+                anyhow::bail!(
+                    "the Java source this was ported from, {}, is not there any more",
+                    input.display()
+                );
+            }
+            let scan = porter_java::scan(&input)?;
+            let mut opts = porter_translate::ai::Options {
+                only,
+                limit,
+                attempts,
+                dry_run: true,
+            };
+            // What it would send, first.
+            let plan = porter_translate::ai::translate(
+                &path,
+                &scan,
+                &porter_translate::ai::model::External {
+                    command: "none".into(),
+                },
+                &opts,
+                |_| {},
+            )?;
+            if plan.is_empty() {
+                println!(
+                    "Nothing left to translate in {}: every function is ported.",
+                    path.display()
+                );
+                return Ok(ExitCode::SUCCESS);
+            }
+            let chars: usize = plan
+                .iter()
+                .map(|o| match o.status {
+                    porter_translate::ai::Status::Planned { prompt_chars } => prompt_chars,
+                    _ => 0,
+                })
+                .sum();
+            let tokens = chars / 4;
+            println!(
+                "{} functions to translate, about {} input tokens for one try each (fixes add more).",
+                plan.len(),
+                thousands(tokens)
+            );
+            if dry_run {
+                for o in &plan {
+                    if let porter_translate::ai::Status::Planned { prompt_chars } = o.status {
+                        println!(
+                            "  {:<48} {:>8} tokens  {}",
+                            o.unit.function,
+                            thousands(prompt_chars / 4),
+                            o.unit.file
+                        );
+                    }
+                }
+                return Ok(ExitCode::SUCCESS);
+            }
+            if plan.len() > 5 && !yes {
+                println!(
+                    "That calls the model at least {} times. Run it again with --yes to go ahead, or narrow it with --only or --limit.",
+                    plan.len()
+                );
+                return Ok(ExitCode::FAILURE);
+            }
+            opts.dry_run = false;
+            let model =
+                porter_translate::ai::model::from_choice(&ai, model.as_deref(), effort.as_deref())?;
+            println!("Translating with {}.", model.name());
+            let out =
+                porter_translate::ai::translate(&path, &scan, model.as_ref(), &opts, |line| {
+                    eprintln!("{line}")
+                })?;
+            let count = |f: &dyn Fn(&porter_translate::ai::Status) -> bool| {
+                out.iter().filter(|o| f(&o.status)).count()
+            };
+            use porter_translate::ai::Status;
+            let (input_tokens, output_tokens) = out.iter().fold((0, 0), |(i, o), x| {
+                (i + x.input_tokens, o + x.output_tokens)
+            });
+            println!(
+                "\nPorted and tested: {}. Ported, checked when you build: {}. Left as they were: {}.",
+                count(&|s| *s == Status::Ported),
+                count(&|s| *s == Status::Unchecked),
+                count(&|s| matches!(s, Status::Failed(_)))
+            );
+            if input_tokens > 0 {
+                println!(
+                    "Tokens: {} in, {} out.",
+                    thousands(input_tokens as usize),
+                    thousands(output_tokens as usize)
+                );
+            }
+            println!(
+                "Next: read what changed (each ported function says so above it), then build: horizon-porter build {} --trust-native-code",
+                path.display()
+            );
             Ok(ExitCode::SUCCESS)
         }
         Command::Play {
