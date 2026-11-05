@@ -6,6 +6,8 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod ai;
+
 use std::fmt::Display;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -397,7 +399,14 @@ fn main() {
             port,
             open_path,
             build,
-            play
+            play,
+            ai::ai_settings,
+            ai::save_choice,
+            ai::save_key,
+            ai::forget_key,
+            ai::local_models,
+            ai::translate_estimate,
+            ai::translate
         ])
         .on_window_event(|window, event| {
             // Drops are handled natively and forwarded to the page as paths.

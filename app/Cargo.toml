@@ -21,7 +21,10 @@ porter-model = { path = "../crates/porter-model" }
 porter-report = { path = "../crates/porter-report" }
 porter-translate = { path = "../crates/porter-translate" }
 porter-verify = { path = "../crates/porter-verify" }
+# The Claude API key lives in the system credential store, never in a file.
+keyring = { version = "3", features = ["windows-native", "apple-native", "sync-secret-service", "crypto-rust"] }
 serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
 # custom-protocol serves the bundled ui/ folder; there is no dev server.
 tauri = { version = "2", features = ["custom-protocol"] }
 tauri-plugin-dialog = "2"

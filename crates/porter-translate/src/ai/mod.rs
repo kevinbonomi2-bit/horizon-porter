@@ -110,6 +110,40 @@ fn rust_files(dir: &Path) -> Result<Vec<PathBuf>> {
     Ok(files)
 }
 
+/// What `translate` would do, calling no model: each function and its prompt's size.
+pub fn plan(dir: &Path, scan: &ModScan, opts: &Options) -> Result<Vec<Outcome>> {
+    let opts = Options {
+        dry_run: true,
+        ..opts.clone()
+    };
+    translate(
+        dir,
+        scan,
+        &model::External {
+            command: "none".into(),
+        },
+        &opts,
+        |_| {},
+    )
+}
+
+/// Input tokens for one try of each planned function (about four characters each).
+pub fn planned_tokens(plan: &[Outcome]) -> usize {
+    plan.iter()
+        .map(|o| match o.status {
+            Status::Planned { prompt_chars } => prompt_chars / 4,
+            _ => 0,
+        })
+        .sum()
+}
+
+/// Dollars for one try of each planned function on `model`, when its price is known
+/// (about a thousand tokens come back per function).
+pub fn planned_dollars(plan: &[Outcome], model: &str) -> Option<f64> {
+    let (input, output) = model::price(model)?;
+    Some(planned_tokens(plan) as f64 / 1e6 * input + (plan.len() * 1000) as f64 / 1e6 * output)
+}
+
 /// Translates the functions left in `dir` (a folder `port` wrote from `scan`'s mod)
 /// with `model`, reporting each step to `progress`.
 pub fn translate(

@@ -84,6 +84,16 @@ impl Anthropic {
         })
     }
 
+    /// With an API key the caller holds (the app reads it from the system's
+    /// credential store).
+    pub fn with_key(key: &str, model: Option<&str>, effort: Option<&str>) -> Anthropic {
+        Anthropic {
+            model: model.unwrap_or(DEFAULT_MODEL).to_string(),
+            effort: effort.map(str::to_string),
+            auth: Auth::ApiKey(key.to_string()),
+        }
+    }
+
     /// Whether the server-side refusal fallback is available for this model.
     fn has_fallback(&self) -> bool {
         [
@@ -345,17 +355,7 @@ pub struct Ollama {
 
 impl Ollama {
     pub fn new(model: Option<&str>) -> Result<Ollama> {
-        let host = std::env::var("OLLAMA_HOST")
-            .ok()
-            .filter(|h| !h.is_empty())
-            .map(|h| {
-                if h.starts_with("http") {
-                    h
-                } else {
-                    format!("http://{h}")
-                }
-            })
-            .unwrap_or_else(|| "http://localhost:11434".into());
+        let host = ollama_host();
         let Some(model) = model else {
             let installed = ollama_models(&host)
                 .map(|m| {
@@ -373,6 +373,26 @@ impl Ollama {
             host,
         })
     }
+}
+
+/// The models installed in the Ollama on this computer (or at `OLLAMA_HOST`).
+pub fn local_models() -> Result<Vec<String>> {
+    ollama_models(&ollama_host())
+}
+
+/// Where Ollama answers: `OLLAMA_HOST`, else its default port here.
+fn ollama_host() -> String {
+    std::env::var("OLLAMA_HOST")
+        .ok()
+        .filter(|h| !h.is_empty())
+        .map(|h| {
+            if h.starts_with("http") {
+                h
+            } else {
+                format!("http://{h}")
+            }
+        })
+        .unwrap_or_else(|| "http://localhost:11434".into())
 }
 
 /// The models an Ollama server has.

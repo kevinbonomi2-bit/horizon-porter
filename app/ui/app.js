@@ -16,10 +16,10 @@ function icon(name) {
   return svg;
 }
 
-function button(label, onClick, iconName) {
+function button(label, onClick, iconName, kind) {
   const b = document.createElement("button");
   b.type = "button";
-  b.className = "btn";
+  b.className = kind ? `btn ${kind}` : "btn";
   if (iconName) b.append(icon(iconName));
   b.append(label);
   b.addEventListener("click", onClick);
@@ -155,11 +155,14 @@ async function port() {
         if (done.stubbed.length) parts.push(`${done.stubbed.length} to port into`);
         if (done.unwired.length) parts.push(`${done.unwired.length} to wire by hand`);
       }
-      notice("ok", `Wrote ${done.id}-horizon: ${parts.join(", ")}`, done.out, [
+      lastPort = done;
+      const actions = [
         button("Open folder", () => openPath(done.out), "folder"),
         button("Open PORTING.md", () => openPath(done.porting)),
-        button(done.native ? "Build and play" : "Play", () => build(done), "play"),
-      ]);
+      ];
+      if (done.native) actions.push(button("Translate with AI", () => estimate(done), "code"));
+      actions.push(button(done.native ? "Build and play" : "Play", () => build(done), "play"));
+      notice("ok", `Wrote ${done.id}-horizon: ${parts.join(", ")}`, done.out, actions);
     }
   } catch (e) {
     notice("bad", "Could not port the mod", String(e));
@@ -176,11 +179,196 @@ function count(n, one, many = `${one}s`) {
 }
 
 let building = false;
+let translating = false;
+let lastPort = null;
+
+/** "$0.19", "under a cent". */
+function dollars(n) {
+  if (n == null) return "";
+  return n < 0.01 ? "under a cent" : `about $${n.toFixed(2)}`;
+}
+
+/** What translating the ported mod would take, then a button to start. */
+async function estimate(ported) {
+  if (translating || building) return;
+  notice("busy", "Counting what is left to port", ported.out);
+  try {
+    const est = await invoke("translate_estimate");
+    if (!est.functions) {
+      notice("ok", "Nothing left to translate", "Every function is ported", [
+        button("Build and play", () => build(ported), "play", "primary"),
+      ]);
+      return;
+    }
+    const what = `${count(est.functions, "function")} to translate with ${est.model}`;
+    if (est.blocker) {
+      notice("bad", what, est.blocker, [button("Translation settings", openSettings, "settings")]);
+      return;
+    }
+    const cost = est.local ? "Free: it runs on this computer" : `${dollars(est.dollars)} for one try each (a fix costs a little more)`;
+    notice("ok", what, cost, [
+      button("Settings", openSettings, "settings"),
+      button("Translate", () => translate(ported), "code", "primary"),
+    ]);
+  } catch (e) {
+    notice("bad", "Could not count what is left", String(e));
+  }
+}
+
+/** Translates with the chosen model; progress arrives as "translate-progress". */
+async function translate(ported) {
+  if (translating || building) return;
+  translating = true;
+  $("port").disabled = true;
+  notice("busy", `Translating ${ported.id}`, "Starting");
+  try {
+    const r = await invoke("translate");
+    const done = r.ported + r.unchecked;
+    const parts = [];
+    if (r.ported) parts.push(`${r.ported} compiled and tested`);
+    if (r.unchecked) parts.push(`${r.unchecked} checked when you build`);
+    if (r.failed.length) parts.push(`${r.failed.length} left as they were`);
+    if (r.inputTokens) parts.push(`${r.inputTokens.toLocaleString()} tokens in, ${r.outputTokens.toLocaleString()} out`);
+    notice(r.failed.length && !done ? "bad" : "ok", `Ported ${count(done, "function")}`, parts.join(" · "), [
+      button("Open folder", () => openPath(ported.out), "folder"),
+      button(ported.native ? "Build and play" : "Play", () => build(ported), "play", "primary"),
+    ]);
+    if (r.failed.length) $("notice").querySelector(".notice-detail").title = r.failed.join("\n");
+  } catch (e) {
+    notice("bad", "Translation stopped", String(e), [button("Translation settings", openSettings, "settings")]);
+  } finally {
+    translating = false;
+    $("port").disabled = false;
+  }
+}
+
+listen("translate-progress", (e) => {
+  if (!translating) return;
+  const detail = $("notice").querySelector(".notice-detail");
+  if (detail) {
+    detail.textContent = e.payload;
+    detail.title = e.payload;
+  }
+});
+
+/* Translation settings. The key goes to Rust once, into the credential store, and
+   never comes back: the page only learns whether one is saved. */
+let settings = null;
+
+async function openSettings() {
+  await renderSettings();
+  const dialog = $("settings");
+  if (!dialog.open) dialog.showModal();
+}
+
+async function renderSettings() {
+  settings = await invoke("ai_settings");
+  const box = $("choices");
+  box.querySelectorAll(".choice").forEach((c) => c.remove());
+  const options = settings.models.map((m) => ({ provider: "anthropic", id: m.id, name: m.name, note: m.note }));
+  options.push({ provider: "ollama", id: "", name: "A model on this computer", note: "Free, and nothing leaves this computer. Needs Ollama (ollama.com) and a model pulled into it." });
+  for (const o of options) {
+    const label = document.createElement("label");
+    label.className = "choice";
+    const input = document.createElement("input");
+    input.type = "radio";
+    input.name = "who";
+    input.value = `${o.provider}:${o.id}`;
+    input.checked = settings.choice.provider === o.provider && (o.provider === "ollama" || settings.choice.model === o.id);
+    input.addEventListener("change", () => choose(o.provider, o.id));
+    const name = document.createElement("span");
+    name.className = "choice-name";
+    name.textContent = o.name;
+    const note = document.createElement("span");
+    note.className = "choice-note";
+    note.textContent = o.note;
+    label.append(input, name, note);
+    box.append(label);
+  }
+  const local = settings.choice.provider === "ollama";
+  $("local").hidden = !local;
+  $("key-box").hidden = local;
+  if (local) await renderLocal();
+  $("key-saved").hidden = !settings.hasKey;
+  $("key-entry").hidden = settings.hasKey;
+  $("key-saved-text").textContent = `Saved in ${settings.store}`;
+  $("key-note").textContent = settings.hasKey
+    ? "Sent only to api.anthropic.com when you translate. Remove it here at any time."
+    : `Create one at platform.claude.com, under API keys. It is kept in ${settings.store}, sent only to api.anthropic.com, and never shown again.${settings.envKey ? " ANTHROPIC_API_KEY is set, so that one is used until you save a key here." : ""}`;
+}
+
+async function renderLocal() {
+  const select = $("local-model");
+  select.replaceChildren();
+  try {
+    const models = await invoke("local_models");
+    for (const m of models) {
+      const opt = document.createElement("option");
+      opt.value = m;
+      opt.textContent = m;
+      opt.selected = settings.choice.provider === "ollama" && settings.choice.model === m;
+      select.append(opt);
+    }
+    select.disabled = !models.length;
+    $("local-note").textContent = models.length
+      ? "Larger coding models port better. Answers in runtime.rs are compiled and tested either way."
+      : "Ollama has no models yet. Pull one (ollama pull <model>), then check again.";
+    if (models.length && settings.choice.model !== select.value) await choose("ollama", select.value, true);
+  } catch {
+    select.disabled = true;
+    $("local-note").textContent = "Ollama isn't running on this computer. Install it from ollama.com, start it, then check again.";
+  }
+}
+
+async function choose(provider, model, quiet) {
+  try {
+    await invoke("save_choice", { choice: { provider, model: model || settings.choice.model } });
+    if (!quiet) await renderSettings();
+    else settings.choice = { provider, model };
+  } catch (e) {
+    $("local-note").textContent = String(e);
+  }
+}
+
+$("open-settings").addEventListener("click", openSettings);
+$("local-refresh").addEventListener("click", renderLocal);
+$("local-model").addEventListener("change", (e) => choose("ollama", e.target.value, true));
+$("key-save").addEventListener("click", async () => {
+  const input = $("key-input");
+  const key = input.value;
+  input.value = "";
+  if (!key.trim()) return;
+  try {
+    await invoke("save_key", { key });
+    await renderSettings();
+  } catch (e) {
+    $("key-note").textContent = String(e);
+  }
+});
+$("key-input").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    $("key-save").click();
+  }
+});
+$("key-forget").addEventListener("click", async () => {
+  try {
+    await invoke("forget_key");
+    await renderSettings();
+  } catch (e) {
+    $("key-note").textContent = String(e);
+  }
+});
+$("settings").addEventListener("close", () => {
+  $("key-input").value = "";
+  // Back to the estimate, which may have been waiting on a key.
+  if (lastPort && !translating && !building && $("notice").classList.contains("bad")) estimate(lastPort);
+});
 
 /** Builds the ported mod into Horizon with the player's launcher, after they
  * confirm they trust its code (asked in Rust, every time). */
 async function build(ported) {
-  if (building) return;
+  if (building || translating) return;
   building = true;
   $("port").disabled = true;
   notice("busy", ported.native ? `Building ${ported.id}` : `Starting ${ported.id}`,

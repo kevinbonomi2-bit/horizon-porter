@@ -147,6 +147,49 @@ body.hovering .drop-idle .i { color: var(--accent); transform: translateY(2px); 
   border: 1px solid var(--accent); font-weight: 500; }
 body.hovering .result:not([hidden]) .overlay { display: grid; }
 
+/* Translation settings: a sheet over the window. */
+.settings { flex: none; }
+.actions:not([hidden]) + .settings { margin-left: 0; }
+.actions[hidden] + .settings { margin-left: auto; }
+.sheet {
+  width: min(560px, calc(100vw - 32px)); max-height: calc(100vh - 64px); padding: 0;
+  border: 1px solid var(--line-strong); border-radius: 12px; background: var(--card); color: var(--fg);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.24);
+}
+.sheet::backdrop { background: color-mix(in srgb, var(--bg) 60%, transparent); }
+.sheet[open] { animation: enter 240ms var(--ease) both; }
+.sheet-inner { display: grid; gap: 20px; padding: 20px 24px 24px; margin: 0; }
+.sheet-head { display: flex; align-items: center; justify-content: space-between; margin: -4px -8px -8px 0; }
+h2 { font-size: 18px; line-height: 24px; font-weight: 500; margin: 0; }
+.sheet-lede { margin: 0; color: var(--fg-2); font-size: 13px; line-height: 20px; }
+
+.choices { border: 0; margin: 0; padding: 0; display: grid; gap: 8px; }
+.choices legend, .field-label { padding: 0; margin: 0 0 8px; font-size: 13px; font-weight: 500; color: var(--fg-2); }
+.choice {
+  display: grid; grid-template-columns: 16px 1fr; gap: 4px 12px; align-items: start;
+  padding: 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--raised); cursor: pointer;
+  transition: border-color 150ms var(--ease);
+}
+.choice:hover { border-color: var(--line-strong); }
+.choice:has(input:checked) { border-color: var(--fg-2); background: var(--card); }
+.choice input { margin: 2px 0 0; accent-color: var(--fg); }
+.choice-name { font-weight: 500; }
+.choice-note { grid-column: 2; color: var(--fg-3); font-size: 13px; }
+
+.field-row { display: flex; gap: 8px; }
+.field-row input, .field-row select {
+  flex: 1; min-width: 0; height: 32px; padding: 0 10px; border-radius: 8px;
+  border: 1px solid var(--line-strong); background: var(--sunk); color: var(--fg); font: inherit;
+}
+.field-row input { font-family: var(--mono); font-size: 13px; }
+.field-row input:focus-visible, .field-row select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.field-note { margin: 8px 0 0; color: var(--fg-3); font-size: 13px; line-height: 20px; }
+.field-note a { color: var(--fg-2); }
+.key-saved { display: flex; align-items: center; gap: 8px; padding: 8px 8px 8px 12px; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--raised); }
+.key-saved .i { color: var(--ok); }
+.key-saved span { flex: 1; min-width: 0; }
+
 @media (max-width: 860px) {
   .mod-facts { display: none; }
   .btn#save { width: 32px; padding: 0; justify-content: center; font-size: 0; gap: 0; }

@@ -19,6 +19,10 @@
   <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
   <symbol id="i-alert" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></symbol>
   <symbol id="i-play" viewBox="0 0 24 24"><path d="M6 3.5v17a1 1 0 0 0 1.5.86l14-8.5a1 1 0 0 0 0-1.72l-14-8.5A1 1 0 0 0 6 3.5z"/></symbol>
+  <symbol id="i-settings" viewBox="0 0 24 24"><path d="M10 5H3"/><path d="M12 19H3"/><path d="M14 3v4"/><path d="M16 17v4"/><path d="M21 12h-9"/><path d="M21 19h-5"/><path d="M21 5h-7"/><path d="M8 10v4"/><path d="M8 12H3"/></symbol>
+  <symbol id="i-code" viewBox="0 0 24 24"><path d="m18 16 4-4-4-4"/><path d="m6 8-4 4 4 4"/><path d="m14.5 4-5 16"/></symbol>
+  <symbol id="i-key" viewBox="0 0 24 24"><path d="m15.5 7.5 2.3 2.3a1 1 0 0 0 1.4 0l2.1-2.1a1 1 0 0 0 0-1.4L19 4"/><path d="m21 2-9.6 9.6"/><circle cx="7.5" cy="15.5" r="5.5"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></symbol>
 </svg>
 
 <header class="bar">
@@ -35,6 +39,7 @@
     <button class="btn" id="save" type="button"><svg class="i"><use href="#i-save"/></svg>Save report</button>
     <button class="btn primary" id="port" type="button">Port to Horizon<svg class="i"><use href="#i-arrow"/></svg></button>
   </div>
+  <button class="btn icon-only settings" id="open-settings" type="button" title="Translation settings" aria-label="Translation settings"><svg class="i"><use href="#i-settings"/></svg></button>
 </header>
 
 <main>
@@ -71,5 +76,43 @@
     <div class="overlay" id="overlay" aria-hidden="true"><p>Release to read this mod instead</p></div>
   </section>
 </main>
+
+<dialog class="sheet" id="settings" aria-labelledby="settings-title">
+  <form method="dialog" class="sheet-inner" id="settings-form">
+    <div class="sheet-head">
+      <h2 id="settings-title">Translation</h2>
+      <button class="btn icon-only" value="close" aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button>
+    </div>
+    <p class="sheet-lede">Porting leaves each function's logic to port. A model can port them for you: each answer is compiled and tested before it stays, and each says so above it, for you to review.</p>
+
+    <fieldset class="choices" id="choices">
+      <legend>Who translates</legend>
+      <!-- Filled from ai_settings. -->
+    </fieldset>
+
+    <div class="local" id="local" hidden>
+      <label class="field-label" for="local-model">Local model</label>
+      <div class="field-row">
+        <select id="local-model"></select>
+        <button class="btn" type="button" id="local-refresh">Check again</button>
+      </div>
+      <p class="field-note" id="local-note"></p>
+    </div>
+
+    <div class="key" id="key-box">
+      <p class="field-label">Claude API key</p>
+      <div class="key-saved" id="key-saved" hidden>
+        <svg class="i"><use href="#i-key"/></svg>
+        <span id="key-saved-text"></span>
+        <button class="btn" type="button" id="key-forget">Remove</button>
+      </div>
+      <div class="field-row" id="key-entry">
+        <input type="password" id="key-input" autocomplete="off" spellcheck="false" placeholder="sk-ant-..." aria-label="Claude API key">
+        <button class="btn light" type="button" id="key-save">Save key</button>
+      </div>
+      <p class="field-note" id="key-note"></p>
+    </div>
+  </form>
+</dialog>
 </body>
 </html>

@@ -15,10 +15,20 @@ Rust rewrite of Minecraft, as native Horizon mods.
 Drop a mod's source folder or `.jar` on the window. Horizon Porter reads it and shows
 the report: every Mixin member as a slot colored by its verdict, what the mod builds
 on, its registrations and resources. **Port to Horizon** writes the Horizon mod into a
-folder you choose, then opens it or its `PORTING.md` for you. **Build and play**
-compiles it into Horizon with your Horizon launcher, into an instance of its own, and
-**Play** starts it. **Save report** keeps the report as a page to share. Everything
-runs on your computer; nothing is uploaded.
+folder you choose, then opens it or its `PORTING.md` for you. **Translate with AI**
+ports the functions it left, showing the cost before it starts and each function as it
+goes. **Build and play** compiles it into Horizon with your Horizon launcher, into an
+instance of its own, and **Play** starts it. **Save report** keeps the report as a page
+to share. Reading, porting and building run on your computer; only translating with
+Claude sends anything out (each function's code, to api.anthropic.com).
+
+**Translation settings** (the sliders at the top right) choose who translates: Claude
+Haiku 5.5 (the default, about $0.20 for a mod the size of Create), Sonnet 5.5, Opus 5.5,
+or a model on your own computer through [Ollama](https://ollama.com), which is free
+and sends nothing anywhere. Your Claude API key goes in the system's credential store
+(Windows Credential Manager, the macOS Keychain, or the Secret Service on Linux), never
+in a file; the app's page never sees it again once saved, and it is sent only to
+api.anthropic.com. `ANTHROPIC_API_KEY` works too.
 
 Building needs the [Horizon launcher](https://playhorizon.dev) installed and signed
 in. Native mods are not sandboxed, so Horizon Porter asks you to confirm you trust the
