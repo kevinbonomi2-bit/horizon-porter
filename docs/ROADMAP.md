@@ -91,6 +91,15 @@ scenarios we check.
 - **Desktop app (2026-11-04):** Horizon Porter (`app/`, Tauri) wraps scan, report and
   port in a drag-and-drop window, with installers for Windows, macOS and Linux in each
   release. Designed with the unslop and oil-ui skills (see the README).
+- **For players (v0.6.0, 2026-11-05):** a mod's jar is enough: it is decompiled with
+  Vineflower (jar-in-jar modules included) and ported like source. The app has one
+  button, **Make it work in Horizon**: one summary (what carries over, who translates
+  its code and the cost, which instance it goes in) and one yes, then it ports,
+  translates, adds the mod to the player's own instance beside their other mods, and
+  builds it. It says plainly when code won't be translated, and offers Translate now
+  after. The Claude API key is kept in the system's credential store. `install` does
+  the same from the command line. **Tested live** in the app: Demo Machines added to an
+  instance and played; C2ME's jar (21 modules, 513 classes) decompiled and ported.
 - **Also found:** Horizon now has 427 versioned hook points (`native-hooks.json`) and
   159 helpers, far beyond the documented client set: blocks, block entities (with
   drawing helpers), entities, loot, players, screens and more. That makes M2 (content

@@ -1656,7 +1656,7 @@ dependencies = [
 
 [[package]]
 name = "horizon-porter-app"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "keyring",
@@ -2934,7 +2934,7 @@ dependencies = [
 
 [[package]]
 name = "porter-cli"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -2949,7 +2949,7 @@ dependencies = [
 
 [[package]]
 name = "porter-content"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "porter-model",
  "serde_json",
@@ -2957,7 +2957,7 @@ dependencies = [
 
 [[package]]
 name = "porter-java"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "porter-map",
@@ -2974,7 +2974,7 @@ dependencies = [
 
 [[package]]
 name = "porter-map"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "porter-model",
  "serde",
@@ -2983,14 +2983,14 @@ dependencies = [
 
 [[package]]
 name = "porter-mixin"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "porter-model",
 ]
 
 [[package]]
 name = "porter-model"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -2998,7 +2998,7 @@ dependencies = [
 
 [[package]]
 name = "porter-report"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "porter-java",
  "porter-model",
@@ -3006,7 +3006,7 @@ dependencies = [
 
 [[package]]
 name = "porter-translate"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "porter-content",
@@ -3022,7 +3022,7 @@ dependencies = [
 
 [[package]]
 name = "porter-verify"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "serde",
