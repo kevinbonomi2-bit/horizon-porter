@@ -61,6 +61,17 @@ scenarios we check.
   passes its tests. **Tested live:** the demo mod's crank, its tick filled in, built
   with the launcher and played in Horizon: the block places with its properties, and
   `/data get block` shows its saved `Speed` rising each tick.
+- **M3, done (2026-11-05):** Mixins map to Horizon hook points rather than to
+  Horizon's internals. `tools/horizon_hooks.py` reads all 386 hooks from Horizon's
+  source (signature, contract, version, and the vanilla methods and events each doc
+  names) into a table the porter ships. `port` gives every hook a mod needs a helper
+  with Horizon's own bindings (all of them compile against a mock of the hook API in
+  CI), maps Mixin targets and NeoForge events to hooks (by citation, a table of client
+  targets and by name), sets the bundle's hook version from what it uses, and points
+  the remaining Mixins at the Horizon functions whose comments name their target.
+  On real mods: Botania's Mixins reach 22 hooks and 25 Horizon functions, Create's 3
+  and 15; most of the rest target code Horizon doesn't port by name yet (Sodium's
+  renderer Mixins above all). TESTED_LIVE
 - **Desktop app (2026-11-04):** Horizon Porter (`app/`, Tauri) wraps scan, report and
   port in a drag-and-drop window, with installers for Windows, macOS and Linux in each
   release. Designed with the unslop and oil-ui skills (see the README).

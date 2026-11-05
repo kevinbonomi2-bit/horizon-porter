@@ -61,7 +61,7 @@ mod source (Gradle project)
 | `porter-cli` | The `horizon-porter` command: `scan`, `report`, `port`, `check`, `status`. |
 | `porter-model` | Shared types: the project model, symbols, verdicts, the state file. |
 | `porter-java` | Reads a mod: Java source (tree-sitter-java), `fabric.mod.json`, `neoforge.mods.toml` / `mods.toml`, `*.mixins.json`, assets and data. Reads class files for libraries without source. |
-| `porter-map` | The mapping database: Minecraft Java symbols (Mojang names, 26.3) → Horizon Rust paths, built from Horizon's port ledger (`tools/port_ledger.py`, `tools/port_map/`); loader API → modkit; Sponge Mixin features → horizon-mixins kinds. |
+| `porter-map` | The mapping database: Horizon's hook table (`data/horizon-hooks.json`, made by `tools/horizon_hooks.py` from Horizon's source: each hook's signature, contract, version and the vanilla methods and events its doc names), Mixin targets and loader events → hooks, and a lookup of the Horizon functions whose comments name a vanilla method (a light port ledger over the launcher's Horizon checkout). |
 | `porter-mixin` | Turns `@Mixin` classes into `[[injection]]` entries and helper files. |
 | `porter-content` | Blocks, items, data and assets → a content mod (`content/`, packed as `.hmod`): vanilla templates, properties and declared state properties read from the Java code and blockstate files. |
 | `porter-translate` | Java classes → Rust modules. A rule-based pass for structure and API calls, then an AI pass per method with the symbol map, modkit docs and compiler errors as context. The AI provider is pluggable. |

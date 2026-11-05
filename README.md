@@ -134,6 +134,25 @@ template and why, and anything left out.
 A mod that is only content (no client hooks, no block entities) gets `content/` alone:
 nothing to build or trust.
 
+### Porting Mixins and events
+
+Horizon has hundreds of hook points (the mod's `native_*` functions), and each one's
+doc names the vanilla method or loader event it stands for. horizon-porter ships a
+table of them, read from Horizon's source, so `port`:
+
+- **maps each Mixin to the hook that does its job:** `Gui.render` becomes the HUD,
+  `GameRenderer.getFov` becomes `native_compute_fov`, `Player.canEat` becomes
+  `native_can_eat`, and NeoForge events (`LivingEvent.LivingJumpEvent`) map the same
+  way. Hook points hold across Horizon versions; a Mixin into Horizon's own functions
+  would pin the mod to one Horizon commit.
+- **gives every hook it needs a helper** with Horizon's own parameters, the Java code
+  to port named at the top, and the right hook version in `horizon-native.json`.
+- **points the other Mixins at the Horizon functions** whose comments name their
+  target, read from the Horizon source your launcher keeps (or `HORIZON_SOURCE`), and
+  says so when Horizon doesn't port that method yet.
+
+`PORTING.md`'s Mixins table says where each Mixin went.
+
 ### Building, playing and sharing it
 
 ```
@@ -185,11 +204,12 @@ Installers come from `npx @tauri-apps/cli@2 build` in `app/`.
 ## Layout
 
 ```
+tools/horizon_hooks.py   regenerates the hook table from a Horizon checkout
 crates/porter-cli        the horizon-porter command
 crates/porter-report     reports: terminal text and the HTML page
 crates/porter-model      shared types
 crates/porter-java       reads Java mods
-crates/porter-map        Java → Horizon symbol and Mixin mappings
+crates/porter-map        Horizon's hook table, Mixin and event mappings, the Horizon port lookup
 crates/porter-mixin      Mixin translation
 crates/porter-content    blocks, items, data and assets → a content mod (.hmod)
 crates/porter-translate  Java → Rust: the native mod, block entities, PORTING.md
@@ -213,3 +233,7 @@ screens.
 
 MIT. Port only mods whose licence allows it. horizon-porter is planned to read each
 mod's licence and warn you when it doesn't.
+
+`crates/porter-map/data/horizon-hooks.json` is derived from
+[Horizon](https://github.com/horizon-rust/horizon)'s source (MIT, Copyright (c) 2026
+Ludovic Marie and the Horizon contributors).
