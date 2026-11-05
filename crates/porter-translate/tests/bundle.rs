@@ -212,3 +212,13 @@ fn refuses_to_overwrite() {
     assert!(dir.join("mixins/compasshud/runtime.rs").exists());
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// A port names the Horizon commit its hook table was read from, so every hook it
+/// uses exists there.
+#[test]
+fn names_the_horizon_its_hooks_came_from() {
+    assert_eq!(
+        bundle::HORIZON_REVISION,
+        porter_map::hooks::catalog().horizon
+    );
+}
