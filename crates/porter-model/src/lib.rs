@@ -174,17 +174,18 @@ pub enum Side {
 }
 
 /// What was scanned.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InputKind {
     /// A source tree: the mod developer's Gradle project.
+    #[default]
     SourceTree,
     /// A built jar. Class-level facts only; Mixin details need the source.
     Jar,
 }
 
 /// Everything a scan found in one mod.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ModScan {
     /// The path that was scanned.
     pub input: String,

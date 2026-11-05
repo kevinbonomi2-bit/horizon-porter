@@ -4,6 +4,7 @@
 use std::collections::BTreeMap;
 use std::fmt::Write;
 
+use porter_map::reach::Portability;
 use porter_model::{InputKind, ModScan, Side, SymbolOrigin, Verdict};
 
 use crate::text::{
@@ -42,6 +43,7 @@ fn render(scan: &ModScan, embedded: bool) -> String {
     if !embedded {
         header(scan, &mut b);
     }
+    outlook(scan, &mut b);
     cards(scan, &mut b);
     mixins(scan, &mut b);
     builds_on(scan, &mut b);
@@ -63,8 +65,8 @@ fn render(scan: &ModScan, embedded: bool) -> String {
             b,
             "<footer>\n<p>Made with <a href=\"https://github.com/kevinbonomi2-bit/horizon-porter\">horizon-porter</a> {}. \
              A scan reads the mod; it does not change or port it. A Mixin verdict is about the \
-             injection kind horizon-mixins supports; whether each Java method it targets has a \
-             Rust counterpart in Horizon is checked later.</p>\n</footer>\n</main>\n</body>\n</html>\n",
+             injection kind horizon-mixins supports; the verdict at the top is about what the \
+             Mixins change, and whether Horizon can do it.</p>\n</footer>\n</main>\n</body>\n</html>\n",
             env!("CARGO_PKG_VERSION")
         );
     }
@@ -105,6 +107,46 @@ fn header(scan: &ModScan, b: &mut String) {
         );
     }
     b.push_str("</header>\n");
+}
+
+/// Whether the mod can be ported today, before the numbers: a Mixin can hook in the
+/// same way and still change something Horizon can't (how the game draws).
+fn outlook(scan: &ModScan, b: &mut String) {
+    let o = porter_map::reach::outlook(scan);
+    if o.total() == 0 {
+        return;
+    }
+    let (class, title) = match o.portability {
+        Portability::Likely => ("v-ok", "Its Mixins reach Horizon"),
+        Portability::Partly => ("v-partial", "Partly portable"),
+        Portability::NotYet => ("v-blocked", "Not portable yet"),
+    };
+    let summary = o
+        .summary
+        .strip_prefix("Not portable yet. ")
+        .or_else(|| o.summary.strip_prefix("Partly portable. "))
+        .unwrap_or(&o.summary);
+    let _ = write!(
+        b,
+        "<section class=\"outlook {class}\">\n<h2>{}</h2>\n<p>{}</p>\n<ul class=\"legend\">",
+        esc(title),
+        esc(summary)
+    );
+    for (count, label, class) in [
+        (o.hook, "through a Horizon hook", "v-ok"),
+        (o.horizon, "through Horizon's own code", "v-ok"),
+        (o.screen, "redraw screens", "v-blocked"),
+        (o.rendering, "change how the game draws", "v-blocked"),
+    ] {
+        if count > 0 {
+            let _ = write!(
+                b,
+                "<li><span class=\"dot {class}\"></span><strong>{}</strong> {label}</li>",
+                n(count)
+            );
+        }
+    }
+    b.push_str("</ul>\n</section>\n");
 }
 
 fn cards(scan: &ModScan, b: &mut String) {
@@ -218,9 +260,11 @@ fn mixins(scan: &ModScan, b: &mut String) {
         }
         b.push_str("</ul>\n");
         b.push_str(
-            "<p class=\"muted\">Supported: horizon-mixins has the matching injection kind. \
-             Partial: it can be done with limits. Blocked: horizon-mixins cannot express it yet. \
-             Not needed: Rust code reaches the target directly.</p>\n",
+            "<p class=\"muted\">How each Mixin hooks in. Supported: horizon-mixins has the \
+             matching injection kind. Partial: it can be done with limits. Blocked: \
+             horizon-mixins cannot express it yet. Not needed: Rust code reaches the target \
+             directly. A supported Mixin can still change something Horizon can't do yet, such \
+             as how the game draws: the verdict at the top says so.</p>\n",
         );
     }
 
@@ -626,6 +670,9 @@ details { margin: 8px 0; }
 summary { cursor: pointer; color: var(--fg-2); }
 summary:hover { color: var(--fg); }
 summary:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.outlook { border-color: var(--v); border-left-width: 4px; }
+.outlook h2 { color: var(--v); }
+.outlook p { margin: 8px 0 12px; line-height: 22px; }
 .warnings li { margin: 4px 0; overflow-wrap: anywhere; color: var(--fg-2); }
 footer { color: var(--fg-3); font-size: 13px; line-height: 20px; margin-top: 24px; }
 @media (max-width: 760px) {

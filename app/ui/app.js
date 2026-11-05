@@ -14,6 +14,7 @@ let busy = false; // reading a mod
 let running = null; // "port" | "translate" | "add" | "build" while making it work
 let modName = "";
 let isJar = false;
+let portability = { kind: "likely", text: "" }; // what the report's verdict said
 
 function icon(name) {
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -162,6 +163,7 @@ async function read(path) {
     // "Demo Machines 0.3.0 (demo)" → "Demo Machines".
     modName = view.title.replace(/\s*\([^)]*\)\s*$/, "").replace(/\s+v?\d[\w.+-]*$/, "") || view.title;
     isJar = view.isJar;
+    portability = { kind: view.portability, text: view.portabilityText };
     const go = $("go");
     go.disabled = false;
     go.title = isJar ? "The jar is decompiled into source first (once), then ported" : "";
@@ -251,8 +253,14 @@ function renderSummary() {
   row.hidden = !ported.native;
   code.className = "";
   let blocked = false;
+  // A mod that can't work in Horizon yet isn't worth paying to translate.
+  const notYet = portability.kind === "notYet";
   if (ported.native) {
-    if (!estimate || !estimate.functions) {
+    if (notYet) {
+      code.textContent = "Not translated: it can't work in Horizon yet";
+      code.className = "warn";
+      change.hidden = true;
+    } else if (!estimate || !estimate.functions) {
       code.textContent = "Already translated";
       change.hidden = true;
     } else if (estimate.blocker) {
@@ -280,20 +288,36 @@ function renderSummary() {
     select.append(opt);
   }
 
+  // The report's verdict: a mod whose Mixins mostly change how the game draws
+  // builds, but doesn't do what it's for.
+  const out = portability.kind !== "likely";
+  $("go-reach").hidden = !out;
+  $("go-reach-title").textContent =
+    portability.kind === "notYet" ? `${modName} can't be ported yet` : `Parts of ${modName} won't carry over`;
+  $("go-reach-text").textContent = portability.text.replace(/^(Not portable yet|Partly portable)\. /, "");
+
   $("go-trust").hidden = !ported.native;
   $("go-warn").hidden = !blocked;
   const reason = blocked ? estimate.blocker.charAt(0).toLowerCase() + estimate.blocker.slice(1) : "";
   $("go-warn-title").textContent = blocked ? `Its code won't be translated: ${reason}.` : "";
   $("go-skip").hidden = !blocked;
   const run = $("go-run");
-  run.textContent = blocked ? "Set up translation" : ported.native ? "I trust it: make it work" : "Add to Horizon";
+  run.textContent = notYet
+    ? "Add it anyway"
+    : blocked
+      ? "Set up translation"
+      : ported.native
+        ? "I trust it: make it work"
+        : "Add to Horizon";
   run.disabled = false;
 }
 
-/** The summary's main button: set up translation when it can't run, else go. */
+/** The summary's main button: set up translation when it can't run, else go. A mod
+ * that can't work in Horizon yet is added untranslated, if the player insists. */
 function onRun() {
   const { estimate } = plan;
-  if (estimate && estimate.functions && estimate.blocker) openSettings();
+  if (portability.kind === "notYet") run(true);
+  else if (estimate && estimate.functions && estimate.blocker) openSettings();
   else run(false);
 }
 

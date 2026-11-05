@@ -177,6 +177,9 @@ h2 { font-size: 18px; line-height: 24px; font-weight: 500; margin: 0; }
   border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent);
   background: color-mix(in srgb, var(--warn) 8%, var(--card)); }
 .callout .i { color: var(--warn); margin-top: 2px; }
+.callout.bad { border-color: color-mix(in srgb, var(--bad) 40%, transparent);
+  background: color-mix(in srgb, var(--bad) 8%, var(--card)); }
+.callout.bad .i { color: var(--bad); }
 .callout p { margin: 0; }
 .callout-title { font-weight: 500; }
 .callout-text { color: var(--fg-2); font-size: 13px; line-height: 20px; margin-top: 4px !important; }

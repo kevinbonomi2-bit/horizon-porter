@@ -7,6 +7,7 @@
 
 pub mod hooks;
 pub mod ledger;
+pub mod reach;
 
 /// One Java API, and the Horizon hooks that take its place.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

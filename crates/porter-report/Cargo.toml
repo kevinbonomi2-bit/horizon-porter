@@ -8,4 +8,5 @@ publish = false
 
 [dependencies]
 porter-java = { path = "../porter-java" }
+porter-map = { path = "../porter-map" }
 porter-model = { path = "../porter-model" }

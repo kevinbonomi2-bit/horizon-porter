@@ -43,6 +43,10 @@ pub fn summary(scan: &ModScan) -> String {
             .collect::<Vec<_>>()
             .join(" · ");
         row(&mut out, "", &text);
+        let outlook = porter_map::reach::outlook(scan);
+        if outlook.total() > 0 {
+            row(&mut out, "Portable?", &outlook.summary);
+        }
     }
 
     if scan.input_kind == InputKind::SourceTree {

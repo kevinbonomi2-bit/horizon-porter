@@ -52,6 +52,10 @@ struct ScanView {
     is_jar: bool,
     /// The report page, without its own header (the app shows that).
     report: String,
+    /// Whether what its Mixins change is in Horizon's reach: "likely", "partly" or
+    /// "notYet", with a sentence for the player.
+    portability: &'static str,
+    portability_text: String,
 }
 
 #[derive(Serialize)]
@@ -83,7 +87,14 @@ async fn scan(path: String, current: State<'_, Current>) -> Result<ScanView, Str
         .map_err(message)?
         .map_err(|e| format!("{e:#}"))?;
     let (title, facts) = porter_report::heading(&scan);
+    let outlook = porter_map::reach::outlook(&scan);
     let view = ScanView {
+        portability: match outlook.portability {
+            porter_map::reach::Portability::Likely => "likely",
+            porter_map::reach::Portability::Partly => "partly",
+            porter_map::reach::Portability::NotYet => "notYet",
+        },
+        portability_text: outlook.summary,
         title,
         facts,
         input: scan.input.clone(),
