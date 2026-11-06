@@ -26,6 +26,8 @@ pub struct Block {
     pub properties: serde_json::Map<String, serde_json::Value>,
     /// The Java block class, fully qualified, when found.
     pub class: Option<String>,
+    /// Whether it has an item (`"item": false` in its file when not).
+    pub item: bool,
 }
 
 /// An item the content mod adds (block items come with their blocks).
@@ -199,6 +201,11 @@ pub fn generate_with(
             })
             .collect()
     };
+    // A mod for 1.21.4 and later draws each of its items by `assets/<ns>/items/`.
+    let draws_items = content
+        .copies
+        .keys()
+        .any(|k| k.starts_with(&format!("assets/{ns}/items/")));
     let resource_blocks = from_resources("blockstates", "block");
     let resource_items: Vec<Registration> = from_resources("items", "item")
         .into_iter()
@@ -313,7 +320,18 @@ pub fn generate_with(
         // A template without an item (a potted plant, a vine's body, a portal) gives
         // the block none: Horizon refuses a block item copying no item, and one
         // refused block keeps every content mod from loading.
-        if vanilla_block(&template).is_some_and(|b| !b.item) {
+        // Nor does a block Java gives no item: one the mod draws no item for (a
+        // wall sign, which its sign item places; a potted plant; a vine's strand),
+        // or a liquid's, which only a bucket places.
+        let liquid = reg.creates.as_deref() == Some("LiquidBlock")
+            || extends(scan, class.as_deref(), "LiquidBlock");
+        let item = !liquid
+            && vanilla_block(&template).is_none_or(|b| b.item)
+            && (!draws_items
+                || content
+                    .copies
+                    .contains_key(&format!("assets/{ns}/items/{block_name}.json")));
+        if !item {
             json["item"] = false.into();
         }
         if let Some(thickness) = connecting {
@@ -342,6 +360,7 @@ pub fn generate_with(
             template_from,
             properties,
             class,
+            item,
         });
     }
     // What each pipe joins: the mod's blocks that share its most particular
@@ -573,7 +592,7 @@ fn creative_tabs(scan: &ModScan, ns: &str, name: &str, content: &mut Content) {
     let mut all: Vec<&str> = content
         .blocks
         .iter()
-        .filter(|b| vanilla_block(&b.template).is_none_or(|v| v.item))
+        .filter(|b| b.item)
         .map(|b| b.name.as_str())
         .collect();
     all.extend(content.items.iter().map(|i| i.name.as_str()));
@@ -631,7 +650,19 @@ fn creative_tabs(scan: &ModScan, ns: &str, name: &str, content: &mut Content) {
             .drain(..)
             .next()
             .unwrap_or_else(|| (ns.to_string(), name.to_string(), String::new(), Vec::new()));
-        first.3 = all.iter().map(|x| format!("{ns}:{x}")).collect();
+        // Those the mod names: one it never names (a potted plant's item) is one
+        // its own tab leaves out.
+        let named = |x: &str| {
+            lang.as_object().is_none_or(|l| l.is_empty())
+                || ["block", "item"]
+                    .iter()
+                    .any(|k| lang.get(format!("{k}.{ns}.{x}")).is_some())
+        };
+        first.3 = all
+            .iter()
+            .filter(|x| named(x))
+            .map(|x| format!("{ns}:{x}"))
+            .collect();
         tabs = vec![first];
     }
     let mut written = BTreeSet::new();
@@ -1099,6 +1130,7 @@ fn superclass_template(simple: &str) -> Option<&'static str> {
                 ("LeafLitterBlock", "minecraft:leaf_litter"),
                 ("WebBlock", "minecraft:cobweb"),
                 ("WaterlilyBlock", "minecraft:lily_pad"),
+                ("FlowerPotBlock", "minecraft:flower_pot"),
                 ("HugeMushroomBlock", "minecraft:brown_mushroom_block"),
                 ("AmethystClusterBlock", "minecraft:amethyst_cluster"),
                 // Not the vines themselves: see `growing_plant_stand_in`.
@@ -1140,7 +1172,30 @@ fn superclass_template(simple: &str) -> Option<&'static str> {
 }
 
 /// A block known only by its id: a guess from its name's ending.
+/// Whether `class` (fully qualified) extends the Minecraft class `simple`.
+fn extends(scan: &ModScan, class: Option<&str>, simple: &str) -> bool {
+    let mut name = class.map(str::to_string);
+    for _ in 0..16 {
+        let Some(n) = name.take() else {
+            return false;
+        };
+        if n.rsplit('.').next() == Some(simple) {
+            return true;
+        }
+        name = scan
+            .classes
+            .iter()
+            .find(|c| c.name == n)
+            .and_then(|c| c.superclass.clone());
+    }
+    false
+}
+
 fn name_template(name: &str) -> Option<&'static str> {
+    // A flower pot holding the mod's plant (`potted_fir_sapling`), not the plant.
+    if name.starts_with("potted_") {
+        return Some("minecraft:flower_pot");
+    }
     const ENDINGS: &[(&str, &str)] = &[
         ("_leaves", "minecraft:oak_leaves"),
         ("_sapling", "minecraft:oak_sapling"),
@@ -1530,6 +1585,11 @@ mod tests {
         // Horizon refuses a block item copying a block without one.
         assert!(!vanilla_block("minecraft:weeping_vines_plant").unwrap().item);
         assert!(!vanilla_block("minecraft:potted_poppy").unwrap().item);
+        // A potted plant is a flower pot, whatever plant it holds.
+        assert_eq!(
+            name_template("potted_fir_sapling"),
+            Some("minecraft:flower_pot")
+        );
         assert!(vanilla_block("minecraft:wool").is_none());
         // A world won't open with a block copying a growing plant.
         for vines in [
