@@ -882,7 +882,38 @@ fn vanilla_constant(text: &str, prefix: &str) -> Option<String> {
             .take_while(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || *c == '_')
             .collect();
         if before_ok && !name.is_empty() {
-            return Some(name.to_ascii_lowercase());
+            let name = name.to_ascii_lowercase();
+            // A colored set (26.x): `Blocks.CARPET.white()` is `white_carpet`.
+            let after = &text[i + prefix.len() + name.len()..];
+            let color: String = after
+                .strip_prefix('.')
+                .map(|r| r.chars().take_while(|c| c.is_ascii_alphabetic()).collect())
+                .unwrap_or_default();
+            const COLORS: &[&str] = &[
+                "white",
+                "orange",
+                "magenta",
+                "lightBlue",
+                "yellow",
+                "lime",
+                "pink",
+                "gray",
+                "lightGray",
+                "cyan",
+                "purple",
+                "blue",
+                "brown",
+                "green",
+                "red",
+                "black",
+            ];
+            if COLORS.contains(&color.as_str()) && after[1 + color.len()..].starts_with("()") {
+                let snake = color
+                    .replace("lightBlue", "light_blue")
+                    .replace("lightGray", "light_gray");
+                return Some(format!("{snake}_{name}"));
+            }
+            return Some(name);
         }
         from = i + prefix.len();
     }
@@ -990,7 +1021,12 @@ fn item_json(args: &str) -> serde_json::Value {
         "minecraft:iron_shovel".into()
     } else if args.contains(".hoe(") {
         "minecraft:iron_hoe".into()
-    } else if args.contains(".food(") {
+    } else if args.contains(".food(")
+        || args.contains("foodItem(")
+        || args.contains("FoodValues.")
+        || args.contains("Foods.")
+    {
+        // Food, however the mod builds it (Farmer's Delight's `foodItem(FoodValues.CABBAGE)`).
         "minecraft:bread".into()
     } else {
         "minecraft:iron_ingot".into()

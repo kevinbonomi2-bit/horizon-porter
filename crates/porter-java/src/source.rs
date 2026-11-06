@@ -602,7 +602,13 @@ fn call_at(
     let maybe_helper = literal_args.iter().any(Option::is_some)
         || args
             .iter()
-            .any(|a| a.kind() == "identifier" && params.iter().any(|p| *p == text(*a)));
+            .any(|a| a.kind() == "identifier" && params.iter().any(|p| *p == text(*a)))
+        // A call that makes something, with its id in a constant:
+        // `regBlock(ModBlockItemIds.CABBAGE_CRATE, Block::new, ...)`.
+        || (args.len() >= 2
+            && args.iter().any(|a| {
+                matches!(a.kind(), "method_reference" | "lambda_expression" | "object_creation_expression")
+            }));
     if !is_register && !maybe_helper {
         return None;
     }

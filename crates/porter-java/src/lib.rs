@@ -880,17 +880,66 @@ fn registrations(parsed: &[(String, ParsedFile)]) -> Vec<Registration> {
             None
         }
     };
+    // Ids kept in constants (`CABBAGE_CRATE = id("cabbage_crate")`): a static
+    // field's initializer's last literal that reads as an id, by `Class.FIELD`
+    // and, when no other class has a field of that name, by `FIELD`.
+    let mut constants: HashMap<String, String> = HashMap::new();
+    let mut bare: HashMap<String, Option<String>> = HashMap::new();
+    for (_, file) in parsed {
+        for t in &file.types {
+            for m in t.members.iter().filter(|m| !m.is_method && m.is_static) {
+                let Some(init) = m.init.as_deref() else {
+                    continue;
+                };
+                let Some(id) = init
+                    .split('"')
+                    .skip(1)
+                    .step_by(2)
+                    .filter(|l| valid_id(l))
+                    .last()
+                else {
+                    continue;
+                };
+                constants.insert(format!("{}.{}", t.name, m.name), id.to_string());
+                bare.entry(m.name.clone())
+                    .and_modify(|v| {
+                        if v.as_deref() != Some(id) {
+                            *v = None;
+                        }
+                    })
+                    .or_insert_with(|| Some(id.to_string()));
+            }
+        }
+    }
+    let constant_id = |arg: &str| -> Option<String> {
+        let a = arg.trim();
+        if a.is_empty()
+            || !a
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.')
+        {
+            return None;
+        }
+        let parts: Vec<&str> = a.split('.').collect();
+        let key = parts[parts.len().saturating_sub(2)..].join(".");
+        constants
+            .get(&key)
+            .cloned()
+            .or_else(|| bare.get(*parts.last()?).cloned().flatten())
+    };
     let mut inferred = Vec::new();
     for (_, file) in parsed {
         for call in &file.calls {
             // The id: its first literal that reads as one, wherever it is
-            // (`register(func, "blood", p -> new BloodBlock(...), props)`).
+            // (`register(func, "blood", p -> new BloodBlock(...), props)`), else a
+            // constant holding one (`regBlock(ModBlockItemIds.CABBAGE_CRATE, ...)`).
             let Some(id) = call
                 .literal_args
                 .iter()
                 .flatten()
                 .find(|a| valid_id(a))
                 .cloned()
+                .or_else(|| call.args.iter().find_map(|a| constant_id(a)))
             else {
                 continue;
             };
@@ -899,7 +948,7 @@ fn registrations(parsed: &[(String, ParsedFile)]) -> Vec<Registration> {
             let own = call.object.is_empty()
                 && file.methods.iter().any(|m| m.name == call.method)
                 && !helpers.contains_key(&(call.enclosing.clone(), call.method.clone()));
-            let registrar = !call.object.is_empty() && call.method.starts_with("register");
+            let registrar = !call.object.is_empty() && call.method.starts_with("reg");
             if !own && !registrar {
                 continue;
             }
@@ -938,6 +987,22 @@ fn registrations(parsed: &[(String, ParsedFile)]) -> Vec<Registration> {
         }
     }
     out.extend(inferred);
+    // A helper's call with its id in a constant (`regBlock(ModBlockItemIds.STOVE,
+    // StoveBlock::new, ...)`): the constant's id.
+    for r in out
+        .iter_mut()
+        .filter(|r| r.id.is_none() && !r.args.is_empty())
+    {
+        r.id = machines::split_top(&r.args)
+            .iter()
+            .find_map(|a| constant_id(a));
+    }
+    // The same id twice in a registry (found two ways): the first.
+    let mut seen_ids: BTreeSet<(String, String)> = BTreeSet::new();
+    out.retain(|r| match &r.id {
+        Some(id) => seen_ids.insert((r.registry.clone(), id.clone())),
+        None => true,
+    });
 
     // A helper nobody calls with an id still registers something.
     let mut unused: Vec<_> = helpers
