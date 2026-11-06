@@ -5,7 +5,7 @@
 //!
 //! It reads the source text: the shapes mods write these in are few and regular.
 
-use porter_model::{MenuInfo, MenuSlot, RendererInfo, ScreenInfo, StorageInfo};
+use porter_model::{BlockShapeInfo, MenuInfo, MenuSlot, RendererInfo, ScreenInfo, StorageInfo};
 
 /// The menu a class's source declares (`class` is its fully qualified name).
 pub fn menu(class: &str, source: &str) -> MenuInfo {
@@ -147,6 +147,34 @@ fn is_result(ty: &str, source: &str) -> bool {
         let after = &body[m..];
         let end = after.find('}').unwrap_or(after.len());
         after[..end].contains("return false")
+    })
+}
+
+/// A block class that isn't a full cube: one that defines its own shape
+/// (`getShape` with a `VoxelShape`), or a `PipeBlock` with its width.
+pub fn block_shape(class: &str, superclass: Option<&str>, source: &str) -> Option<BlockShapeInfo> {
+    let simple = superclass.map(|s| s.rsplit('.').next().unwrap_or(s));
+    let pipe_thickness = (simple == Some("PipeBlock")).then(|| {
+        calls(source, "super")
+            .iter()
+            .find_map(|args| {
+                let first = split_top(args).into_iter().next()?;
+                first
+                    .trim()
+                    .trim_end_matches(['F', 'f', 'D', 'd'])
+                    .parse::<f32>()
+                    .ok()
+            })
+            // Older mappings give the half width in blocks (0.3125F).
+            .map(|v| if v < 1.0 { v * 32.0 } else { v })
+            .unwrap_or(10.0)
+    });
+    let custom_shape = source.contains("VoxelShape")
+        && (source.contains("getShape(") || source.contains("getCollisionShape("));
+    (custom_shape || pipe_thickness.is_some()).then(|| BlockShapeInfo {
+        class: class.to_string(),
+        custom_shape,
+        pipe_thickness,
     })
 }
 
@@ -377,6 +405,25 @@ fn first_int(text: &str) -> Option<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_block_shapes() {
+        let cable = block_shape(
+            "Cable",
+            Some("net.minecraft.world.level.block.PipeBlock"),
+            "public Cable(Properties p) { super(4.0F, p); }",
+        )
+        .unwrap();
+        assert_eq!(cable.pipe_thickness, Some(4.0));
+        let panel = block_shape(
+            "Panel",
+            Some("Block"),
+            "protected VoxelShape getShape(BlockState s, BlockGetter l, BlockPos p, CollisionContext c) { return SHAPE; }",
+        )
+        .unwrap();
+        assert!(panel.custom_shape && panel.pipe_thickness.is_none());
+        assert_eq!(block_shape("Cube", Some("Block"), "class Cube {}"), None);
+    }
 
     #[test]
     fn reads_tanks_and_energy() {

@@ -13,6 +13,8 @@ public class Content {
 
     public static final DeferredHolder<Block, CrateBlock> crate = blockWithItem("crate", CrateBlock::new, p -> p.strength(2.0f));
     public static final DeferredHolder<Item, KeyItem> key = item("key", KeyItem::new);
+    public static final DeferredHolder<Block, CableBlock> cable = blockWithItem("cable", CableBlock::new, p -> p.strength(0.5f));
+    public static final DeferredHolder<Block, PanelBlock> panel = blockWithItem("panel", PanelBlock::new, p -> p.strength(1.0f));
 
     private static <B extends Block> DeferredHolder<Block, B> blockWithItem(String name, Function<BlockBehaviour.Properties, B> create, Function<BlockBehaviour.Properties, BlockBehaviour.Properties> props) {
         DeferredHolder<Block, B> block = BLOCKS.register(name, () -> create.apply(props.apply(BlockBehaviour.Properties.of())));

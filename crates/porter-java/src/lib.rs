@@ -251,6 +251,14 @@ fn network_and_config(root: &Path, scan: &mut ModScan) {
         if let Some(s) = machines::storage(name, text) {
             scan.storages.push(s);
         }
+        let superclass = scan
+            .classes
+            .iter()
+            .find(|c| c.name == *name)
+            .and_then(|c| c.superclass.as_deref());
+        if let Some(s) = machines::block_shape(name, superclass, text) {
+            scan.block_shapes.push(s);
+        }
     }
 }
 
@@ -391,6 +399,7 @@ fn assemble(
         custom_screens: Vec::new(),
         standalone_models: Vec::new(),
         storages: Vec::new(),
+        block_shapes: Vec::new(),
         payloads: Vec::new(),
         config: Vec::new(),
         client,

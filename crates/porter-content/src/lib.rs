@@ -147,6 +147,7 @@ pub fn generate_with(
         found.next().is_none().then(|| first.name.clone())
     };
     let mut seen = BTreeSet::new();
+    let mut pipes: Vec<(String, Option<String>)> = Vec::new();
     for reg in scan.registrations.iter().filter(|r| r.registry == "block") {
         let Some(block_name) = reg.id.as_deref().filter(|n| valid_name(n)) else {
             continue;
@@ -156,7 +157,7 @@ pub fn generate_with(
         }
         let class = reg.creates.as_deref().and_then(class_of);
         let (mut template, mut template_from) = block_template(scan, reg, class.as_deref());
-        let properties = block_properties(&reg.args);
+        let mut properties = block_properties(&reg.args);
         // The state properties its blockstate file draws it by.
         let states = content
             .copies
@@ -187,9 +188,43 @@ pub fn generate_with(
             template = t.to_string();
             template_from = why;
         }
+        // Not a full cube: it hides none of its neighbours' faces (Java culls by its
+        // shape), and a pipe joins its neighbours as Horizon's connecting block does.
+        // Its own shape, or one its mod superclasses define (a terminal's panel).
+        let shape = class.as_deref().and_then(|c| {
+            let mut name = c.to_string();
+            for _ in 0..8 {
+                if let Some(s) = scan.block_shapes.iter().find(|s| s.class == name) {
+                    return Some(s);
+                }
+                name = scan
+                    .classes
+                    .iter()
+                    .find(|k| k.name == name)?
+                    .superclass
+                    .clone()?;
+            }
+            None
+        });
+        let mut connecting = None;
+        if let Some(s) = shape {
+            if let Some(thickness) = s.pipe_thickness {
+                template = "minecraft:chorus_plant".into();
+                template_from = format!(
+                    "a pipe (`PipeBlock`, {thickness} px): Horizon's connecting block joins it to the blocks of `#{ns}:{block_name}_connects`"
+                );
+                connecting = Some(thickness.clamp(2.0, 14.0));
+            }
+            properties.insert("occludes".into(), false.into());
+        }
         let (declared, default_state) =
             declared_states(&template, &states, block_name, &mut content.skipped);
         let mut json = serde_json::json!({ "template": template });
+        if let Some(thickness) = connecting {
+            json["connects_to"] = format!("{ns}:{block_name}_connects").into();
+            json["thickness"] = thickness.into();
+            pipes.push((block_name.to_string(), class.clone()));
+        }
         if !properties.is_empty() {
             json["properties"] = serde_json::Value::Object(properties.clone());
         }
@@ -212,6 +247,78 @@ pub fn generate_with(
             properties,
             class,
         });
+    }
+    // What each pipe joins: the mod's blocks that share its most particular
+    // interface of the mod's own, the one fewest of its blocks have (Tom's
+    // Storage's `IInventoryCable`, not the `BlockWithTooltip` they all have);
+    // else all of the mod's blocks.
+    let implements = |class: &Option<String>, interface: &str| {
+        let mut name = class.clone();
+        for _ in 0..8 {
+            let Some(k) = name
+                .as_deref()
+                .and_then(|n| scan.classes.iter().find(|k| k.name == n))
+            else {
+                return false;
+            };
+            if k.interfaces.iter().any(|i| i == interface) {
+                return true;
+            }
+            name = k.superclass.clone();
+        }
+        false
+    };
+    for (pipe, class) in &pipes {
+        let candidates: Vec<&str> = class
+            .as_deref()
+            .and_then(|c| scan.classes.iter().find(|k| k.name == c))
+            .map(|c| {
+                c.interfaces
+                    .iter()
+                    .map(String::as_str)
+                    .filter(|i| scan.classes.iter().any(|k| k.name == *i))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let count = |i: &str| {
+            content
+                .blocks
+                .iter()
+                .filter(|b| implements(&b.class, i))
+                .count()
+        };
+        // Named like the pipe (`IInventoryCable` for `InventoryCableBlock`) first.
+        let simple = |n: &str| n.rsplit(['.', '$']).next().unwrap_or(n).to_string();
+        let pipe_class = class.as_deref().map(simple).unwrap_or_default();
+        let named_like = |i: &str| {
+            let s = simple(i);
+            let core = s
+                .strip_prefix('I')
+                .filter(|r| r.starts_with(|c: char| c.is_ascii_uppercase()))
+                .unwrap_or(&s);
+            !core.is_empty() && pipe_class.contains(core)
+        };
+        let own_interfaces: BTreeSet<&str> = candidates
+            .iter()
+            .copied()
+            .filter(|i| count(i) > 1)
+            .min_by_key(|i| (!named_like(i), count(i)))
+            .into_iter()
+            .collect();
+        let joins: Vec<String> = content
+            .blocks
+            .iter()
+            .filter(|b| {
+                own_interfaces.is_empty()
+                    || b.name == *pipe
+                    || own_interfaces.iter().any(|i| implements(&b.class, i))
+            })
+            .map(|b| format!("{ns}:{}", b.name))
+            .collect();
+        content.files.insert(
+            format!("data/{ns}/tags/block/{pipe}_connects.json"),
+            pretty(&serde_json::json!({ "values": joins })),
+        );
     }
     let blocks: BTreeSet<String> = content.blocks.iter().map(|b| b.name.clone()).collect();
     let mut seen = BTreeSet::new();

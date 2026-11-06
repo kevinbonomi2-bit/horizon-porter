@@ -353,3 +353,30 @@ fn ports_a_registrate_kinetic_mod() {
     assert!(runtime.contains("`machine.block`, its own block (`spin:crank`, `spin:shaft`)"));
     assert!(b.files["PORTING.md"].contains("| Registrate | 1 classes | read:"));
 }
+
+#[test]
+fn ports_pipes_and_blocks_that_are_not_full_cubes() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../porter-java/tests/fixtures/neoforge-wrapper-demo");
+    let scan = porter_java::scan(&path).unwrap();
+    let b = bundle::generate(&scan, &bundle::load_lang(&scan));
+    let json = |name: &str| -> serde_json::Value {
+        serde_json::from_str(&b.files[&format!("content/data/wrap/horizon/block/{name}.json")])
+            .unwrap()
+    };
+    // A PipeBlock is Horizon's connecting block, joining the blocks with its interface.
+    let cable = json("cable");
+    assert_eq!(cable["template"], "minecraft:chorus_plant");
+    assert_eq!(cable["thickness"], 4.0);
+    assert_eq!(cable["connects_to"], "wrap:cable_connects");
+    assert_eq!(cable["properties"]["occludes"], false);
+    let tag: serde_json::Value =
+        serde_json::from_str(&b.files["content/data/wrap/tags/block/cable_connects.json"]).unwrap();
+    assert_eq!(
+        tag["values"],
+        serde_json::json!(["wrap:cable", "wrap:panel"])
+    );
+    // A block with a shape of its own hides none of its neighbours' faces.
+    assert_eq!(json("panel")["properties"]["occludes"], false);
+    assert!(json("crate")["properties"].get("occludes").is_none());
+}

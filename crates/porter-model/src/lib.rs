@@ -217,6 +217,9 @@ pub struct ModScan {
     /// Fluid tanks and energy buffers of the mod's block entities.
     #[serde(default)]
     pub storages: Vec<StorageInfo>,
+    /// Block classes that aren't full cubes.
+    #[serde(default)]
+    pub block_shapes: Vec<BlockShapeInfo>,
     /// Models no block names that the mod bakes to draw as parts
     /// (`ModelEvent.RegisterStandalone`, `PartialModel`): `grind:block/crusher_wheel`.
     #[serde(default)]
@@ -299,6 +302,17 @@ pub struct ScreenInfo {
     pub height: Option<i32>,
     /// Its background texture: `textures/gui/crusher.png`.
     pub texture: Option<String>,
+}
+
+/// A block class whose shape isn't a full cube: it hides none of its neighbours'
+/// faces, and a pipe (`PipeBlock`) joins its neighbours.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct BlockShapeInfo {
+    pub class: String,
+    /// It defines its own shape (`getShape` returning a `VoxelShape`).
+    pub custom_shape: bool,
+    /// A `PipeBlock`'s width in pixels (`super(4.0F, properties)`).
+    pub pipe_thickness: Option<f32>,
 }
 
 /// What a block entity stores besides items: fluid tanks and an energy buffer.

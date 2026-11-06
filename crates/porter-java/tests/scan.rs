@@ -631,7 +631,12 @@ fn reads_registrations_through_a_generic_wrapper() {
     got.dedup();
     assert_eq!(
         got,
-        [("block", "crate"), ("item", "key")],
+        [
+            ("block", "cable"),
+            ("block", "crate"),
+            ("block", "panel"),
+            ("item", "key")
+        ],
         "{:#?}",
         scan.registrations
     );
