@@ -262,9 +262,20 @@ pub fn generate_with(
             }
             properties.insert("occludes".into(), false.into());
         }
+        // A template must be one of the game's blocks.
+        if vanilla_block(&template).is_none() {
+            template_from = format!("{template} is not a block of 26.3: stone ({template_from})");
+            template = DEFAULT_TEMPLATE.into();
+        }
         let (declared, default_state) =
             declared_states(&template, &states, block_name, &mut content.skipped);
         let mut json = serde_json::json!({ "template": template });
+        // A template without an item (a potted plant, a vine's body, a portal) gives
+        // the block none: Horizon refuses a block item copying no item, and one
+        // refused block keeps every content mod from loading.
+        if vanilla_block(&template).is_some_and(|b| !b.item) {
+            json["item"] = false.into();
+        }
         if let Some(thickness) = connecting {
             json["connects_to"] = format!("#{ns}:{block_name}_connects").into();
             json["thickness"] = thickness.into();
@@ -570,7 +581,52 @@ const DEFAULT_TEMPLATE: &str = "minecraft:stone";
 /// The state properties of each template the porter picks itself, so it knows
 /// which ones a block has to declare. Templates named by the Java code
 /// (`Blocks.GOLD_ORE`) are not here: their properties are not known.
-fn template_properties(template: &str) -> Option<&'static [&'static str]> {
+/// A vanilla block: its state properties, and whether it has an item.
+pub struct VanillaBlock {
+    pub item: bool,
+    pub properties: Vec<String>,
+}
+
+/// The game's blocks (26.3), from `data/vanilla-blocks.json` (`tools/vanilla_blocks.py`).
+fn vanilla_block(id: &str) -> Option<&'static VanillaBlock> {
+    static BLOCKS: std::sync::OnceLock<BTreeMap<String, VanillaBlock>> = std::sync::OnceLock::new();
+    BLOCKS
+        .get_or_init(|| {
+            let json: serde_json::Value =
+                serde_json::from_str(include_str!("../data/vanilla-blocks.json"))
+                    .unwrap_or_default();
+            json.as_object()
+                .into_iter()
+                .flatten()
+                .map(|(k, v)| {
+                    (
+                        k.clone(),
+                        VanillaBlock {
+                            item: v["item"].as_bool().unwrap_or(true),
+                            properties: v["properties"]
+                                .as_array()
+                                .into_iter()
+                                .flatten()
+                                .filter_map(|p| p.as_str().map(str::to_string))
+                                .collect(),
+                        },
+                    )
+                })
+                .collect()
+        })
+        .get(id)
+}
+
+fn template_properties(template: &str) -> Option<Vec<&'static str>> {
+    // Every vanilla block's, from the game's block facts.
+    if let Some(b) = vanilla_block(template) {
+        return Some(b.properties.iter().map(String::as_str).collect());
+    }
+    template_properties_known(template).map(<[&str]>::to_vec)
+}
+
+/// The templates the porter picks itself, for a game whose facts aren't known.
+fn template_properties_known(template: &str) -> Option<&'static [&'static str]> {
     Some(match template.strip_prefix("minecraft:")? {
         "stone" | "glass" | "poppy" | "torch" | "white_carpet" | "diamond_ore" | "iron_block" => {
             &[]
@@ -1314,6 +1370,21 @@ mod tests {
     }
 
     #[test]
+    fn knows_the_games_blocks() {
+        let door = vanilla_block("minecraft:oak_door").unwrap();
+        assert!(door.item);
+        assert!(door.properties.iter().any(|p| p == "hinge"));
+        // Horizon refuses a block item copying a block without one.
+        assert!(!vanilla_block("minecraft:weeping_vines_plant").unwrap().item);
+        assert!(!vanilla_block("minecraft:potted_poppy").unwrap().item);
+        assert!(vanilla_block("minecraft:wool").is_none());
+        assert_eq!(
+            template_properties("minecraft:stone").unwrap(),
+            Vec::<&str>::new()
+        );
+    }
+
+    #[test]
     fn guesses_templates_from_states_names_and_classes() {
         let states = |pairs: &[(&str, &[&str])]| -> BTreeMap<String, BTreeSet<String>> {
             pairs
@@ -1369,9 +1440,10 @@ mod tests {
         assert_eq!(declared.keys().collect::<Vec<_>>(), ["powered"]);
         assert_eq!(declared["powered"]["type"], "boolean");
         assert_eq!(default["powered"], "false");
-        // A template named by the Java code: its properties are unknown, so a note.
+        // A template named by the Java code: the game's facts say it has none of them.
         let (declared, _) = declared_states("minecraft:gold_ore", &p, "ore", &mut skipped);
-        assert!(declared.is_empty() && skipped.len() == 1);
+        assert_eq!(declared.keys().collect::<Vec<_>>(), ["axis", "powered"]);
+        assert!(skipped.is_empty());
 
         let multipart = serde_json::json!({ "multipart": [
             { "apply": {} },

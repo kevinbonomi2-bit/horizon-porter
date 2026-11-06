@@ -174,6 +174,24 @@ def content_checker() -> Path | None:
 
 
 CHECKER: Path | None = None
+VANILLA = json.loads((ROOT / "crates" / "porter-content" / "data" / "vanilla-blocks.json").read_text(encoding="utf-8"))
+
+
+def registry_problems(content: Path) -> list[str]:
+    out = []
+    for f in sorted(content.glob("data/*/horizon/block/*.json")):
+        b = json.loads(f.read_text(encoding="utf-8"))
+        t = b.get("template", "")
+        v = VANILLA.get(t)
+        if v is None:
+            out.append(f"{f.name}: template {t} is not a block")
+            continue
+        if b.get("item", True) and not v["item"]:
+            out.append(f"{f.name}: template {t} has no item")
+        for p in b.get("state_properties", {}):
+            if p in v["properties"]:
+                out.append(f"{f.name}: state property {p} is already on {t}")
+    return out
 
 
 def first_errors(text: str, n: int = 3) -> list[str]:
@@ -232,6 +250,15 @@ def survey_one(slug: str, hit: dict | None, skip_download: bool) -> dict:
             r["stage"] = "content refused"
             r["errors"] = [l.split(": ", 1)[-1] for l in out.splitlines() if l.startswith("REFUSED")][:3]
             return r
+    # What Horizon checks as it builds the registries (mod_content.rs): a template
+    # is a block, a block item copies a block that has an item, no declared state
+    # property is already the template's. One refused block keeps every content
+    # mod from loading.
+    problems = registry_problems(port / "content")
+    if problems:
+        r["stage"] = "content refused"
+        r["errors"] = problems[:3]
+        return r
     mixins = list((port / "mixins").glob("*"))
     r["native"] = bool(mixins)
     r["todo"] = sum(
