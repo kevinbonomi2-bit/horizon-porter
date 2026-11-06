@@ -17,6 +17,7 @@ use anyhow::{Context, Result, bail};
 use porter_model::{ModScan, Verdict};
 
 use crate::block_entity::{self, BlockEntity};
+use crate::blocks::{self, Behaviour};
 use crate::content;
 use crate::machine::{self, Machine};
 use crate::netconf::{self, Message, Setting};
@@ -212,6 +213,16 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
     if !content.is_empty() {
         content.files.extend(machine::content_files(&machines));
     }
+    // Blocks that act in code: placed, used or reshaped by their own Java.
+    let behaviours = blocks::find(scan, &ns, &content.blocks);
+    for (hook, classes) in blocks::hooks(&behaviours) {
+        wired.entry(hook).or_default().extend(classes);
+    }
+    let behaviour_blocks: Vec<(String, porter_content::Block)> = content
+        .blocks
+        .iter()
+        .map(|b| (format!("{ns}:{}", b.name), b.clone()))
+        .collect();
     // A screen texture the mod doesn't ship: Horizon draws its plain panel instead.
     for m in &mut machines {
         let shipped = m.texture.as_deref().is_some_and(|t| {
@@ -371,6 +382,8 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
         settings: &settings,
         screens: &mod_screens,
         overlays: &overlays,
+        behaviours: &behaviours,
+        behaviour_blocks: &behaviour_blocks,
         statics: &java_statics,
         ledger: horizon.map(|src| (src.to_path_buf(), unmapped_ports(scan, src))),
     };
@@ -744,6 +757,9 @@ struct Ctx<'a> {
     screens: &'a [ModScreen],
     /// Its classes that draw over game screens.
     overlays: &'a BTreeSet<String>,
+    /// Its blocks that act in code, and every block (with its id).
+    behaviours: &'a [Behaviour],
+    behaviour_blocks: &'a [(String, porter_content::Block)],
     /// The Java statics the mod's code shares.
     statics: &'a [crate::statics::Module],
     /// The Horizon checkout read, and the functions that port each unmapped
@@ -820,15 +836,33 @@ source = "runtime.rs"
         );
         for hook in self.wired.keys() {
             let (file, _) = self.helper(hook);
-            let bindings = bindings(hook)
-                .iter()
-                .map(|(n, ty, v)| {
-                    format!("  {{ name = \"{n}\", ty = \"{ty}\", value = \"{v}\" }},\n")
-                })
-                .collect::<String>();
+            let line = |n: &str, ty: &str, v: &str| {
+                format!("  {{ name = \"{n}\", ty = \"{ty}\", value = \"{v}\" }},\n")
+            };
+            // A hook the porter wires with its catalog signature (a block's
+            // `update_shape`, on the level) takes its target and bindings from there.
+            let catalog = hooks::hook(hook)
+                .filter(|_| bindings(hook).is_empty())
+                .and_then(|h| Some((h.target.clone(), h.bindings()?)));
+            let (target, bindings) = match catalog {
+                Some((target, found)) => (
+                    target,
+                    found
+                        .iter()
+                        .map(|b| line(&b.name, &b.ty, &b.value))
+                        .collect::<String>(),
+                ),
+                None => (
+                    format!("horizon_client::game::native_hooks::Game<'_>::native_{hook}"),
+                    bindings(hook)
+                        .iter()
+                        .map(|(n, ty, v)| line(n, ty, v))
+                        .collect::<String>(),
+                ),
+            };
             let _ = write!(
                 m,
-                "\n[[injection]]\nid = \"{id}\"\nkind = \"HEAD\"\ntarget = \"horizon_client::game::native_hooks::Game<'_>::native_{hook}\"\nhelper = \"{file}\"\nbindings = [\n{bindings}]\n",
+                "\n[[injection]]\nid = \"{id}\"\nkind = \"HEAD\"\ntarget = \"{target}\"\nhelper = \"{file}\"\nbindings = [\n{bindings}]\n",
                 id = hook.replace('_', "-"),
             );
         }
@@ -996,6 +1030,7 @@ pub const DESCRIPTION: &str = "{description}";
         }
         r.push_str(&netconf::net_runtime(self.messages));
         r.push_str(&screens::runtime(self.screens, self.overlays));
+        r.push_str(&blocks::runtime(self.behaviours, self.behaviour_blocks));
 
         r.push_str(
             r#"
@@ -1017,6 +1052,7 @@ mod tests {
         r.push_str(&netconf::net_tests(self.messages));
         r.push_str(&netconf::config_tests(self.settings));
         r.push_str(&screens::tests(self.screens));
+        r.push_str(&blocks::tests(self.behaviours));
         r.push_str("}\n");
         r
     }
@@ -1945,6 +1981,11 @@ fn {id}_net_from_server(game: &mut crate::game::Game<'_>, channel: &str, data: &
                     config = self.ensure_config("&*game"),
                 ),
             ),
+            "right_click_block" | "state_for_placement" | "update_shape"
+                if !self.behaviours.is_empty() =>
+            {
+                blocks::helper(hook, id, m, name).expect("a block hook's bindings")
+            }
             other => unreachable!("no helper for hook {other}"),
         }
     }

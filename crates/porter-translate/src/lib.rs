@@ -10,6 +10,7 @@
 
 pub mod ai;
 pub mod block_entity;
+pub mod blocks;
 pub mod bundle;
 pub mod machine;
 pub mod netconf;

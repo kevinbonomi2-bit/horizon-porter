@@ -28,6 +28,11 @@ pub struct Block {
     pub class: Option<String>,
     /// Whether it has an item (`"item": false` in its file when not).
     pub item: bool,
+    /// Its state properties, its template's and its own, each with its values.
+    pub states: BTreeMap<String, Vec<String>>,
+    /// Quarter turns clockwise from the `facing` it stores to the one Java would
+    /// (its blockstate is turned so each draws what Java draws): 0 for most.
+    pub facing_turns: u8,
 }
 
 /// An item the content mod adds (block items come with their blocks).
@@ -380,6 +385,7 @@ pub fn generate_with(
         // A value the template stores that the blockstate never draws gets a variant.
         let mut blockstate = blockstate;
         let mut rewritten = false;
+        let mut facing_turns = 0;
         if let Some(filled) = vanilla_block(&template)
             .zip(blockstate.as_ref())
             .and_then(|(v, b)| fill_variants(b, &v.properties))
@@ -401,6 +407,7 @@ pub fn generate_with(
         {
             blockstate = Some(turned);
             rewritten = true;
+            facing_turns = (java + 4 - own) % 4;
             template_from.push_str(&format!(
                 "; placed facing as Java places it ({} quarter turns from {template}'s)",
                 (java + 4 - own) % 4
@@ -415,32 +422,36 @@ pub fn generate_with(
         // its own models, as Java's shapes follow them.
         // A shutter on a trapdoor stands upright where the trapdoor lies flat.
         let shutter = template.ends_with("_trapdoor") && states.contains_key("hinge");
+        // Its state properties: its template's and those it declares.
+        let mut schema: BTreeMap<String, BTreeSet<String>> = vanilla_block(&template)
+            .map(|v| {
+                v.properties
+                    .iter()
+                    .map(|(k, vals)| (k.clone(), vals.iter().cloned().collect()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        for (k, d) in json
+            .get("state_properties")
+            .and_then(|d| d.as_object())
+            .into_iter()
+            .flatten()
+        {
+            let values: BTreeSet<String> = match d["type"].as_str() {
+                Some("boolean") => ["false", "true"].map(String::from).into(),
+                _ => d["values"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|x| x.as_str().map(str::to_string))
+                    .collect(),
+            };
+            schema.insert(k.clone(), values);
+        }
         if connecting.is_none()
-            && let Some(v) = vanilla_block(&template).filter(|v| v.full_cube || shutter)
+            && vanilla_block(&template).is_some_and(|v| v.full_cube || shutter)
             && let Some(b) = blockstate.as_ref()
         {
-            let mut schema: BTreeMap<String, BTreeSet<String>> = v
-                .properties
-                .iter()
-                .map(|(k, vals)| (k.clone(), vals.iter().cloned().collect()))
-                .collect();
-            for (k, d) in json
-                .get("state_properties")
-                .and_then(|d| d.as_object())
-                .into_iter()
-                .flatten()
-            {
-                let values: BTreeSet<String> = match d["type"].as_str() {
-                    Some("boolean") => ["false", "true"].map(String::from).into(),
-                    _ => d["values"]
-                        .as_array()
-                        .into_iter()
-                        .flatten()
-                        .filter_map(|x| x.as_str().map(str::to_string))
-                        .collect(),
-                };
-                schema.insert(k.clone(), values);
-            }
             if let Some((outline, collision)) = model_shapes(&content, b, &schema) {
                 json["shapes"] = outline;
                 if let Some(c) = collision {
@@ -464,6 +475,11 @@ pub fn generate_with(
             properties,
             class,
             item,
+            states: schema
+                .into_iter()
+                .map(|(k, v)| (k, v.into_iter().collect()))
+                .collect(),
+            facing_turns,
         });
     }
     // What each pipe joins: the mod's blocks that share its most particular

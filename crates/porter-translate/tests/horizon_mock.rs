@@ -97,6 +97,22 @@ const HOOKS: &[(&str, &str)] = &[
         "native_block_entity_submit",
         "&self, pos: [i32; 3], block: &str, state: BlockStateId, entity: &ModBlockEntity, draw: &mut BlockEntityDraw",
     ),
+    (
+        "native_right_click_block",
+        "&mut self, pos: [i32; 3], face: [i32; 3], canceled: &mut bool",
+    ),
+];
+
+/// The hooks on `GameLevel` (a server level), as in native_hooks.rs.
+const LEVEL_HOOKS: &[(&str, &str)] = &[
+    (
+        "native_state_for_placement",
+        "&self, dimension: LevelDimension, state: BlockStateId, context: &PlacementContext, fluid: FluidState, answer: &mut Option<Option<BlockStateId>>",
+    ),
+    (
+        "native_update_shape",
+        "&self, ticks: &mut Ticks, dimension: LevelDimension, pos: BlockPos, state: BlockStateId, direction: Direction, neighbour_pos: BlockPos, neighbour: BlockStateId, new: &mut Option<BlockStateId>",
+    ),
 ];
 
 const MOCK_LIB: &str = r#"
@@ -107,6 +123,12 @@ pub mod horizon_core {
     pub mod geometry {
         #[derive(Clone, Copy, Debug, PartialEq, Eq)]
         pub enum Direction { Down, Up, North, South, West, East }
+        #[derive(Clone, Copy, Debug, PartialEq)]
+        pub struct Vec3 { pub x: f64, pub y: f64, pub z: f64 }
+    }
+    pub mod position {
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        pub struct BlockPos { pub x: i32, pub y: i32, pub z: i32 }
     }
 }
 
@@ -281,6 +303,10 @@ pub mod game {
     pub struct Game<'a> {
         _game: std::marker::PhantomData<&'a ()>,
     }
+    // game.rs: a server level, which the world hooks run on.
+    pub struct GameLevel<'a> {
+        _level: std::marker::PhantomData<&'a ()>,
+    }
     // native_block_entity_draw.rs: the pose stack a block entity is drawn under.
     pub mod native_block_entity_draw {
         #[derive(Clone, Copy, Debug)]
@@ -334,6 +360,37 @@ pub mod game {
         #[allow(unused_imports)]
         use crate::horizon_world;
 
+        use super::GameLevel;
+        use crate::horizon_core::position::BlockPos;
+        // horizon-world's level types the world hooks take.
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        pub enum LevelDimension { Overworld, Nether, End }
+        pub struct Ticks;
+        #[derive(Clone, Copy, Debug)]
+        pub struct FluidState;
+        // horizon-world's level/place.rs: vanilla's BlockPlaceContext.
+        pub struct PlacementContext {
+            pub pos: BlockPos,
+            pub hit_pos: BlockPos,
+            pub face: Direction,
+            pub hit: crate::horizon_core::geometry::Vec3,
+            pub inside: bool,
+            pub yaw: f32,
+            pub pitch: f32,
+            pub sneaking: bool,
+            pub item: String,
+            pub replace_clicked: bool,
+        }
+
+        impl GameLevel<'_> {
+            pub fn native_state_block(&self, state: BlockStateId) -> Option<&str> { None }
+            pub fn native_state_with_property(&self, state: BlockStateId, key: &str, value: &str) -> Option<BlockStateId> { None }
+        }
+
+        impl GameLevel<'_> {
+__LEVEL_HOOKS__
+        }
+
         pub struct NativeMod {
             pub id: String,
             pub title: String,
@@ -384,6 +441,10 @@ pub mod game {
             pub fn native_block_state_property(&self, state: BlockStateId, key: &str) -> Option<&str> { None }
             pub fn native_net_send_to_player(&mut self, player: u128, channel: &str, data: &[u8]) -> Result<(), String> { Ok(()) }
             pub fn native_net_send_to_server(&mut self, channel: &str, data: &[u8]) -> Result<(), String> { Ok(()) }
+            pub fn native_held(&self) -> Option<(String, u32, bool)> { None }
+            pub fn native_block_property(&self, pos: [i32; 3], key: &str) -> Option<String> { None }
+            pub fn native_set_block_property_with(&mut self, pos: [i32; 3], key: &str, value: &str, flags: i32) -> bool { false }
+            pub fn native_play_sound(&mut self, sound: &str, at: [f64; 3], source: usize, volume: f32, pitch: f32) -> bool { false }
         }
 
         impl Game<'_> {
@@ -480,6 +541,31 @@ fn kinetic_helpers_compile_against_horizon_api() {
     compiles_against_the_mock(&b, "kinetic");
 }
 
+#[test]
+fn block_behaviour_helpers_compile_against_horizon_api() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../porter-java/tests/fixtures/neoforge-shutter-demo");
+    let scan = porter_java::scan(&path).unwrap();
+    let lang = bundle::load_lang(&scan);
+    let b = bundle::generate(&scan, &lang);
+    for hook in ["state_for_placement", "right_click_block", "update_shape"] {
+        assert!(b.wired.contains_key(hook), "{hook}: {:?}", b.wired.keys());
+    }
+    let runtime = &b.files["mixins/shutters/runtime.rs"];
+    // The gate places and opens as the shutter it extends does, and joins
+    // its neighbour by its own updateShape.
+    assert!(runtime.contains("TODO: port from net.shutters.Shutter (`getStateForPlacement`)"));
+    assert!(runtime.contains("TODO: port from net.shutters.Shutter (`useWithoutItem`)"));
+    assert!(runtime.contains("TODO: port from net.shutters.Gate (`updateShape`)"));
+    assert!(
+        runtime.contains(
+            "const SHUTTER_USE: &[&str] = &[\n    \"shutters:oak_shutter\",\n    \"shutters:iron_gate\",\n];"
+        ),
+        "{runtime}"
+    );
+    compiles_against_the_mock(&b, "behaviour");
+}
+
 /// Splices the bundle's helpers into the mock's hooks and runs `cargo check` on it.
 fn compiles_against_the_mock(b: &bundle::Bundle, name: &str) {
     let dir: PathBuf =
@@ -499,8 +585,27 @@ fn folder_compiles_against_the_mock(mixins: &Path, dir: &Path) {
             .unwrap();
     let module = manifest["module"][0]["name"].as_str().unwrap();
 
+    let hooks = splice(HOOKS, &manifest, &mixins);
+    let level_hooks = splice(LEVEL_HOOKS, &manifest, &mixins);
+    let runtime = mixins.join("runtime.rs");
+    let lib = MOCK_LIB
+        .replace(
+            "__MODULE__",
+            &format!(
+                "#[path = {:?}]\n    pub mod {module};",
+                runtime.to_string_lossy()
+            ),
+        )
+        .replace("__HOOKS__", &hooks)
+        .replace("__LEVEL_HOOKS__", &level_hooks);
+    check_mock(&lib, dir);
+}
+
+/// The mock's hook functions for `hooks`, each with the bundle's helper for it
+/// pasted in and called, as horizon-mixins does.
+fn splice(hooks_list: &[(&str, &str)], manifest: &toml::Table, mixins: &Path) -> String {
     let mut hooks = String::new();
-    for (name, params) in HOOKS {
+    for (name, params) in hooks_list {
         let injection = manifest["injection"].as_array().unwrap().iter().find(|i| {
             i["target"]
                 .as_str()
@@ -533,17 +638,11 @@ fn folder_compiles_against_the_mock(mixins: &Path, dir: &Path) {
         }
         hooks.push_str("            }\n");
     }
+    hooks
+}
 
-    let runtime = mixins.join("runtime.rs");
-    let lib = MOCK_LIB
-        .replace(
-            "__MODULE__",
-            &format!(
-                "#[path = {:?}]\n    pub mod {module};",
-                runtime.to_string_lossy()
-            ),
-        )
-        .replace("__HOOKS__", &hooks);
+/// Builds the mock crate `lib` in `dir` with `cargo check`: it must compile clean.
+fn check_mock(lib: &str, dir: &Path) {
     let mock = dir.join("mock");
     std::fs::create_dir_all(mock.join("src")).unwrap();
     std::fs::write(
