@@ -5,7 +5,9 @@
 //!
 //! It reads the source text: the shapes mods write these in are few and regular.
 
-use porter_model::{BlockShapeInfo, MenuInfo, MenuSlot, RendererInfo, ScreenInfo, StorageInfo};
+use porter_model::{
+    BlockShapeInfo, MenuInfo, MenuSlot, MobInfo, RendererInfo, ScreenInfo, StorageInfo,
+};
 
 /// The menu a class's source declares (`class` is its fully qualified name).
 pub fn menu(class: &str, source: &str) -> MenuInfo {
@@ -147,6 +149,69 @@ fn is_result(ty: &str, source: &str) -> bool {
         let after = &body[m..];
         let end = after.find('}').unwrap_or(after.len());
         after[..end].contains("return false")
+    })
+}
+
+/// A mob effect class's category and color, from its constructor's
+/// `super(MobEffectCategory.HARMFUL, 0x8E3B46)`.
+pub fn effect(source: &str) -> Option<(String, u32)> {
+    if !source.contains("MobEffectCategory.") {
+        return None;
+    }
+    calls(source, "super").iter().find_map(|args| {
+        let parts = split_top(args);
+        let category = parts.first()?.trim().strip_prefix("MobEffectCategory.")?;
+        if !["BENEFICIAL", "HARMFUL", "NEUTRAL"].contains(&category) {
+            return None;
+        }
+        Some((category.to_ascii_lowercase(), color(parts.get(1)?)?))
+    })
+}
+
+/// An RGB color as code writes one: `0x8E3B46`, `9321286`, `-12345` (ARGB).
+pub fn color(text: &str) -> Option<u32> {
+    let t = text.trim();
+    let v = if let Some(h) = t.strip_prefix("0x").or_else(|| t.strip_prefix("0X")) {
+        i64::from_str_radix(h, 16).ok()?
+    } else {
+        t.parse::<i64>().ok()?
+    };
+    Some((v as u32) & 0xFF_FFFF)
+}
+
+/// A mob class's default attributes, from its `createAttributes()` chain:
+/// `.add(Attributes.MAX_HEALTH, 40.0D)`.
+pub fn mob(class: &str, source: &str) -> Option<MobInfo> {
+    if !source.contains("Attributes.") {
+        return None;
+    }
+    let mut attributes = Vec::new();
+    for args in calls(source, "add") {
+        let parts = split_top(&args);
+        let [attr, value] = &parts[..] else {
+            continue;
+        };
+        let Some(name) = attr.trim().strip_prefix("Attributes.") else {
+            continue;
+        };
+        if !name.chars().all(|c| c.is_ascii_uppercase() || c == '_') {
+            continue;
+        }
+        let Ok(v) = value
+            .trim()
+            .trim_end_matches(['D', 'd', 'F', 'f'])
+            .parse::<f64>()
+        else {
+            continue;
+        };
+        let id = format!("minecraft:{}", name.to_ascii_lowercase());
+        if !attributes.iter().any(|(a, _)| *a == id) {
+            attributes.push((id, v));
+        }
+    }
+    (!attributes.is_empty()).then(|| MobInfo {
+        class: class.to_string(),
+        attributes,
     })
 }
 
@@ -405,6 +470,27 @@ fn first_int(text: &str) -> Option<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_mob_attributes_and_effects() {
+        let m = mob(
+            "Naga",
+            "static AttributeSupplier.Builder createAttributes() { return Monster.createMonsterAttributes().add(Attributes.MAX_HEALTH, 10.0D).add(Attributes.MOVEMENT_SPEED, 0.23F); }",
+        )
+        .unwrap();
+        assert_eq!(
+            m.attributes,
+            [
+                ("minecraft:max_health".to_string(), 10.0),
+                ("minecraft:movement_speed".to_string(), 0.23)
+            ]
+        );
+        assert_eq!(
+            effect("public ComfortEffect() { super(MobEffectCategory.BENEFICIAL, 0xB8B5F5); }"),
+            Some(("beneficial".into(), 0xB8B5F5))
+        );
+        assert_eq!(color("-16777216"), Some(0));
+    }
 
     #[test]
     fn reads_block_shapes() {

@@ -168,6 +168,7 @@ def survey_one(slug: str, hit: dict | None, skip_download: bool) -> dict:
     r["wired"] = len(m.group(1).split(",")) if m else 0
     m = re.search(r"Hooks to port into \(helpers ready\): (.+)", out)
     r["stubbed"] = len(m.group(1).split(",")) if m else 0
+    r["mobs"] = len(list(port.glob("content/data/*/horizon/entity_type/*.json")))
     mixins = list((port / "mixins").glob("*"))
     r["native"] = bool(mixins)
     r["todo"] = sum(
@@ -215,14 +216,14 @@ def report(results: list[dict]) -> str:
         f"{len(results)} mods, {time.strftime('%Y-%m-%d %H:%M')}. "
         + ", ".join(f"{n} {s}" for s, n in sorted(stages.items(), key=lambda x: -x[1])),
         "",
-        "| Mod | Loader | Classes | Mixins | Verdict | Blocks | Items | BEs | Hooks | Left to port | Result |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| Mod | Loader | Classes | Mixins | Verdict | Blocks | Items | BEs | Mobs | Hooks | Left to port | Result |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for r in results:
         hooks = f"{r.get('wired', 0)}+{r.get('stubbed', 0)}" if "wired" in r else ""
         lines.append(
             f"| {r['slug']} | {r.get('loader', '')} | {r.get('classes') or ''} | {r.get('mixin_classes') or ''} "
-            f"| {r.get('verdict', '')} | {r.get('blocks', '')} | {r.get('items', '')} | {r.get('block_entities', '')} "
+            f"| {r.get('verdict', '')} | {r.get('blocks', '')} | {r.get('items', '')} | {r.get('block_entities', '')} | {r.get('mobs', '')} "
             f"| {hooks} | {r.get('todo', '')} | {r.get('stage', '?')} |"
         )
     errors = [r for r in results if r.get("errors")]

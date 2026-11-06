@@ -259,6 +259,12 @@ fn network_and_config(root: &Path, scan: &mut ModScan) {
         if let Some(s) = machines::block_shape(name, superclass, text) {
             scan.block_shapes.push(s);
         }
+        if let Some(m) = machines::mob(name, text) {
+            scan.mobs.push(m);
+        }
+        if let Some((category, color)) = machines::effect(text) {
+            scan.effects.push((name.clone(), category, color));
+        }
     }
 }
 
@@ -400,6 +406,8 @@ fn assemble(
         standalone_models: Vec::new(),
         storages: Vec::new(),
         block_shapes: Vec::new(),
+        mobs: Vec::new(),
+        effects: Vec::new(),
         payloads: Vec::new(),
         config: Vec::new(),
         client,
@@ -876,6 +884,28 @@ fn registrations(parsed: &[(String, ParsedFile)]) -> Vec<Registration> {
             Some("item")
         } else if name.ends_with("ContainerMenu") || name == "AbstractContainerMenu" {
             Some("menu")
+        } else if name.ends_with("Mob")
+            || [
+                "Monster",
+                "Animal",
+                "AmbientCreature",
+                "WaterAnimal",
+                "LivingEntity",
+                "AgeableMob",
+                "TamableAnimal",
+                "AbstractFish",
+                "AbstractGolem",
+                "Raider",
+                "AbstractVillager",
+                "AbstractSkeleton",
+                "Zombie",
+                "Spider",
+                "Slime",
+            ]
+            .contains(&name)
+        {
+            // A mob: what `EntityType.Builder.of(EntityFirefly::new, ...)` makes.
+            Some("entity_type")
         } else {
             None
         }
@@ -945,9 +975,7 @@ fn registrations(parsed: &[(String, ParsedFile)]) -> Vec<Registration> {
             };
             // An unqualified call to a method of the mod's own, or a library
             // registrar's `register...` (Balm's `blocks.register("warp_plate", ...)`).
-            let own = call.object.is_empty()
-                && file.methods.iter().any(|m| m.name == call.method)
-                && !helpers.contains_key(&(call.enclosing.clone(), call.method.clone()));
+            let own = call.object.is_empty() && file.methods.iter().any(|m| m.name == call.method);
             let registrar = !call.object.is_empty() && call.method.starts_with("reg");
             if !own && !registrar {
                 continue;
@@ -967,7 +995,9 @@ fn registrations(parsed: &[(String, ParsedFile)]) -> Vec<Registration> {
             {
                 continue;
             }
-            let Some(registry) = kind_of(&creates) else {
+            // A mob whose classes go through a library's: its `MobCategory` says it.
+            let mob = call.args.iter().any(|a| a.contains("MobCategory."));
+            let Some(registry) = kind_of(&creates).or(mob.then_some("entity_type")) else {
                 continue;
             };
             let known = out.iter().chain(inferred.iter()).any(|r: &Registration| {

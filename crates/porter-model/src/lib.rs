@@ -220,6 +220,13 @@ pub struct ModScan {
     /// Block classes that aren't full cubes.
     #[serde(default)]
     pub block_shapes: Vec<BlockShapeInfo>,
+    /// Mob classes with their default attributes.
+    #[serde(default)]
+    pub mobs: Vec<MobInfo>,
+    /// Mob effect classes: (class, `beneficial`/`harmful`/`neutral`, RGB color),
+    /// from their `super(MobEffectCategory.HARMFUL, 0x8E3B46)`.
+    #[serde(default)]
+    pub effects: Vec<(String, String, u32)>,
     /// Models no block names that the mod bakes to draw as parts
     /// (`ModelEvent.RegisterStandalone`, `PartialModel`): `grind:block/crusher_wheel`.
     #[serde(default)]
@@ -302,6 +309,14 @@ pub struct ScreenInfo {
     pub height: Option<i32>,
     /// Its background texture: `textures/gui/crusher.png`.
     pub texture: Option<String>,
+}
+
+/// A mob class's default attributes (`createAttributes()`):
+/// `.add(Attributes.MAX_HEALTH, 40.0)` is `("minecraft:max_health", 40.0)`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct MobInfo {
+    pub class: String,
+    pub attributes: Vec<(String, f64)>,
 }
 
 /// A block class whose shape isn't a full cube: it hides none of its neighbours'

@@ -44,6 +44,8 @@ pub struct Content {
     pub copies: BTreeMap<String, PathBuf>,
     pub blocks: Vec<Block>,
     pub items: Vec<Item>,
+    /// The mod's mobs, as `id (template)`.
+    pub entities: Vec<String>,
     /// Resource files left out, with why.
     pub skipped: Vec<String>,
 }
@@ -361,6 +363,97 @@ pub fn generate_with(
         content.files.insert(
             format!("data/{ns}/tags/block/{pipe}_connects.json"),
             pretty(&serde_json::json!({ "values": joins })),
+        );
+    }
+    // The mod's mobs: each copies the vanilla mob it is most like, with its own
+    // default attributes. Horizon's templates are a zombie (hostile), a wandering
+    // trader (neutral, all goals) and a villager.
+    let mut seen_mobs = BTreeSet::new();
+    for reg in scan
+        .registrations
+        .iter()
+        .filter(|r| r.registry == "entity_type")
+    {
+        let Some(name) = reg.id.as_deref().filter(|n| valid_name(n)) else {
+            continue;
+        };
+        if !seen_mobs.insert(name.to_string()) {
+            continue;
+        }
+        let class = reg.creates.as_deref().and_then(class_of);
+        let Some((template, attributes_allowed)) = mob_template(scan, reg, class.as_deref()) else {
+            content.skipped.push(format!(
+                "entity `{name}`: not a mob Horizon has a template for (projectiles, vehicles and others are left out)"
+            ));
+            continue;
+        };
+        let mut attributes = serde_json::Map::new();
+        if let Some(mob) = class
+            .as_deref()
+            .and_then(|c| scan.mobs.iter().find(|m| m.class == c))
+        {
+            for (attr, value) in &mob.attributes {
+                if attributes_allowed.contains(&attr.as_str()) {
+                    attributes.insert(attr.clone(), (*value).into());
+                }
+            }
+        }
+        let mut json = serde_json::json!({ "template": template });
+        if !attributes.is_empty() {
+            json["attributes"] = serde_json::Value::Object(attributes);
+        }
+        content.files.insert(
+            format!("data/{ns}/horizon/entity_type/{name}.json"),
+            pretty(&json),
+        );
+        content.entities.push(format!("{ns}:{name} ({template})"));
+    }
+    // The mod's mob effects: `new MobEffect(MobEffectCategory.HARMFUL, 0x8E3B46)`.
+    for reg in scan
+        .registrations
+        .iter()
+        .filter(|r| r.registry == "mob_effect")
+    {
+        let Some(name) = reg.id.as_deref().filter(|n| valid_name(n)) else {
+            continue;
+        };
+        let category = ["BENEFICIAL", "HARMFUL", "NEUTRAL"]
+            .into_iter()
+            .find(|c| reg.args.contains(&format!("MobEffectCategory.{c}")));
+        let color = reg.args.split([',', '(', ')', ' ']).find_map(|w| {
+            let w = w.trim();
+            w.strip_prefix("0x")
+                .or_else(|| w.strip_prefix("0X"))
+                .and_then(|h| u32::from_str_radix(h, 16).ok())
+                .or_else(|| {
+                    (w.len() >= 4 && w.chars().all(|c| c.is_ascii_digit()))
+                        .then(|| w.parse().ok())
+                        .flatten()
+                })
+        });
+        // Else its class's `super(MobEffectCategory.HARMFUL, 0x8E3B46)`.
+        let from_class = reg
+            .creates
+            .as_deref()
+            .and_then(class_of)
+            .and_then(|c| scan.effects.iter().find(|(k, _, _)| *k == c));
+        let (category, color) = match (category, color, from_class) {
+            (Some(c), Some(col), _) => (Some(c.to_ascii_lowercase()), Some(col)),
+            (_, _, Some((_, c, col))) => (Some(c.clone()), Some(*col)),
+            _ => (None, None),
+        };
+        let (Some(category), Some(color)) = (category, color) else {
+            content.skipped.push(format!(
+                "mob effect `{name}`: its category or color isn't in its registration"
+            ));
+            continue;
+        };
+        content.files.insert(
+            format!("data/{ns}/horizon/mob_effect/{name}.json"),
+            pretty(&serde_json::json!({
+                "category": category,
+                "color": color.min(0xFF_FFFF),
+            })),
         );
     }
     let blocks: BTreeSet<String> = content.blocks.iter().map(|b| b.name.clone()).collect();
@@ -866,6 +959,85 @@ fn name_template(name: &str) -> Option<&'static str> {
         .iter()
         .find(|(end, _)| name.ends_with(end))
         .map(|(_, t)| *t)
+}
+
+/// The vanilla mob a mod's mob copies, and the attributes that template has:
+/// hostile ones a zombie, villagers a villager, other creatures a wandering trader
+/// (neutral, all goals). None for what isn't a mob (projectiles, vehicles).
+fn mob_template(
+    scan: &ModScan,
+    reg: &Registration,
+    class: Option<&str>,
+) -> Option<(&'static str, &'static [&'static str])> {
+    const ZOMBIE: &[&str] = &[
+        "minecraft:max_health",
+        "minecraft:movement_speed",
+        "minecraft:attack_damage",
+        "minecraft:armor",
+        "minecraft:follow_range",
+    ];
+    const OTHER: &[&str] = &[
+        "minecraft:max_health",
+        "minecraft:movement_speed",
+        "minecraft:armor",
+    ];
+    // Its classes, up to the first vanilla one.
+    let mut chain: Vec<String> = Vec::new();
+    let mut next = class.map(str::to_string).or_else(|| reg.creates.clone());
+    while let Some(name) = next.take() {
+        let simple = name.rsplit('.').next().unwrap_or(&name).to_string();
+        chain.push(simple);
+        if chain.len() > 12 {
+            break;
+        }
+        next = scan
+            .classes
+            .iter()
+            .find(|c| c.name == name)
+            .and_then(|c| c.superclass.clone());
+    }
+    let any = |words: &[&str]| chain.iter().any(|c| words.iter().any(|w| c.contains(w)));
+    if any(&[
+        "Projectile",
+        "Arrow",
+        "Boat",
+        "Minecart",
+        "Vehicle",
+        "ItemEntity",
+        "Display",
+    ]) {
+        return None;
+    }
+    if any(&["Villager"]) {
+        return Some(("minecraft:villager", OTHER));
+    }
+    let hostile = reg.args.contains("MobCategory.MONSTER")
+        || any(&[
+            "Monster", "Zombie", "Skeleton", "Spider", "Creeper", "Slime", "Raider", "Illager",
+            "Blaze", "Phantom",
+        ]);
+    if hostile {
+        return Some(("minecraft:zombie", ZOMBIE));
+    }
+    let creature = [
+        "CREATURE",
+        "AMBIENT",
+        "WATER_CREATURE",
+        "WATER_AMBIENT",
+        "UNDERGROUND_WATER_CREATURE",
+        "AXOLOTLS",
+    ]
+    .iter()
+    .any(|c| reg.args.contains(&format!("MobCategory.{c}")))
+        || any(&[
+            "Animal",
+            "AgeableMob",
+            "PathfinderMob",
+            "AmbientCreature",
+            "WaterAnimal",
+            "Mob",
+        ]);
+    creature.then_some(("minecraft:wandering_trader", OTHER))
 }
 
 /// `Blocks.IRON_BLOCK` in `text` → `iron_block` (the first one).
