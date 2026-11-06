@@ -211,8 +211,8 @@ pub fn runtime(behaviours: &[Behaviour], blocks: &[(String, porter_content::Bloc
             Kind::Place => (
                 "places_its_own_way",
                 "state_for_placement",
-                "p: &Placement",
-                "p",
+                "p: &Placement, world: &dyn Blocks",
+                "p, world",
                 "None",
                 "Option<Vec<(String, String)>>",
                 "p.block",
@@ -229,8 +229,8 @@ pub fn runtime(behaviours: &[Behaviour], blocks: &[(String, porter_content::Bloc
             Kind::Shape => (
                 "shapes_by_neighbours",
                 "update_shape",
-                "u: &ShapeUpdate",
-                "u",
+                "u: &ShapeUpdate, world: &dyn Blocks",
+                "u, world",
                 "None",
                 "Option<Vec<(String, String)>>",
                 "u.block",
@@ -320,6 +320,17 @@ pub fn tests(behaviours: &[Behaviour]) -> String {
     }
 
     #[test]
+    fn clicks_land_on_the_blocks_boxes() {
+        // Looking straight down at a thin panel against the west side of block (4, 0, 7).
+        let panel = [[0.0, 0.0, 0.0, 0.125, 1.0, 1.0]];
+        let hit = super::ray_hit([4.05, 2.0, 7.5], [0.0, -1.0, 0.0], [4, 0, 7], [0, 1, 0], &panel);
+        assert!((hit[1] - 1.0).abs() < 1e-9 && (hit[0] - 4.05).abs() < 1e-9, "{hit:?}");
+        // Missing every box: the middle of the face clicked.
+        let miss = super::ray_hit([4.9, 2.0, 7.5], [0.0, -1.0, 0.0], [4, 0, 7], [0, 1, 0], &panel);
+        assert_eq!(miss, [4.5, 1.0, 7.5]);
+    }
+
+    #[test]
     fn placement_knows_where_the_player_looks() {
         let mut p = super::Placement {
             block: String::new(),
@@ -381,11 +392,21 @@ fn {id}_right_click_block({params}) {
     let held = game
         .native_held()
         .map_or_else(|| "minecraft:air".to_string(), |(item, _, _)| item);
+    // Where the click landed: the player's look from their eyes into the block's boxes.
+    let hit = match game.native_acting_player() {
+        Some(p) => {
+            let eye = [p.position[0], p.position[1] + 1.62, p.position[2]];
+            let (yaw, pitch) = (f64::from(p.yaw).to_radians(), f64::from(p.pitch).to_radians());
+            let look = [-yaw.sin() * pitch.cos(), -pitch.sin(), yaw.cos() * pitch.cos()];
+            m::ray_hit(eye, look, pos, face, &game.native_block_collision(pos))
+        }
+        None => m::ray_hit([0.0; 3], [0.0; 3], pos, face, &[]),
+    };
     // The world as the block's code sees it, `facing` as Java names it.
     struct Here<'g, 'a> {
         game: &'g mut crate::game::Game<'a>,
     }
-    impl m::World for Here<'_, '_> {
+    impl m::Blocks for Here<'_, '_> {
         fn block(&self, pos: [i32; 3]) -> String {
             self.game.native_block(pos)
         }
@@ -396,6 +417,13 @@ fn {id}_right_click_block({params}) {
             } else {
                 value
             })
+        }
+    }
+    impl m::World for Here<'_, '_> {
+        fn random(&mut self) -> f32 {
+            self.game
+                .native_level_random()
+                .map_or(0.5, horizon_core::random::RandomSource::next_float)
         }
         fn set_property(&mut self, pos: [i32; 3], key: &str, value: &str) -> bool {
             let value = if key == "facing" {
@@ -420,6 +448,7 @@ fn {id}_right_click_block({params}) {
         block,
         pos,
         face,
+        hit,
         held,
     };
     if m::use_block(&used, &mut Here { game }) {
@@ -442,6 +471,32 @@ fn {id}_state_for_placement({params}) {
     if !m::places_its_own_way(block) {
         return;
     }
+    // The level as the block's code reads it, `facing` as Java names it.
+    struct Level<'g, 'a> {
+        game: &'g crate::game::native_hooks::GameLevel<'a>,
+    }
+    impl m::Blocks for Level<'_, '_> {
+        fn block(&self, pos: [i32; 3]) -> String {
+            let state = horizon_client::mod_api::LevelHost::block_state(self.game, pos);
+            self.game
+                .native_state_block(state)
+                .unwrap_or("minecraft:air")
+                .to_string()
+        }
+        fn property(&self, pos: [i32; 3], key: &str) -> Option<String> {
+            let state = horizon_client::mod_api::LevelHost::block_state(self.game, pos);
+            let block = self.game.native_state_block(state)?;
+            let (_, values) = m::PROPERTY_VALUES.iter().find(|(k, _)| *k == key)?;
+            let value = values
+                .iter()
+                .find(|v| self.game.native_state_with_property(state, key, v) == Some(state))?;
+            Some(if key == "facing" {
+                m::java_facing(block, value)
+            } else {
+                value.to_string()
+            })
+        }
+    }
     let placement = m::Placement {
         block: block.to_string(),
         pos: [context.pos.x, context.pos.y, context.pos.z],
@@ -453,7 +508,7 @@ fn {id}_state_for_placement({params}) {
         sneaking: context.sneaking,
         replace_clicked: context.replace_clicked,
     };
-    let Some(set) = m::state_for_placement(&placement) else {
+    let Some(set) = m::state_for_placement(&placement, &Level { game }) else {
         return;
     };
     let mut placed = *state;
@@ -484,6 +539,32 @@ fn {id}_update_shape({params}) {
     };
     if !m::shapes_by_neighbours(block) {
         return;
+    }
+    // The level as the block's code reads it, `facing` as Java names it.
+    struct Level<'g, 'a> {
+        game: &'g crate::game::native_hooks::GameLevel<'a>,
+    }
+    impl m::Blocks for Level<'_, '_> {
+        fn block(&self, pos: [i32; 3]) -> String {
+            let state = horizon_client::mod_api::LevelHost::block_state(self.game, pos);
+            self.game
+                .native_state_block(state)
+                .unwrap_or("minecraft:air")
+                .to_string()
+        }
+        fn property(&self, pos: [i32; 3], key: &str) -> Option<String> {
+            let state = horizon_client::mod_api::LevelHost::block_state(self.game, pos);
+            let block = self.game.native_state_block(state)?;
+            let (_, values) = m::PROPERTY_VALUES.iter().find(|(k, _)| *k == key)?;
+            let value = values
+                .iter()
+                .find(|v| self.game.native_state_with_property(state, key, v) == Some(state))?;
+            Some(if key == "facing" {
+                m::java_facing(block, value)
+            } else {
+                value.to_string()
+            })
+        }
     }
     // A state's properties: each value of the mod's properties that, set on it,
     // leaves it as it is.
@@ -516,7 +597,7 @@ fn {id}_update_shape({params}) {
         neighbour_properties: properties(*neighbour, &neighbour_block),
         neighbour: neighbour_block,
     };
-    let Some(set) = m::update_shape(&update) else {
+    let Some(set) = m::update_shape(&update, &Level { game }) else {
         return;
     };
     let mut shaped = *state;
@@ -545,28 +626,75 @@ const RUNTIME_TYPES: &str = r#"
 // classes' `getStateForPlacement`, `useItemOn` and `updateShape` do; the hook
 // helpers call them. Directions are named as Java names them: `north`, `up`.
 
-/// The world as a block's code reads and changes it (Java's `Level`).
-pub trait World {
-    /// The block at `pos`: `mymod:oak_shutter`, `minecraft:air`.
+/// The world as a block's code reads it (Java's `LevelReader`): where it is
+/// placed, or as a neighbour changes.
+pub trait Blocks {
+    /// The block at `pos`: `mymod:oak_shutter`, `minecraft:air`
+    /// (`level.getBlockState(pos).getBlock()`).
     fn block(&self, pos: [i32; 3]) -> String;
-    /// Property `key` of the block at `pos` (`level.getBlockState(pos).getValue(..)`).
+    /// Property `key` of the block at `pos` (`level.getBlockState(pos).getValue(..)`):
+    /// one of the properties the mod's blocks have, `facing` as Java names it.
     fn property(&self, pos: [i32; 3], key: &str) -> Option<String>;
+}
+
+/// The world as a block's code reads and changes it on a right click (Java's
+/// `Level`).
+pub trait World: Blocks {
     /// Sets property `key` of the block at `pos` (`level.setBlock(pos,
     /// state.setValue(..), 3)`); false when it has no such property or value.
     fn set_property(&mut self, pos: [i32; 3], key: &str, value: &str) -> bool;
     /// Plays `sound` (`minecraft:block.wooden_door.open`, or one of the mod's own)
     /// at the middle of `pos` for the players near it (`level.playSound`).
     fn play_sound(&mut self, sound: &str, pos: [i32; 3], volume: f32, pitch: f32);
+    /// The level's random, 0 to 1 (`level.random.nextFloat()`).
+    fn random(&mut self) -> f32;
 }
 
-/// A right click on one of the mod's blocks (`useItemOn`'s arguments).
+/// A right click on one of the mod's blocks (`useItemOn`'s arguments). Horizon
+/// doesn't say whether the player sneaks (`player.isCrouching()`).
 pub struct BlockUse {
     pub block: String,
     pub pos: [i32; 3],
     /// The face clicked: `[0, 1, 0]` is the top (`hit.getDirection()`).
     pub face: [i32; 3],
+    /// Where the click landed, in world coordinates (`hit.getLocation()`).
+    pub hit: [f64; 3],
     /// The item in the player's main hand, `minecraft:air` when empty.
     pub held: String,
+}
+
+/// Where a look from `eye` along `look` first meets `boxes` (block-local, of the
+/// block at `pos`): Java's `BlockHitResult.getLocation()`. Without boxes, the
+/// whole block; without a meeting, the middle of `face`.
+pub fn ray_hit(eye: [f64; 3], look: [f64; 3], pos: [i32; 3], face: [i32; 3], boxes: &[[f64; 6]]) -> [f64; 3] {
+    let whole = [[0.0, 0.0, 0.0, 1.0, 1.0, 1.0]];
+    let boxes = if boxes.is_empty() { &whole[..] } else { boxes };
+    let base = pos.map(f64::from);
+    let mut best: Option<f64> = None;
+    for b in boxes {
+        let (mut near, mut far) = (f64::NEG_INFINITY, f64::INFINITY);
+        let mut misses = false;
+        for i in 0..3 {
+            let (lo, hi) = (base[i] + b[i], base[i] + b[i + 3]);
+            if look[i].abs() < 1e-9 {
+                if eye[i] < lo || eye[i] > hi {
+                    misses = true;
+                }
+                continue;
+            }
+            let (a, c) = ((lo - eye[i]) / look[i], (hi - eye[i]) / look[i]);
+            near = near.max(a.min(c));
+            far = far.min(a.max(c));
+        }
+        if !misses && near <= far && far >= 0.0 {
+            let t = near.max(0.0);
+            best = Some(best.map_or(t, |b: f64| b.min(t)));
+        }
+    }
+    match best {
+        Some(t) => [0, 1, 2].map(|i| eye[i] + look[i] * t),
+        None => [0, 1, 2].map(|i| base[i] + 0.5 + f64::from(face[i]) * 0.5),
+    }
 }
 
 /// Where and how one of the mod's blocks is being placed (`BlockPlaceContext`).

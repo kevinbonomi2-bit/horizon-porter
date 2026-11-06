@@ -126,6 +126,15 @@ pub mod horizon_core {
         #[derive(Clone, Copy, Debug, PartialEq)]
         pub struct Vec3 { pub x: f64, pub y: f64, pub z: f64 }
     }
+    pub mod random {
+        pub struct LegacyRandom;
+        pub trait RandomSource: Sized {
+            fn next_float(&mut self) -> f32;
+        }
+        impl RandomSource for LegacyRandom {
+            fn next_float(&mut self) -> f32 { 0.5 }
+        }
+    }
     pub mod position {
         #[derive(Clone, Copy, Debug, PartialEq, Eq)]
         pub struct BlockPos { pub x: i32, pub y: i32, pub z: i32 }
@@ -281,6 +290,19 @@ pub mod mod_api {
         pub mouse: [f32; 2],
         pub partial_tick: f32,
     }
+    // A level read as vanilla's LevelReader (mod_api.rs), which GameLevel implements.
+    pub trait LevelHost {
+        fn block_state(&self, pos: [i32; 3]) -> crate::horizon_world::registry::BlockStateId;
+    }
+    // The player whose action a hook hears (`native_acting_player`).
+    pub struct NativeServerPlayer {
+        pub uuid: u128,
+        pub name: String,
+        pub dimension: String,
+        pub position: [f64; 3],
+        pub yaw: f32,
+        pub pitch: f32,
+    }
 }
 
 pub mod hud {
@@ -382,6 +404,10 @@ pub mod game {
             pub replace_clicked: bool,
         }
 
+        impl crate::mod_api::LevelHost for GameLevel<'_> {
+            fn block_state(&self, pos: [i32; 3]) -> BlockStateId { BlockStateId(0) }
+        }
+
         impl GameLevel<'_> {
             pub fn native_state_block(&self, state: BlockStateId) -> Option<&str> { None }
             pub fn native_state_with_property(&self, state: BlockStateId, key: &str, value: &str) -> Option<BlockStateId> { None }
@@ -442,6 +468,9 @@ __LEVEL_HOOKS__
             pub fn native_net_send_to_player(&mut self, player: u128, channel: &str, data: &[u8]) -> Result<(), String> { Ok(()) }
             pub fn native_net_send_to_server(&mut self, channel: &str, data: &[u8]) -> Result<(), String> { Ok(()) }
             pub fn native_held(&self) -> Option<(String, u32, bool)> { None }
+            pub fn native_acting_player(&self) -> Option<crate::mod_api::NativeServerPlayer> { None }
+            pub fn native_block_collision(&self, pos: [i32; 3]) -> Vec<[f64; 6]> { Vec::new() }
+            pub fn native_level_random(&mut self) -> Option<&mut crate::horizon_core::random::LegacyRandom> { None }
             pub fn native_block_property(&self, pos: [i32; 3], key: &str) -> Option<String> { None }
             pub fn native_set_block_property_with(&mut self, pos: [i32; 3], key: &str, value: &str, flags: i32) -> bool { false }
             pub fn native_play_sound(&mut self, sound: &str, at: [f64; 3], source: usize, volume: f32, pitch: f32) -> bool { false }
