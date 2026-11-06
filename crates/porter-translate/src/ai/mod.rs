@@ -403,6 +403,8 @@ fn cargo_test(dir: &Path) -> std::result::Result<(), String> {
 
 /// How much Java one prompt carries: whole classes, up to about 100k tokens.
 const JAVA_BUDGET: usize = 400_000;
+/// Of it, the most for the mod's classes the named ones use (about 15 000 tokens).
+const USED_BUDGET: usize = 60_000;
 
 /// A prompt: a part shared by every prompt of its kind, which the API caches, and
 /// the part for this function.
@@ -494,6 +496,48 @@ fn prompt(dir: &Path, scan: &ModScan, unit: &Unit) -> Result<Prompt> {
             p,
             "(No Java source could be found for it: port it from its comment, or write the most faithful stand-in and say what is missing in a comment.)\n"
         );
+    }
+    // The mod's own classes that code uses (a terminal's storage network, a
+    // machine's recipe helper), smallest first, so the model ports what they do
+    // instead of guessing.
+    let mut used: Vec<(&porter_model::ClassInfo, String)> = Vec::new();
+    for name in sent.clone() {
+        let Some(class) = scan.classes.iter().find(|c| c.name == name) else {
+            continue;
+        };
+        for r in &class.references {
+            let Some(other) = scan.classes.iter().find(|c| c.name == *r) else {
+                continue;
+            };
+            if other.is_mixin
+                || sent.contains(&other.name)
+                || used.iter().any(|(c, _)| c.name == other.name)
+            {
+                continue;
+            }
+            if let Ok(source) = fs::read_to_string(Path::new(&scan.input).join(&other.path)) {
+                used.push((other, source));
+            }
+        }
+    }
+    used.sort_by_key(|(_, s)| s.len());
+    let mut used_chars = 0;
+    for (class, source) in used {
+        if used_chars + source.len() > USED_BUDGET || java_chars + source.len() > JAVA_BUDGET {
+            out.notes.push(format!(
+                "{} (a class it uses) left out: past the budget for them",
+                class.name
+            ));
+            continue;
+        }
+        used_chars += source.len();
+        java_chars += source.len();
+        let _ = writeln!(
+            p,
+            "A class of the mod that code uses, `{}` ({}), for what its calls do:\n\n```java\n{source}\n```\n",
+            class.name, class.path
+        );
+        java_text.push_str(&source);
     }
     for (mixin, member) in &unit.members {
         let _ = writeln!(
