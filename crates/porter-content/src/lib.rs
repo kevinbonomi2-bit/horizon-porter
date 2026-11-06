@@ -1191,9 +1191,14 @@ fn variant_shape(
     let turned: Vec<Box6> = boxes.into_iter().map(|b| round(rotate(b, x, y))).collect();
     let solid: Vec<Box6> = turned.iter().copied().filter(has_volume).collect();
     if !solid.is_empty() {
-        // At most 16 boxes a shape: more become their bounds.
-        if solid.len() > 16 {
-            return Some((vec![bounds(&solid)], true, false));
+        // A model of many small parts (blinds' slats and their cords), or of flat
+        // panes between solid ones (a window's glass in its frame), outlines as one
+        // box, as Java's shapes for such blocks do: a click lands on the panel, not
+        // between slats or through the glass. A few solid parts keep their own.
+        // Horizon takes at most 16 boxes a shape anyway.
+        let flat = turned.len() > solid.len();
+        if solid.len() > 4 || flat {
+            return Some((vec![bounds(&turned)], true, false));
         }
         return Some((solid, true, false));
     }

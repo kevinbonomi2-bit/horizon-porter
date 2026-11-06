@@ -325,6 +325,27 @@ pub mod game {
     pub struct Game<'a> {
         _game: std::marker::PhantomData<&'a ()>,
     }
+    // native_world_edit.rs: bulk block edits, from block states as commands write them.
+    pub mod native_world_edit {
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        pub enum NativeHeightmap { WorldSurface, MotionBlocking, MotionBlockingNoLeaves, OceanFloor }
+        #[derive(Clone, Copy, Debug, PartialEq)]
+        pub struct NativeBlockRun {
+            pub x: i32,
+            pub z: i32,
+            pub y: i32,
+            pub height: u32,
+            pub surface: Option<NativeHeightmap>,
+            pub block: u32,
+            pub only: Option<u32>,
+        }
+        #[derive(Clone, Debug, PartialEq, Default)]
+        pub struct NativeBlockEdit {
+            pub palette: Vec<String>,
+            pub filters: Vec<String>,
+            pub runs: Vec<NativeBlockRun>,
+        }
+    }
     // game.rs: a server level, which the world hooks run on.
     pub struct GameLevel<'a> {
         _level: std::marker::PhantomData<&'a ()>,
@@ -468,6 +489,7 @@ __LEVEL_HOOKS__
             pub fn native_net_send_to_player(&mut self, player: u128, channel: &str, data: &[u8]) -> Result<(), String> { Ok(()) }
             pub fn native_net_send_to_server(&mut self, channel: &str, data: &[u8]) -> Result<(), String> { Ok(()) }
             pub fn native_held(&self) -> Option<(String, u32, bool)> { None }
+            pub fn native_edit_blocks(&mut self, dimension: &str, edit: &super::native_world_edit::NativeBlockEdit) -> Result<u64, String> { Ok(0) }
             pub fn native_acting_player(&self) -> Option<crate::mod_api::NativeServerPlayer> { None }
             pub fn native_block_collision(&self, pos: [i32; 3]) -> Vec<[f64; 6]> { Vec::new() }
             pub fn native_level_random(&mut self, dimension: &str) -> Option<&mut crate::horizon_core::random::LegacyRandom> { None }

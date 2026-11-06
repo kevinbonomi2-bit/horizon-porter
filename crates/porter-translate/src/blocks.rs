@@ -420,6 +420,41 @@ fn {id}_right_click_block({params}) {
         }
     }
     impl m::World for Here<'_, '_> {
+        fn set_block(&mut self, pos: [i32; 3], block: &str, properties: &[(&str, &str)]) -> bool {
+            let props: Vec<String> = properties
+                .iter()
+                .map(|(k, v)| {
+                    let v = if *k == "facing" {
+                        m::stored_facing(block, v)
+                    } else {
+                        v.to_string()
+                    };
+                    format!("{k}={v}")
+                })
+                .collect();
+            let state = if props.is_empty() {
+                block.to_string()
+            } else {
+                format!("{block}[{}]", props.join(","))
+            };
+            let edit = crate::game::native_world_edit::NativeBlockEdit {
+                palette: vec![state],
+                filters: Vec::new(),
+                runs: vec![crate::game::native_world_edit::NativeBlockRun {
+                    x: pos[0],
+                    z: pos[2],
+                    y: pos[1],
+                    height: 1,
+                    surface: None,
+                    block: 0,
+                    only: None,
+                }],
+            };
+            let dimension = self.game.native_dimension();
+            self.game
+                .native_edit_blocks(dimension, &edit)
+                .is_ok_and(|changed| changed > 0)
+        }
         fn random(&mut self) -> f32 {
             let dimension = self.game.native_dimension();
             self.game
@@ -649,6 +684,10 @@ pub trait World: Blocks {
     fn play_sound(&mut self, sound: &str, pos: [i32; 3], volume: f32, pitch: f32);
     /// The level's random, 0 to 1 (`level.random.nextFloat()`).
     fn random(&mut self) -> f32;
+    /// Puts `block` at `pos` with `properties` (`level.setBlock(pos,
+    /// block.defaultBlockState().setValue(..), 3)`); `minecraft:air` removes what
+    /// is there. Its neighbours are not told. False when it couldn't.
+    fn set_block(&mut self, pos: [i32; 3], block: &str, properties: &[(&str, &str)]) -> bool;
 }
 
 /// A right click on one of the mod's blocks (`useItemOn`'s arguments). Horizon
