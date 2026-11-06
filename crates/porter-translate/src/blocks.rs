@@ -421,8 +421,9 @@ fn {id}_right_click_block({params}) {
     }
     impl m::World for Here<'_, '_> {
         fn random(&mut self) -> f32 {
+            let dimension = self.game.native_dimension();
             self.game
-                .native_level_random()
+                .native_level_random(dimension)
                 .map_or(0.5, horizon_core::random::RandomSource::next_float)
         }
         fn set_property(&mut self, pos: [i32; 3], key: &str, value: &str) -> bool {
@@ -441,7 +442,7 @@ fn {id}_right_click_block({params}) {
                 f64::from(pos[2]) + 0.5,
             ];
             // SoundSource.BLOCKS
-            let _ = self.game.native_play_sound(sound, at, 4, volume, pitch);
+            let _ = self.game.native_level_play_sound(sound, at, 4, volume, pitch);
         }
     }
     let used = m::BlockUse {

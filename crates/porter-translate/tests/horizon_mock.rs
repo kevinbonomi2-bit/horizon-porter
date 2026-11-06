@@ -470,10 +470,11 @@ __LEVEL_HOOKS__
             pub fn native_held(&self) -> Option<(String, u32, bool)> { None }
             pub fn native_acting_player(&self) -> Option<crate::mod_api::NativeServerPlayer> { None }
             pub fn native_block_collision(&self, pos: [i32; 3]) -> Vec<[f64; 6]> { Vec::new() }
-            pub fn native_level_random(&mut self) -> Option<&mut crate::horizon_core::random::LegacyRandom> { None }
+            pub fn native_level_random(&mut self, dimension: &str) -> Option<&mut crate::horizon_core::random::LegacyRandom> { None }
             pub fn native_block_property(&self, pos: [i32; 3], key: &str) -> Option<String> { None }
             pub fn native_set_block_property_with(&mut self, pos: [i32; 3], key: &str, value: &str, flags: i32) -> bool { false }
-            pub fn native_play_sound(&mut self, sound: &str, at: [f64; 3], source: usize, volume: f32, pitch: f32) -> bool { false }
+            // native_host_bridge.rs: Game's is `native_level_play_sound` (GameLevel has `native_play_sound`).
+            pub fn native_level_play_sound(&mut self, sound: &str, at: [f64; 3], source: usize, volume: f32, pitch: f32) -> bool { false }
         }
 
         impl Game<'_> {
