@@ -6,7 +6,7 @@
 //! Config values are `ModConfigSpec.Builder` (or Forge's `ForgeConfigSpec`) chains:
 //! `push`/`pop` sections, `comment`, `define`, `defineInRange`, `defineEnum`.
 
-use porter_model::{ConfigEntry, ConfigKind, PayloadField, PayloadInfo};
+use porter_model::{ConfigEntry, ConfigKind, CreativeTabInfo, PayloadField, PayloadInfo};
 
 use crate::machines::{balanced, balanced_braces, calls, split_top};
 
@@ -133,6 +133,72 @@ pub fn directions(payloads: &mut [PayloadInfo], class: &str, source: &str) {
             p.registered_in.push(class.to_string());
         }
     }
+}
+
+/// The creative tabs `source` builds: each `CreativeModeTab.builder()` (Fabric's
+/// `FabricItemGroup.builder()`) chain up to its `.build()`, with the id it is
+/// registered under, its title, its icon and the items `displayItems` accepts.
+pub fn creative_tabs(source: &str) -> Vec<CreativeTabInfo> {
+    let mut starts: Vec<usize> = ["CreativeModeTab.builder(", "FabricItemGroup.builder("]
+        .iter()
+        .flat_map(|m| source.match_indices(m).map(|(i, _)| i))
+        .collect();
+    starts.sort_unstable();
+    let mut out = Vec::new();
+    for (n, &start) in starts.iter().enumerate() {
+        let next = starts.get(n + 1).copied().unwrap_or(source.len());
+        let end = source[start..next]
+            .find(".build()")
+            .map_or(next, |e| start + e);
+        let chain = &source[start..end];
+        // `TABS.register("mcwroofs", () -> CreativeModeTab.builder()`: the last
+        // string literal of the statement it is in.
+        let statement = source[..start]
+            .rsplit([';', '}'])
+            .next()
+            .unwrap_or_default();
+        let id = statement
+            .rsplit('"')
+            .nth(1)
+            .filter(|_| statement.matches('"').count() >= 2)
+            .map(str::to_string);
+        let title = calls(chain, "title").first().and_then(|t| {
+            calls(t, "translatable")
+                .into_iter()
+                .chain(calls(t, "literal"))
+                .find_map(|a| string_literal(split_top(&a).first()?))
+        });
+        let icon = calls(chain, "icon").first().and_then(|a| last_constant(a));
+        let mut items = Vec::new();
+        for a in calls(chain, "accept") {
+            if let Some(item) = last_constant(&a)
+                && !items.contains(&item)
+            {
+                items.push(item);
+            }
+        }
+        out.push(CreativeTabInfo {
+            id,
+            title,
+            icon,
+            items,
+        });
+    }
+    out
+}
+
+/// The last constant named in `text`, lower-cased as an id: `oak_roof` from
+/// `(ItemLike)BlockInit.OAK_ROOF.get()`.
+fn last_constant(text: &str) -> Option<String> {
+    text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .filter(|w| {
+            w.len() >= 2
+                && w.chars().any(|c| c.is_ascii_uppercase())
+                && w.chars()
+                    .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+        })
+        .last()
+        .map(str::to_ascii_lowercase)
 }
 
 /// The models a class registers to bake on their own, to draw as parts:
@@ -380,6 +446,32 @@ public record SetSpeed(BlockPos pos, int speed, @NotNull String note) implements
         new Type<>(ResourceLocation.fromNamespaceAndPath(Grind.MODID, "set_speed"));
 }
 "#;
+
+    #[test]
+    fn finds_creative_tabs() {
+        let source = r#"
+            public static final DeferredHolder<CreativeModeTab, CreativeModeTab> ROOFS = CREATIVE_TABS.register(
+                "mcwroofs",
+                () -> CreativeModeTab.builder()
+                    .title(Component.translatable("itemGroup.mcwroofs"))
+                    .icon(() -> new ItemStack((ItemLike)BlockInit.OAK_ROOF.get()))
+                    .displayItems((enabledFeatures, entries) -> {
+                        entries.accept((ItemLike)ItemInit.ROOFING_HAMMER.get());
+                        entries.accept((ItemLike)BlockInit.OAK_ROOF.get());
+                        entries.accept(BlockInit.OAK_ROOF.get());
+                    }).build());
+            static final ItemGroup OTHER = FabricItemGroup.builder().title(Component.literal("Gems")).build();
+        "#;
+        let tabs = creative_tabs(source);
+        assert_eq!(tabs.len(), 2);
+        assert_eq!(tabs[0].id.as_deref(), Some("mcwroofs"));
+        assert_eq!(tabs[0].title.as_deref(), Some("itemGroup.mcwroofs"));
+        assert_eq!(tabs[0].icon.as_deref(), Some("oak_roof"));
+        assert_eq!(tabs[0].items, ["roofing_hammer", "oak_roof"]);
+        assert_eq!(tabs[1].id, None);
+        assert_eq!(tabs[1].title.as_deref(), Some("Gems"));
+        assert!(tabs[1].items.is_empty());
+    }
 
     #[test]
     fn finds_standalone_models() {

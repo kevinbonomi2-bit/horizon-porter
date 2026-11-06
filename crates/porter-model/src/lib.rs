@@ -231,6 +231,9 @@ pub struct ModScan {
     /// (`ModelEvent.RegisterStandalone`, `PartialModel`): `grind:block/crusher_wheel`.
     #[serde(default)]
     pub standalone_models: Vec<String>,
+    /// The mod's creative inventory tabs, in the order its code builds them.
+    #[serde(default)]
+    pub creative_tabs: Vec<CreativeTabInfo>,
     /// The network messages the mod defines.
     #[serde(default)]
     pub payloads: Vec<PayloadInfo>,
@@ -541,6 +544,22 @@ pub struct MixinMember {
     /// The horizon-mixins kind this maps to, if there is one.
     pub horizon_kind: Option<String>,
     pub verdict: Verdict,
+}
+
+/// A creative inventory tab the mod builds (`CreativeModeTab.builder()`,
+/// Fabric's `FabricItemGroup.builder()`). Items are named by the constants the
+/// code passes (`BlockInit.OAK_ROOF` → `oak_roof`), which are their ids as a
+/// rule; the porter keeps those that are.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CreativeTabInfo {
+    /// The id it is registered under (`mcwroofs`), when written as a literal.
+    pub id: Option<String>,
+    /// Its title's lang key (`itemGroup.mcwroofs`), or its literal text.
+    pub title: Option<String>,
+    /// The item on its button.
+    pub icon: Option<String>,
+    /// Its items in order (`displayItems`'s `accept` calls).
+    pub items: Vec<String>,
 }
 
 /// One registry entry the mod adds, as found in its code.

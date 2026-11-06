@@ -246,11 +246,22 @@ pub fn generate_with(
             template = t.to_string();
             template_from =
                 format!("it opens a menu (`{menu}`): its template must open one, as {like} does");
-        } else if template == DEFAULT_TEMPLATE
-            && let Some((t, why)) = template_for_states(&states, block_name)
+        } else if let Some((t, why)) = template_for_states(&states, block_name)
+            .filter(|_| template == DEFAULT_TEMPLATE || !has_states_of(&template, &states))
         {
+            // A block that copies another's properties but draws as stairs, a slab or
+            // a door (Macaw's grass roof: `ofFullCopy(Blocks.DIRT)`, stairs' states)
+            // needs that shape's template to be placed facing the player and to join
+            // its neighbours; it keeps the copied block's sounds.
+            if template != DEFAULT_TEMPLATE {
+                properties
+                    .entry("sounds")
+                    .or_insert_with(|| template.clone().into());
+                template_from = format!("{why} ({template_from}: its sounds)");
+            } else {
+                template_from = why;
+            }
             template = t.to_string();
-            template_from = why;
         }
         if reg.via == "resources" {
             template_from.push_str(
@@ -292,9 +303,8 @@ pub fn generate_with(
             template = DEFAULT_TEMPLATE.into();
         }
         if let Some(stand_in) = growing_plant_stand_in(&template) {
-            template_from = format!(
-                "{stand_in}: {template} grows only as itself in Horizon ({template_from})"
-            );
+            template_from =
+                format!("{stand_in}: {template} grows only as itself in Horizon ({template_from})");
             template = stand_in.into();
         }
         let (declared, default_state) =
@@ -522,6 +532,8 @@ pub fn generate_with(
         });
     }
 
+    creative_tabs(scan, ns, name, &mut content);
+
     // Assets alone (a client mod's lang file, its HUD textures) make no content mod:
     // there must be blocks, items or data for the game to load.
     if content.blocks.is_empty()
@@ -550,6 +562,93 @@ pub fn generate_with(
     }
     content.files.insert("horizon-mod.toml".into(), manifest);
     content
+}
+
+/// The mod's creative inventory tabs (`data/<ns>/horizon/creative_tab/`): Java
+/// gives a mod tabs of its own, and Horizon lists them after vanilla's. Each tab
+/// keeps the title, icon and items its code names; a mod whose tabs name none
+/// (Biomes O' Plenty fills its tab by reflection) or that builds none gets one
+/// tab of all its items.
+fn creative_tabs(scan: &ModScan, ns: &str, name: &str, content: &mut Content) {
+    let mut all: Vec<&str> = content
+        .blocks
+        .iter()
+        .filter(|b| vanilla_block(&b.template).is_none_or(|v| v.item))
+        .map(|b| b.name.as_str())
+        .collect();
+    all.extend(content.items.iter().map(|i| i.name.as_str()));
+    if all.is_empty() {
+        return;
+    }
+    let lang_path = format!("assets/{ns}/lang/en_us.json");
+    let lang: serde_json::Value = content
+        .files
+        .get(&lang_path)
+        .cloned()
+        .or_else(|| {
+            content
+                .copies
+                .get(&lang_path)
+                .and_then(|p| std::fs::read_to_string(p).ok())
+        })
+        .and_then(|t| serde_json::from_str(t.trim_start_matches('\u{feff}')).ok())
+        .unwrap_or_default();
+    // A lang key the mod translates, or text that isn't a key; else the mod's name.
+    let title = |t: Option<&String>| match t {
+        Some(t) if lang.get(t).is_some() || t.contains(' ') || !t.contains('.') => t.clone(),
+        _ => name.to_string(),
+    };
+    // (file name, title, icon, items)
+    let mut tabs: Vec<(String, String, String, Vec<String>)> = Vec::new();
+    for (i, tab) in scan.creative_tabs.iter().enumerate() {
+        let items: Vec<String> = tab
+            .items
+            .iter()
+            .filter(|x| all.contains(&x.as_str()))
+            .map(|x| format!("{ns}:{x}"))
+            .collect();
+        let file = tab
+            .id
+            .clone()
+            .filter(|id| valid_name(id))
+            .unwrap_or_else(|| {
+                if i == 0 {
+                    ns.to_string()
+                } else {
+                    format!("tab_{i}")
+                }
+            });
+        let icon = tab
+            .icon
+            .as_deref()
+            .filter(|x| all.contains(x))
+            .map(|x| format!("{ns}:{x}"))
+            .unwrap_or_default();
+        tabs.push((file, title(tab.title.as_ref()), icon, items));
+    }
+    if tabs.iter().all(|t| t.3.is_empty()) {
+        let mut first = tabs
+            .drain(..)
+            .next()
+            .unwrap_or_else(|| (ns.to_string(), name.to_string(), String::new(), Vec::new()));
+        first.3 = all.iter().map(|x| format!("{ns}:{x}")).collect();
+        tabs = vec![first];
+    }
+    let mut written = BTreeSet::new();
+    for (file, title, icon, items) in tabs {
+        if items.is_empty() || !written.insert(file.clone()) {
+            continue;
+        }
+        let icon = if icon.is_empty() {
+            items[0].clone()
+        } else {
+            icon
+        };
+        content.files.insert(
+            format!("data/{ns}/horizon/creative_tab/{file}.json"),
+            pretty(&serde_json::json!({ "title": title, "icon": icon, "items": items })),
+        );
+    }
 }
 
 /// The namespace of the port's blocks and items: the Java mod's id when Horizon
@@ -647,6 +746,12 @@ fn vanilla_block(id: &str) -> Option<&'static VanillaBlock> {
         .get(id)
 }
 
+/// Whether `template` has any of the state properties a blockstate file draws by.
+fn has_states_of(template: &str, states: &BTreeMap<String, BTreeSet<String>>) -> bool {
+    template_properties(template)
+        .is_some_and(|own| states.keys().any(|p| own.contains(&p.as_str())))
+}
+
 /// A block for a mod block to copy in place of a growing plant's (kelp, cave,
 /// twisting and weeping vines, head or body). Horizon's survival rule for those
 /// pairs a head with its body by the block's own name, and a world refuses to
@@ -654,7 +759,9 @@ fn vanilla_block(id: &str) -> Option<&'static VanillaBlock> {
 /// horizon-world `block_survival.rs`). The stand-ins hang, stand or sway alike.
 fn growing_plant_stand_in(template: &str) -> Option<&'static str> {
     Some(match template {
-        "minecraft:cave_vines" | "minecraft:cave_vines_plant" | "minecraft:weeping_vines"
+        "minecraft:cave_vines"
+        | "minecraft:cave_vines_plant"
+        | "minecraft:weeping_vines"
         | "minecraft:weeping_vines_plant" => "minecraft:hanging_roots",
         "minecraft:twisting_vines" | "minecraft:twisting_vines_plant" => "minecraft:nether_sprouts",
         "minecraft:kelp" | "minecraft:kelp_plant" => "minecraft:seagrass",
@@ -1425,7 +1532,11 @@ mod tests {
         assert!(!vanilla_block("minecraft:potted_poppy").unwrap().item);
         assert!(vanilla_block("minecraft:wool").is_none());
         // A world won't open with a block copying a growing plant.
-        for vines in ["minecraft:weeping_vines_plant", "minecraft:kelp", "minecraft:twisting_vines"] {
+        for vines in [
+            "minecraft:weeping_vines_plant",
+            "minecraft:kelp",
+            "minecraft:twisting_vines",
+        ] {
             let stand_in = growing_plant_stand_in(vines).unwrap();
             assert!(vanilla_block(stand_in).unwrap().item, "{stand_in}");
         }
@@ -1453,6 +1564,15 @@ mod tests {
             template_for_states(&slab, "orpiment_brick_slab").unwrap().0,
             "minecraft:stone_slab"
         );
+        // Macaw's grass roof copies dirt but draws as stairs: dirt can't place it.
+        let roof = states(&[
+            ("facing", &["north", "east"]),
+            ("half", &["top", "bottom"]),
+            ("shape", &["straight", "outer_left"]),
+        ]);
+        assert!(!has_states_of("minecraft:dirt", &roof));
+        assert!(has_states_of("minecraft:oak_stairs", &roof));
+        assert!(has_states_of("minecraft:carved_pumpkin", &roof));
         let door = states(&[("hinge", &["left", "right"]), ("open", &["true", "false"])]);
         assert_eq!(
             template_for_states(&door, "fir_door").unwrap().0,

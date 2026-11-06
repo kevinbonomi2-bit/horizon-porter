@@ -235,6 +235,10 @@ fn network_and_config(root: &Path, scan: &mut ModScan) {
             opened_by,
         });
     }
+    // Creative tabs.
+    for (_, text) in &sources {
+        scan.creative_tabs.extend(netconf::creative_tabs(text));
+    }
     // Models baked to draw as parts.
     for (_, text) in &sources {
         for model in netconf::standalone_models(text, mod_id.as_deref()) {
@@ -404,6 +408,7 @@ fn assemble(
         renderers: Vec::new(),
         custom_screens: Vec::new(),
         standalone_models: Vec::new(),
+        creative_tabs: Vec::new(),
         storages: Vec::new(),
         block_shapes: Vec::new(),
         mobs: Vec::new(),

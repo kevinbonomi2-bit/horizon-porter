@@ -191,6 +191,7 @@ pub(crate) fn scan(path: &Path) -> Result<ModScan> {
         renderers: Vec::new(),
         custom_screens: Vec::new(),
         standalone_models: Vec::new(),
+        creative_tabs: Vec::new(),
         storages: Vec::new(),
         block_shapes: Vec::new(),
         mobs: Vec::new(),
