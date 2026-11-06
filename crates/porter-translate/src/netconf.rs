@@ -112,11 +112,41 @@ impl Type {
     }
 }
 
+/// The types a port's runtime defines itself, which a message can't be named.
+const RESERVED: &[&str] = &[
+    "Payload",
+    "Outbox",
+    "Writer",
+    "Reader",
+    "Machine",
+    "MachineParts",
+    "Stack",
+    "Recipe",
+    "Tank",
+    "Side",
+    "Transfer",
+    "Neighbour",
+    "Sprite",
+    "Draw",
+    "DrawOp",
+    "Frame",
+    "Gui",
+    "GuiOp",
+    "Screen",
+    "Config",
+    "Saved",
+    "MachineMenu",
+];
+
 /// The messages to generate, from the scan's payloads.
 pub fn messages(payloads: &[PayloadInfo], mod_id: &str) -> Vec<Message> {
     let mut out: Vec<Message> = Vec::new();
     for p in payloads {
-        let name = p.class.rsplit('.').next().unwrap_or(&p.class).to_string();
+        let mut name = p.class.rsplit('.').next().unwrap_or(&p.class).to_string();
+        // Not one of the port's own types (Shulker Box Tooltip has a `Payload`).
+        if RESERVED.contains(&name.as_str()) {
+            name.push_str("Message");
+        }
         if out.iter().any(|m| m.name == name) {
             continue;
         }

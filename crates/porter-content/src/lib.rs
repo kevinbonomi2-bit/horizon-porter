@@ -148,7 +148,45 @@ pub fn generate_with(
     };
     let mut seen = BTreeSet::new();
     let mut pipes: Vec<(String, Option<String>)> = Vec::new();
-    for reg in scan.registrations.iter().filter(|r| r.registry == "block") {
+    // Blocks and items the code registers in a way the scan can't read (built
+    // from a list at run time, a library's registrar): their resources name them.
+    // `assets/<ns>/blockstates/<name>.json` is a block, `items/<name>.json` an item.
+    let registered = |registry: &str, name: &str| {
+        scan.registrations
+            .iter()
+            .any(|r| r.registry == registry && r.id.as_deref() == Some(name))
+    };
+    let from_resources = |dir: &str, registry: &str| -> Vec<Registration> {
+        let prefix = format!("assets/{ns}/{dir}/");
+        content
+            .copies
+            .keys()
+            .filter_map(|k| k.strip_prefix(&prefix)?.strip_suffix(".json"))
+            .filter(|n| !n.contains('/') && valid_name(n) && !registered(registry, n))
+            .map(|n| Registration {
+                registry: registry.into(),
+                id: Some(n.to_string()),
+                via: "resources".into(),
+                class: String::new(),
+                creates: None,
+                args: String::new(),
+            })
+            .collect()
+    };
+    let resource_blocks = from_resources("blockstates", "block");
+    let resource_items: Vec<Registration> = from_resources("items", "item")
+        .into_iter()
+        .filter(|r| {
+            let n = r.id.as_deref().unwrap_or_default();
+            !registered("block", n) && !resource_blocks.iter().any(|b| b.id.as_deref() == Some(n))
+        })
+        .collect();
+    for reg in scan
+        .registrations
+        .iter()
+        .filter(|r| r.registry == "block")
+        .chain(resource_blocks.iter())
+    {
         let Some(block_name) = reg.id.as_deref().filter(|n| valid_name(n)) else {
             continue;
         };
@@ -183,10 +221,15 @@ pub fn generate_with(
             template_from =
                 format!("it opens a menu (`{menu}`): its template must open one, as {like} does");
         } else if template == DEFAULT_TEMPLATE
-            && let Some((t, why)) = template_for_states(&states)
+            && let Some((t, why)) = template_for_states(&states, block_name)
         {
             template = t.to_string();
             template_from = why;
+        }
+        if reg.via == "resources" {
+            template_from.push_str(
+                "; found by its blockstate file (the code registers it in a way the scan can't read): check its template",
+            );
         }
         // Not a full cube: it hides none of its neighbours' faces (Java culls by its
         // shape), and a pipe joins its neighbours as Horizon's connecting block does.
@@ -322,7 +365,12 @@ pub fn generate_with(
     }
     let blocks: BTreeSet<String> = content.blocks.iter().map(|b| b.name.clone()).collect();
     let mut seen = BTreeSet::new();
-    for reg in scan.registrations.iter().filter(|r| r.registry == "item") {
+    for reg in scan
+        .registrations
+        .iter()
+        .filter(|r| r.registry == "item")
+        .chain(resource_items.iter())
+    {
         let Some(item_name) = reg.id.as_deref().filter(|n| valid_name(n)) else {
             continue;
         };
@@ -404,11 +452,22 @@ fn block_template(scan: &ModScan, reg: &Registration, class: Option<&str>) -> (S
             }
             break;
         }
+        // A mod class named for what it is (`FirLeavesBlock`) counts too.
+        if let Some(template) = superclass_template(simple).filter(|_| guard > 1 || class.is_some())
+        {
+            return (template.to_string(), format!("{simple} is one"));
+        }
         next = scan
             .classes
             .iter()
             .find(|c| c.name == name)
             .and_then(|c| c.superclass.clone());
+    }
+    // A vanilla class made directly: `p -> new StandingSignBlock(WoodType.OAK, p)`.
+    if let Some(simple) = reg.creates.as_deref()
+        && let Some(template) = superclass_template(simple)
+    {
+        return (template.to_string(), format!("makes a {simple}"));
     }
     (DEFAULT_TEMPLATE.into(), "no template found: stone".into())
 }
@@ -449,12 +508,108 @@ fn template_properties(template: &str) -> Option<&'static [&'static str]> {
 /// A template that has a block's main state property, when it has no template.
 fn template_for_states(
     states: &BTreeMap<String, BTreeSet<String>>,
+    name: &str,
 ) -> Option<(&'static str, String)> {
     let only = |prop: &str, allowed: &[&str]| {
         states
             .get(prop)
             .is_some_and(|v| v.iter().all(|x| allowed.contains(&x.as_str())))
     };
+    let has = |prop: &str| states.contains_key(prop);
+    // Stone or wood, by its name: the sounds, tools and burning follow.
+    let stony = [
+        "stone",
+        "brick",
+        "cobble",
+        "tile",
+        "deepslate",
+        "basalt",
+        "blackstone",
+        "sandstone",
+        "marble",
+        "granite",
+        "slate",
+        "concrete",
+        "mud",
+        "rock",
+    ]
+    .iter()
+    .any(|w| name.contains(w));
+    let kind = |stone: &'static str, wood: &'static str, what: &str| {
+        Some((
+            if stony { stone } else { wood },
+            format!("its blockstates are a {what}'s"),
+        ))
+    };
+    if has("type") && only("type", &["top", "bottom", "double"]) {
+        return kind("minecraft:stone_slab", "minecraft:oak_slab", "slab");
+    }
+    if has("half") && has("shape") && has("facing") {
+        return kind("minecraft:stone_stairs", "minecraft:oak_stairs", "stairs");
+    }
+    if has("hinge") && has("open") {
+        return kind("minecraft:iron_door", "minecraft:oak_door", "door");
+    }
+    if has("in_wall") {
+        return Some((
+            "minecraft:oak_fence_gate",
+            "its blockstates are a fence gate's".into(),
+        ));
+    }
+    if has("open") && has("half") && has("facing") {
+        return kind(
+            "minecraft:iron_trapdoor",
+            "minecraft:oak_trapdoor",
+            "trapdoor",
+        );
+    }
+    if has("up") && only("north", &["none", "low", "tall"]) {
+        return Some((
+            "minecraft:cobblestone_wall",
+            "its blockstates are a wall's".into(),
+        ));
+    }
+    if only("north", &["true", "false"]) && has("east") && !has("up") {
+        return if name.contains("pane") || name.contains("bars") {
+            Some((
+                "minecraft:glass_pane",
+                "its blockstates are a pane's".into(),
+            ))
+        } else {
+            kind(
+                "minecraft:nether_brick_fence",
+                "minecraft:oak_fence",
+                "fence",
+            )
+        };
+    }
+    if has("face") && has("powered") {
+        return kind("minecraft:stone_button", "minecraft:oak_button", "button");
+    }
+    if has("powered") && states.len() == 1 {
+        return kind(
+            "minecraft:stone_pressure_plate",
+            "minecraft:oak_pressure_plate",
+            "pressure plate",
+        );
+    }
+    if has("distance") && has("persistent") {
+        return Some(("minecraft:oak_leaves", "its blockstates are leaves'".into()));
+    }
+    if has("stage") && states.len() == 1 {
+        return Some((
+            "minecraft:oak_sapling",
+            "its blockstates are a sapling's".into(),
+        ));
+    }
+    if has("age") && states.len() == 1 {
+        return Some(("minecraft:wheat", "its blockstates are a crop's".into()));
+    }
+    if states.is_empty()
+        && let Some(t) = name_template(name)
+    {
+        return Some((t, format!("its name (`{name}`) says what it is")));
+    }
     if only("axis", &["x", "y", "z"]) {
         return Some(("minecraft:oak_log", "its blockstates turn on `axis`".into()));
     }
@@ -622,8 +777,95 @@ fn superclass_template(simple: &str) -> Option<&'static str> {
         "ChestBlock" => "minecraft:chest",
         "BarrelBlock" => "minecraft:barrel",
         "AbstractFurnaceBlock" | "FurnaceBlock" => "minecraft:furnace",
-        _ => return None,
+        // A mod's own subclass, by its name's ending (`TintedParticleLeavesBlock`),
+        // the most particular first.
+        _ => {
+            const ENDINGS: &[(&str, &str)] = &[
+                ("WallHangingSignBlock", "minecraft:oak_wall_hanging_sign"),
+                ("CeilingHangingSignBlock", "minecraft:oak_hanging_sign"),
+                ("HangingSignBlock", "minecraft:oak_hanging_sign"),
+                ("WallSignBlock", "minecraft:oak_wall_sign"),
+                ("StandingSignBlock", "minecraft:oak_sign"),
+                ("SignBlock", "minecraft:oak_sign"),
+                ("ShelfBlock", "minecraft:oak_shelf"),
+                ("DoublePlantBlock", "minecraft:tall_grass"),
+                ("TallFlowerBlock", "minecraft:sunflower"),
+                ("TallGrassBlock", "minecraft:short_grass"),
+                ("BushBlock", "minecraft:short_grass"),
+                ("VegetationBlock", "minecraft:short_grass"),
+                ("FlowerBedBlock", "minecraft:pink_petals"),
+                ("PinkPetalsBlock", "minecraft:pink_petals"),
+                ("LeafLitterBlock", "minecraft:leaf_litter"),
+                ("WebBlock", "minecraft:cobweb"),
+                ("WaterlilyBlock", "minecraft:lily_pad"),
+                ("HugeMushroomBlock", "minecraft:brown_mushroom_block"),
+                ("AmethystClusterBlock", "minecraft:amethyst_cluster"),
+                ("GrowingPlantHeadBlock", "minecraft:weeping_vines"),
+                ("GrowingPlantBodyBlock", "minecraft:weeping_vines_plant"),
+                ("FenceGateBlock", "minecraft:oak_fence_gate"),
+                ("TrapDoorBlock", "minecraft:oak_trapdoor"),
+                ("TrapdoorBlock", "minecraft:oak_trapdoor"),
+                ("PressurePlateBlock", "minecraft:stone_pressure_plate"),
+                ("LeavesBlock", "minecraft:oak_leaves"),
+                ("SaplingBlock", "minecraft:oak_sapling"),
+                ("FlowerBlock", "minecraft:poppy"),
+                ("SlabBlock", "minecraft:stone_slab"),
+                ("StairBlock", "minecraft:stone_stairs"),
+                ("StairsBlock", "minecraft:stone_stairs"),
+                ("WallBlock", "minecraft:cobblestone_wall"),
+                ("FenceBlock", "minecraft:oak_fence"),
+                ("DoorBlock", "minecraft:oak_door"),
+                ("ButtonBlock", "minecraft:stone_button"),
+                ("PillarBlock", "minecraft:oak_log"),
+                ("LogBlock", "minecraft:oak_log"),
+                ("CropBlock", "minecraft:wheat"),
+                ("CropsBlock", "minecraft:wheat"),
+                ("VineBlock", "minecraft:vine"),
+                ("MushroomBlock", "minecraft:brown_mushroom"),
+                ("TorchBlock", "minecraft:torch"),
+                ("LanternBlock", "minecraft:lantern"),
+                ("CarpetBlock", "minecraft:white_carpet"),
+                ("LadderBlock", "minecraft:ladder"),
+                ("GlassBlock", "minecraft:glass"),
+                ("PaneBlock", "minecraft:glass_pane"),
+            ];
+            return ENDINGS
+                .iter()
+                .find(|(end, _)| simple.ends_with(end))
+                .map(|(_, t)| *t);
+        }
     })
+}
+
+/// A block known only by its id: a guess from its name's ending.
+fn name_template(name: &str) -> Option<&'static str> {
+    const ENDINGS: &[(&str, &str)] = &[
+        ("_leaves", "minecraft:oak_leaves"),
+        ("_sapling", "minecraft:oak_sapling"),
+        ("_planks", "minecraft:oak_planks"),
+        ("_log", "minecraft:oak_log"),
+        ("_wood", "minecraft:oak_wood"),
+        ("_stem", "minecraft:crimson_stem"),
+        ("_hyphae", "minecraft:crimson_hyphae"),
+        ("_glass", "minecraft:glass"),
+        ("_glass_pane", "minecraft:glass_pane"),
+        ("_wool", "minecraft:white_wool"),
+        ("_carpet", "minecraft:white_carpet"),
+        ("_ore", "minecraft:iron_ore"),
+        ("_sand", "minecraft:sand"),
+        ("_dirt", "minecraft:dirt"),
+        ("_flower", "minecraft:poppy"),
+        ("_mushroom", "minecraft:brown_mushroom"),
+        ("_vine", "minecraft:vine"),
+        ("_vines", "minecraft:vine"),
+        ("_torch", "minecraft:torch"),
+        ("_lantern", "minecraft:lantern"),
+        ("_ladder", "minecraft:ladder"),
+    ];
+    ENDINGS
+        .iter()
+        .find(|(end, _)| name.ends_with(end))
+        .map(|(_, t)| *t)
 }
 
 /// `Blocks.IRON_BLOCK` in `text` → `iron_block` (the first one).
@@ -851,12 +1093,56 @@ mod tests {
     }
 
     #[test]
+    fn guesses_templates_from_states_names_and_classes() {
+        let states = |pairs: &[(&str, &[&str])]| -> BTreeMap<String, BTreeSet<String>> {
+            pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.iter().map(|x| x.to_string()).collect()))
+                .collect()
+        };
+        let slab = states(&[("type", &["top", "bottom", "double"])]);
+        assert_eq!(
+            template_for_states(&slab, "fir_slab").unwrap().0,
+            "minecraft:oak_slab"
+        );
+        assert_eq!(
+            template_for_states(&slab, "orpiment_brick_slab").unwrap().0,
+            "minecraft:stone_slab"
+        );
+        let door = states(&[("hinge", &["left", "right"]), ("open", &["true", "false"])]);
+        assert_eq!(
+            template_for_states(&door, "fir_door").unwrap().0,
+            "minecraft:oak_door"
+        );
+        assert_eq!(
+            template_for_states(&states(&[]), "fir_leaves").unwrap().0,
+            "minecraft:oak_leaves"
+        );
+        assert_eq!(
+            superclass_template("TintedParticleLeavesBlock"),
+            Some("minecraft:oak_leaves")
+        );
+        assert_eq!(
+            superclass_template("CeilingHangingSignBlock"),
+            Some("minecraft:oak_hanging_sign")
+        );
+        assert_eq!(
+            superclass_template("FenceGateBlock"),
+            Some("minecraft:oak_fence_gate")
+        );
+        assert_eq!(superclass_template("SomethingElse"), None);
+    }
+
+    #[test]
     fn reads_blockstate_properties() {
         let variants = serde_json::json!({ "variants": {
             "axis=x,powered=false": {}, "axis=y,powered=true": {}, "axis=z,powered=false": {} } });
         let p = blockstate_properties(&variants);
         assert_eq!(p["axis"].len(), 3);
-        assert_eq!(template_for_states(&p).unwrap().0, "minecraft:oak_log");
+        assert_eq!(
+            template_for_states(&p, "log").unwrap().0,
+            "minecraft:oak_log"
+        );
         let mut skipped = Vec::new();
         let (declared, default) = declared_states("minecraft:oak_log", &p, "shaft", &mut skipped);
         assert_eq!(declared.keys().collect::<Vec<_>>(), ["powered"]);
@@ -873,7 +1159,7 @@ mod tests {
         let p = blockstate_properties(&multipart);
         assert_eq!(p.keys().collect::<Vec<_>>(), ["facing", "level", "north"]);
         // `up` is no horizontal facing: no template from it.
-        assert!(template_for_states(&p).is_none());
+        assert!(template_for_states(&p, "thing").is_none());
         let (decl, default) = declare(&p["level"]);
         assert_eq!(decl["values"], serde_json::json!(["1", "2", "10"]));
         assert_eq!(default, "1");

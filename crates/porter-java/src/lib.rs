@@ -883,19 +883,41 @@ fn registrations(parsed: &[(String, ParsedFile)]) -> Vec<Registration> {
     let mut inferred = Vec::new();
     for (_, file) in parsed {
         for call in &file.calls {
-            let Some(id) = call.first_string.clone() else {
+            // The id: its first literal that reads as one, wherever it is
+            // (`register(func, "blood", p -> new BloodBlock(...), props)`).
+            let Some(id) = call
+                .literal_args
+                .iter()
+                .flatten()
+                .find(|a| valid_id(a))
+                .cloned()
+            else {
                 continue;
             };
-            // An unqualified call to a method of the mod's own, not a registry's.
+            // An unqualified call to a method of the mod's own, or a library
+            // registrar's `register...` (Balm's `blocks.register("warp_plate", ...)`).
             let own = call.object.is_empty()
                 && file.methods.iter().any(|m| m.name == call.method)
                 && !helpers.contains_key(&(call.enclosing.clone(), call.method.clone()));
-            if !own || !valid_id(&id) {
+            let registrar = !call.object.is_empty() && call.method.starts_with("register");
+            if !own && !registrar {
                 continue;
             }
             let Some(creates) = created_class(&call.args) else {
                 continue;
             };
+            // Through a library's registrar, only the mod's own classes: a call that
+            // names a vanilla class (`register("shulker_box", ShulkerBoxBlockEntity::new)`)
+            // is about it, not a registration of the mod's.
+            let simple = creates.rsplit('.').next().unwrap_or(&creates);
+            if !own
+                && !supers.contains_key(simple)
+                && !parsed
+                    .iter()
+                    .any(|(_, f)| f.types.iter().any(|t| t.name == simple))
+            {
+                continue;
+            }
             let Some(registry) = kind_of(&creates) else {
                 continue;
             };
