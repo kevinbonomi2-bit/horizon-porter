@@ -230,12 +230,11 @@ pub fn generate_with(
         let (mut template, mut template_from) = block_template(scan, reg, class.as_deref());
         let mut properties = block_properties(&reg.args);
         // The state properties its blockstate file draws it by.
-        let states = content
-            .copies
-            .get(&format!("assets/{ns}/blockstates/{block_name}.json"))
-            .and_then(|p| std::fs::read_to_string(p).ok())
-            .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
-            .map(|j| blockstate_properties(&j))
+        let blockstate_path = format!("assets/{ns}/blockstates/{block_name}.json");
+        let blockstate = resource_json(&content, &blockstate_path);
+        let states = blockstate
+            .as_ref()
+            .map(blockstate_properties)
             .unwrap_or_default();
         if let Some(menu) = machines.get(block_name) {
             let horizontal = states.get("facing").is_some_and(|v| {
@@ -354,6 +353,14 @@ pub fn generate_with(
             format!("data/{ns}/horizon/block/{block_name}.json"),
             pretty(&json),
         );
+        // A value the template stores that the blockstate never draws gets a variant.
+        if let Some(filled) = vanilla_block(&template)
+            .zip(blockstate.as_ref())
+            .and_then(|(v, b)| fill_variants(b, &v.properties))
+        {
+            content.copies.remove(&blockstate_path);
+            content.files.insert(blockstate_path, pretty(&filled));
+        }
         content.blocks.push(Block {
             name: block_name.to_string(),
             template,
@@ -744,7 +751,8 @@ const DEFAULT_TEMPLATE: &str = "minecraft:stone";
 /// A vanilla block: its state properties, and whether it has an item.
 pub struct VanillaBlock {
     pub item: bool,
-    pub properties: Vec<String>,
+    /// Its state properties, each with its values.
+    pub properties: BTreeMap<String, Vec<String>>,
 }
 
 /// The game's blocks (26.3), from `data/vanilla-blocks.json` (`tools/vanilla_blocks.py`).
@@ -764,10 +772,18 @@ fn vanilla_block(id: &str) -> Option<&'static VanillaBlock> {
                         VanillaBlock {
                             item: v["item"].as_bool().unwrap_or(true),
                             properties: v["properties"]
-                                .as_array()
+                                .as_object()
                                 .into_iter()
                                 .flatten()
-                                .filter_map(|p| p.as_str().map(str::to_string))
+                                .map(|(k, vals)| {
+                                    let vals = vals
+                                        .as_array()
+                                        .into_iter()
+                                        .flatten()
+                                        .filter_map(|x| x.as_str().map(str::to_string))
+                                        .collect();
+                                    (k.clone(), vals)
+                                })
                                 .collect(),
                         },
                     )
@@ -775,6 +791,85 @@ fn vanilla_block(id: &str) -> Option<&'static VanillaBlock> {
                 .collect()
         })
         .get(id)
+}
+
+/// A resource file of the content mod as JSON: generated, else copied.
+fn resource_json(content: &Content, path: &str) -> Option<serde_json::Value> {
+    let text = match content.files.get(path) {
+        Some(t) => t.clone(),
+        None => std::fs::read_to_string(content.copies.get(path)?).ok()?,
+    };
+    serde_json::from_str(text.trim_start_matches('\u{feff}')).ok()
+}
+
+/// A blockstate file's `variants` with one for each value of the template's state
+/// properties it draws by but never names: that value draws as its opposite
+/// (`south` as `north`), else as the first value it names. Java folds such values
+/// in code (Macaw's windows store `north` for a window placed facing south, which
+/// looks the same), where the template stores them as they are, and a state with
+/// no variant draws nothing. None when nothing is missing.
+fn fill_variants(
+    blockstate: &serde_json::Value,
+    template: &BTreeMap<String, Vec<String>>,
+) -> Option<serde_json::Value> {
+    let mut variants = blockstate.get("variants")?.as_object()?.clone();
+    let parse = |key: &str| -> Vec<(String, String)> {
+        key.split(',')
+            .filter_map(|c| c.split_once('='))
+            .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
+            .collect()
+    };
+    let opposite = |v: &str| match v {
+        "north" => Some("south"),
+        "south" => Some("north"),
+        "east" => Some("west"),
+        "west" => Some("east"),
+        "up" => Some("down"),
+        "down" => Some("up"),
+        _ => None,
+    };
+    let mut changed = false;
+    for (prop, values) in template {
+        let named: BTreeSet<String> = variants
+            .keys()
+            .flat_map(|k| parse(k))
+            .filter(|(k, _)| k == prop)
+            .map(|(_, v)| v)
+            .collect();
+        let Some(first) = named.iter().next().cloned() else {
+            continue;
+        };
+        for missing in values.iter().filter(|v| !named.contains(*v)) {
+            let like = opposite(missing)
+                .filter(|o| named.contains(*o))
+                .map_or(first.clone(), str::to_string);
+            let added: Vec<(String, serde_json::Value)> = variants
+                .iter()
+                .filter_map(|(key, model)| {
+                    let parts = parse(key);
+                    parts.iter().any(|(k, v)| k == prop && *v == like).then(|| {
+                        let key = parts
+                            .iter()
+                            .map(|(k, v)| format!("{k}={}", if k == prop { missing } else { v }))
+                            .collect::<Vec<_>>()
+                            .join(",");
+                        (key, model.clone())
+                    })
+                })
+                .collect();
+            for (key, model) in added {
+                if !variants.contains_key(&key) {
+                    variants.insert(key, model);
+                    changed = true;
+                }
+            }
+        }
+    }
+    changed.then(|| {
+        let mut filled = blockstate.clone();
+        filled["variants"] = serde_json::Value::Object(variants);
+        filled
+    })
 }
 
 /// Whether `template` has any of the state properties a blockstate file draws by.
@@ -803,7 +898,7 @@ fn growing_plant_stand_in(template: &str) -> Option<&'static str> {
 fn template_properties(template: &str) -> Option<Vec<&'static str>> {
     // Every vanilla block's, from the game's block facts.
     if let Some(b) = vanilla_block(template) {
-        return Some(b.properties.iter().map(String::as_str).collect());
+        return Some(b.properties.keys().map(String::as_str).collect());
     }
     template_properties_known(template).map(<[&str]>::to_vec)
 }
@@ -1578,10 +1673,32 @@ mod tests {
     }
 
     #[test]
+    fn fills_the_variants_a_template_stores() {
+        // Macaw's window draws north and east only; a carved pumpkin stores four ways.
+        let window = serde_json::json!({ "variants": {
+            "facing=north,part=base": { "model": "w:single" },
+            "facing=east,part=base": { "model": "w:single", "y": 90 },
+        }});
+        let pumpkin = &vanilla_block("minecraft:carved_pumpkin")
+            .unwrap()
+            .properties;
+        let filled = fill_variants(&window, pumpkin).unwrap();
+        let v = &filled["variants"];
+        assert_eq!(v["facing=south,part=base"], v["facing=north,part=base"]);
+        assert_eq!(v["facing=west,part=base"]["y"], 90);
+        // A file that draws every value is left as it is.
+        let full = fill_variants(&filled, pumpkin);
+        assert!(full.is_none());
+        // One drawn by multipart, or not by `facing`, too.
+        assert!(fill_variants(&serde_json::json!({ "variants": { "": {} } }), pumpkin).is_none());
+    }
+
+    #[test]
     fn knows_the_games_blocks() {
         let door = vanilla_block("minecraft:oak_door").unwrap();
         assert!(door.item);
-        assert!(door.properties.iter().any(|p| p == "hinge"));
+        assert!(door.properties.contains_key("hinge"));
+        assert_eq!(door.properties["half"], ["lower", "upper"]);
         // Horizon refuses a block item copying a block without one.
         assert!(!vanilla_block("minecraft:weeping_vines_plant").unwrap().item);
         assert!(!vanilla_block("minecraft:potted_poppy").unwrap().item);
