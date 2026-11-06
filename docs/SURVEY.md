@@ -33,19 +33,24 @@ What the report says before porting, from what each mod's Mixins change:
 
 ### Content
 
-| Mod | Blocks | Items | Block entities | Left to port |
-| --- | --- | --- | --- | --- |
-| BetterNether | 678 | 88 | 4 | 5 |
-| Biomes O' Plenty | 493 | 33 | 1 | 1 |
-| Farmer's Delight (Refabricated) | 139 | 91 | 6 | 26 |
-| BetterEnd | 100 | 11 | 6 | 19 |
-| Traveler's Backpack | 60 | 20 | 1 | 32 |
-| Waystones | 31 | 19 | 6 | 52 |
-| Lootr | 15 | 0 | 0 | 9 |
-| Tom's Simple Storage | 15 | 7 | 11 | 19 |
-| Sophisticated Backpacks | 6 | 65 | 1 | 35 |
+| Mod | Blocks | Items | Block entities | Mobs | Left to port |
+| --- | --- | --- | --- | --- | --- |
+| BetterNether | 678 | 88 | 4 | 6 | 5 |
+| Biomes O' Plenty | 493 | 33 | 1 | 0 | 1 |
+| Farmer's Delight (Refabricated) | 139 | 91 | 6 | 0 | 26 |
+| BetterEnd | 100 | 11 | 6 | 6 | 19 |
+| Traveler's Backpack | 60 | 20 | 1 | 0 | 32 |
+| Waystones | 31 | 19 | 6 | 0 | 52 |
+| Lootr | 15 | 0 | 0 | 0 | 9 |
+| Tom's Simple Storage | 15 | 7 | 11 | 0 | 19 |
+| Sophisticated Backpacks | 6 | 65 | 1 | 0 | 35 |
+| Guard Villagers | 0 | 2 | 0 | 1 | 7 |
 
-1,537 blocks, 339 items and 36 block entities in all. Each block copies the vanilla
+1,537 blocks, 339 items, 36 block entities and 13 mobs in all. Each mob copies the
+vanilla mob Horizon offers that it is most like (hostile ones a zombie, other
+creatures a wandering trader, villagers a villager) with its own health, speed,
+armor and attack; mob effects keep their category and color (Farmer's Delight's
+Comfort and Nourishment, BetterEnd's End Veil). Each block copies the vanilla
 block it is most like (from its Java class, its properties, its blockstate file or
 its name): Biomes O' Plenty's slabs, stairs, doors, fences, leaves, saplings, signs
 and shelves copy theirs, 80 of its 493 blocks are left on stone, mostly blocks that
@@ -71,6 +76,9 @@ With Claude Haiku a mod like Tom's Simple Storage costs about $0.05 to translate
   sentences, a message named `Payload`, two messages on one channel.
 - **The report** calls performance mods partly portable: their Mixins patch the
   game's internals, and Horizon is its own engine.
+- **Mobs and mob effects** port as Horizon's entity types and effects (they didn't
+  before), and Farmer's Delight's ids kept in constants, `reg...` registrars, food
+  and 26.x's colored blocks are read.
 
 ## What to target next
 
@@ -78,7 +86,9 @@ With Claude Haiku a mod like Tom's Simple Storage costs about $0.05 to translate
    app translates them for a few cents, but only with a Claude API key or a local
    model; making that step need no setup is the largest remaining step to
    instant porting.
-2. **Entities.** Mods' mobs (BetterEnd's, BetterNether's) are not ported yet.
+2. **Mobs' looks and behaviour.** A mod's mob now exists, with its stats, but it
+   looks and acts like the vanilla mob it copies until its model, renderer and AI
+   are ported (`mob_submit`, goals). Projectiles aren't ported yet.
 3. **Rendering mods** (26 "not portable yet") need Horizon's renderer to open up:
    shaders, culling, entity models. That is work for Horizon, not the porter.
 4. **Checking content in game.** The survey proves ports build; whether every block

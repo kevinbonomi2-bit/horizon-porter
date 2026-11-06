@@ -160,7 +160,8 @@ scenarios we check.
   the live test of transfers and kinetics.
 - **Real mods (2026-11-05):** `tools/survey.py` ported 100 popular 26.3 mods from
   Modrinth: all 100 port, 97 with code that compiles against the Horizon API mock,
-  1,537 blocks and 339 items carried over from 12 content mods. The fixes it led to
+  1,537 blocks, 339 items, 36 block entities and 13 mobs carried over from 12
+  content mods. The fixes it led to
   and what to target next are in [SURVEY.md](SURVEY.md).
 
 ## Working with Horizon
