@@ -177,6 +177,11 @@ CHECKER: Path | None = None
 VANILLA = json.loads((ROOT / "crates" / "porter-content" / "data" / "vanilla-blocks.json").read_text(encoding="utf-8"))
 
 
+GROWING_PLANTS = {
+    f"minecraft:{p}{s}" for p in ("kelp", "cave_vines", "twisting_vines", "weeping_vines") for s in ("", "_plant")
+}
+
+
 def registry_problems(content: Path) -> list[str]:
     out = []
     # Horizon reads JSON strictly: no byte order mark, nothing malformed.
@@ -196,6 +201,10 @@ def registry_problems(content: Path) -> list[str]:
         if v is None:
             out.append(f"{f.name}: template {t} is not a block")
             continue
+        # Horizon's growing-plant survival rule knows these by name only: a world
+        # won't open with a block copying one.
+        if t in GROWING_PLANTS:
+            out.append(f"{f.name}: template {t} is a growing plant")
         if b.get("item", True) and not v["item"]:
             out.append(f"{f.name}: template {t} has no item")
         for p in b.get("state_properties", {}):

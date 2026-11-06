@@ -291,6 +291,12 @@ pub fn generate_with(
             template_from = format!("{template} is not a block of 26.3: stone ({template_from})");
             template = DEFAULT_TEMPLATE.into();
         }
+        if let Some(stand_in) = growing_plant_stand_in(&template) {
+            template_from = format!(
+                "{stand_in}: {template} grows only as itself in Horizon ({template_from})"
+            );
+            template = stand_in.into();
+        }
         let (declared, default_state) =
             declared_states(&template, &states, block_name, &mut content.skipped);
         let mut json = serde_json::json!({ "template": template });
@@ -641,6 +647,21 @@ fn vanilla_block(id: &str) -> Option<&'static VanillaBlock> {
         .get(id)
 }
 
+/// A block for a mod block to copy in place of a growing plant's (kelp, cave,
+/// twisting and weeping vines, head or body). Horizon's survival rule for those
+/// pairs a head with its body by the block's own name, and a world refuses to
+/// open with a block copying one ("unknown growing plant family",
+/// horizon-world `block_survival.rs`). The stand-ins hang, stand or sway alike.
+fn growing_plant_stand_in(template: &str) -> Option<&'static str> {
+    Some(match template {
+        "minecraft:cave_vines" | "minecraft:cave_vines_plant" | "minecraft:weeping_vines"
+        | "minecraft:weeping_vines_plant" => "minecraft:hanging_roots",
+        "minecraft:twisting_vines" | "minecraft:twisting_vines_plant" => "minecraft:nether_sprouts",
+        "minecraft:kelp" | "minecraft:kelp_plant" => "minecraft:seagrass",
+        _ => return None,
+    })
+}
+
 fn template_properties(template: &str) -> Option<Vec<&'static str>> {
     // Every vanilla block's, from the game's block facts.
     if let Some(b) = vanilla_block(template) {
@@ -973,8 +994,9 @@ fn superclass_template(simple: &str) -> Option<&'static str> {
                 ("WaterlilyBlock", "minecraft:lily_pad"),
                 ("HugeMushroomBlock", "minecraft:brown_mushroom_block"),
                 ("AmethystClusterBlock", "minecraft:amethyst_cluster"),
-                ("GrowingPlantHeadBlock", "minecraft:weeping_vines"),
-                ("GrowingPlantBodyBlock", "minecraft:weeping_vines_plant"),
+                // Not the vines themselves: see `growing_plant_stand_in`.
+                ("GrowingPlantHeadBlock", "minecraft:hanging_roots"),
+                ("GrowingPlantBodyBlock", "minecraft:hanging_roots"),
                 ("FenceGateBlock", "minecraft:oak_fence_gate"),
                 ("TrapDoorBlock", "minecraft:oak_trapdoor"),
                 ("TrapdoorBlock", "minecraft:oak_trapdoor"),
@@ -1402,6 +1424,12 @@ mod tests {
         assert!(!vanilla_block("minecraft:weeping_vines_plant").unwrap().item);
         assert!(!vanilla_block("minecraft:potted_poppy").unwrap().item);
         assert!(vanilla_block("minecraft:wool").is_none());
+        // A world won't open with a block copying a growing plant.
+        for vines in ["minecraft:weeping_vines_plant", "minecraft:kelp", "minecraft:twisting_vines"] {
+            let stand_in = growing_plant_stand_in(vines).unwrap();
+            assert!(vanilla_block(stand_in).unwrap().item, "{stand_in}");
+        }
+        assert!(growing_plant_stand_in("minecraft:vine").is_none());
         assert_eq!(
             template_properties("minecraft:stone").unwrap(),
             Vec::<&str>::new()
