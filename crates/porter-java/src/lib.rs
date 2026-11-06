@@ -235,6 +235,12 @@ fn network_and_config(root: &Path, scan: &mut ModScan) {
             opened_by,
         });
     }
+    // Which way blocks face when placed.
+    for (name, text) in &sources {
+        if let Some(turns) = machines::placement_turns(text) {
+            scan.placements.push((name.clone(), turns));
+        }
+    }
     // Creative tabs.
     for (_, text) in &sources {
         scan.creative_tabs.extend(netconf::creative_tabs(text));
@@ -409,6 +415,7 @@ fn assemble(
         custom_screens: Vec::new(),
         standalone_models: Vec::new(),
         creative_tabs: Vec::new(),
+        placements: Vec::new(),
         storages: Vec::new(),
         block_shapes: Vec::new(),
         mobs: Vec::new(),

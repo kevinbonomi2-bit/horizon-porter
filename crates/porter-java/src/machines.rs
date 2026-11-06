@@ -359,6 +359,47 @@ pub fn renderer(class: &str, source: &str) -> Option<RendererInfo> {
     None
 }
 
+/// How a block class turns its `facing` from the player's look when placed, in
+/// quarter turns clockwise: its `getStateForPlacement` sets `FACING` to
+/// `context.getHorizontalDirection()` (0, away from the player), with
+/// `.getClockWise()` (1), `.getOpposite()` (2) or `.getCounterClockWise()` (3)
+/// after it, directly or through a local (`Direction d = context.getHorizontalDirection();`).
+pub(crate) fn placement_turns(source: &str) -> Option<u8> {
+    let i = source.find("getStateForPlacement(BlockPlaceContext")?;
+    let open = i + source[i..].find('{')?;
+    let body = balanced_braces(&source[open..])?;
+    let turns = |e: &str| {
+        ((e.matches(".getClockWise()").count()
+            + 2 * e.matches(".getOpposite()").count()
+            + 3 * e.matches(".getCounterClockWise()").count())
+            % 4) as u8
+    };
+    for args in calls(body, "setValue") {
+        let parts = split_top(&args);
+        let [prop, value] = parts.as_slice() else {
+            continue;
+        };
+        if !prop.trim().ends_with("FACING") {
+            continue;
+        }
+        let value = value.trim();
+        if value.contains("getHorizontalDirection()") {
+            return Some(turns(value));
+        }
+        // A local set from the look: `direction.getOpposite()`.
+        let var = value.split('.').next()?.trim();
+        if var.is_empty() || !var.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            return None;
+        }
+        let at = body.find(&format!(" {var} = "))?;
+        let init = &body[at..at + body[at..].find(';')?];
+        return init
+            .contains("getHorizontalDirection()")
+            .then(|| (turns(init) + turns(value)) % 4);
+    }
+    None
+}
+
 /// The argument text of each call to `name` in `source` (`name(` ... `)`).
 pub(crate) fn calls(source: &str, name: &str) -> Vec<String> {
     let mut out = Vec::new();
@@ -470,6 +511,24 @@ fn first_int(text: &str) -> Option<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_which_way_blocks_face_when_placed() {
+        let curtain = "public BlockState getStateForPlacement(BlockPlaceContext context) {
+            return this.defaultBlockState().setValue(FACING, context.getHorizontalDirection().getClockWise());
+        }";
+        assert_eq!(placement_turns(curtain), Some(1));
+        let window = "public BlockState getStateForPlacement(BlockPlaceContext context) {
+            return this.state(context).setValue(FACING, context.getHorizontalDirection());
+        }";
+        assert_eq!(placement_turns(window), Some(0));
+        let local = "public BlockState getStateForPlacement(BlockPlaceContext ctx) {
+            Direction direction = ctx.getHorizontalDirection();
+            return this.defaultBlockState().setValue(HINGE, left).setValue(HORIZONTAL_FACING, direction.getOpposite());
+        }";
+        assert_eq!(placement_turns(local), Some(2));
+        assert_eq!(placement_turns("no placement here"), None);
+    }
 
     #[test]
     fn reads_mob_attributes_and_effects() {

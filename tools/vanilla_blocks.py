@@ -8,6 +8,8 @@ vine's body, a portal has none, and Horizon refuses a block item copying one).
 
     python tools/vanilla_blocks.py [<folder holding facts.json>]
 
+It also writes vanilla-models.json: each block model's parent and boxes.
+
 Without a folder it takes the newest `.local/horizon-client/26.3` the launcher has.
 """
 
@@ -18,6 +20,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "crates" / "porter-content" / "data" / "vanilla-blocks.json"
+MODELS = ROOT / "crates" / "porter-content" / "data" / "vanilla-models.json"
 
 
 def facts_folder() -> Path:
@@ -44,7 +47,9 @@ def main() -> None:
         props = info.get("properties") or {}
         if name not in blocks:
             item = rows[i].get("item") not in (None, "minecraft:air")
-            blocks[name] = {"item": item, "properties": {}}
+            blocks[name] = {"item": item, "properties": {}, "full_cube": True}
+        if rows[i].get("outline") != [[0.0, 0.0, 0.0, 1.0, 1.0, 1.0]]:
+            blocks[name]["full_cube"] = False
         for k, v in props.items():
             blocks[name]["properties"].setdefault(k, set()).add(str(v))
     for b in blocks.values():
@@ -52,6 +57,20 @@ def main() -> None:
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(json.dumps(blocks, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
     print(f"{len(blocks)} blocks, {sum(not b['item'] for b in blocks.values())} without an item, to {OUT}")
+    # Each vanilla block model's parent and boxes, which a mod's models inherit
+    # (`block/cube_all`, `block/cross`): the porter takes a block's shape from them.
+    models = {}
+    base = folder / "assets" / "minecraft" / "models" / "block"
+    for f in sorted(base.glob("**/*.json")):
+        m = json.loads(f.read_text(encoding="utf-8"))
+        entry = {}
+        if "parent" in m:
+            entry["parent"] = m["parent"]
+        if "elements" in m:
+            entry["elements"] = [e["from"] + e["to"] for e in m["elements"]]
+        models["minecraft:block/" + f.relative_to(base).with_suffix("").as_posix()] = entry
+    MODELS.write_text(json.dumps(models, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
+    print(f"{len(models)} block models to {MODELS}")
 
 
 if __name__ == "__main__":

@@ -231,6 +231,11 @@ pub struct ModScan {
     /// (`ModelEvent.RegisterStandalone`, `PartialModel`): `grind:block/crusher_wheel`.
     #[serde(default)]
     pub standalone_models: Vec<String>,
+    /// How block classes turn their `facing` when placed (`getStateForPlacement`):
+    /// (class, quarter turns clockwise from the way the player looks), so
+    /// `context.getHorizontalDirection().getOpposite()` is 2 (toward the player).
+    #[serde(default)]
+    pub placements: Vec<(String, u8)>,
     /// The mod's creative inventory tabs, in the order its code builds them.
     #[serde(default)]
     pub creative_tabs: Vec<CreativeTabInfo>,

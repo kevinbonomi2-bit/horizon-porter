@@ -214,6 +214,13 @@ pub fn generate_with(
             !registered("block", n) && !resource_blocks.iter().any(|b| b.id.as_deref() == Some(n))
         })
         .collect();
+    let all_blocks: BTreeSet<String> = scan
+        .registrations
+        .iter()
+        .filter(|r| r.registry == "block")
+        .chain(resource_blocks.iter())
+        .filter_map(|r| r.id.clone())
+        .collect();
     for reg in scan
         .registrations
         .iter()
@@ -333,6 +340,23 @@ pub fn generate_with(
         if !item {
             json["item"] = false.into();
         }
+        // A sign's item places the mod's own wall form (`fir_wall_sign` beside
+        // `fir_sign`), not the template's oak one.
+        let wall =
+            if template.ends_with("_hanging_sign") && !template.ends_with("_wall_hanging_sign") {
+                block_name
+                    .strip_suffix("_hanging_sign")
+                    .map(|w| format!("{w}_wall_hanging_sign"))
+            } else if template.ends_with("_sign") && !template.ends_with("_wall_sign") {
+                block_name
+                    .strip_suffix("_sign")
+                    .map(|w| format!("{w}_wall_sign"))
+            } else {
+                None
+            };
+        if let Some(wall) = wall.filter(|w| all_blocks.contains(w.as_str())) {
+            json["wall_block"] = format!("{ns}:{wall}").into();
+        }
         if let Some(thickness) = connecting {
             json["connects_to"] = format!("#{ns}:{block_name}_connects").into();
             json["thickness"] = thickness.into();
@@ -354,12 +378,84 @@ pub fn generate_with(
             pretty(&json),
         );
         // A value the template stores that the blockstate never draws gets a variant.
+        let mut blockstate = blockstate;
+        let mut rewritten = false;
         if let Some(filled) = vanilla_block(&template)
             .zip(blockstate.as_ref())
             .and_then(|(v, b)| fill_variants(b, &v.properties))
         {
+            blockstate = Some(filled);
+            rewritten = true;
+        }
+        // Placed facing as Java places it: the template turns `facing` from the
+        // player's look its own way (a carved pumpkin toward the player), the Java
+        // block its way (Macaw's curtain a quarter turn clockwise), so each stored
+        // facing draws what Java draws for the facing it would have stored.
+        if let (Some(java), Some(own)) = (
+            placement_of(scan, class.as_deref()),
+            template_turns(&template),
+        ) && java != own
+            && let Some(turned) = blockstate
+                .as_ref()
+                .and_then(|b| turn_facing(b, (java + 4 - own) % 4))
+        {
+            blockstate = Some(turned);
+            rewritten = true;
+            template_from.push_str(&format!(
+                "; placed facing as Java places it ({} quarter turns from {template}'s)",
+                (java + 4 - own) % 4
+            ));
+        }
+        if rewritten && let Some(b) = blockstate.as_ref() {
             content.copies.remove(&blockstate_path);
-            content.files.insert(blockstate_path, pretty(&filled));
+            content.files.insert(blockstate_path.clone(), pretty(b));
+        }
+        // A block that isn't a whole block, on a template that is (a curtain on a
+        // carved pumpkin, a bud on stone), takes its outline and collision from
+        // its own models, as Java's shapes follow them.
+        // A shutter on a trapdoor stands upright where the trapdoor lies flat.
+        let shutter = template.ends_with("_trapdoor") && states.contains_key("hinge");
+        if connecting.is_none()
+            && let Some(v) = vanilla_block(&template).filter(|v| v.full_cube || shutter)
+            && let Some(b) = blockstate.as_ref()
+        {
+            let mut schema: BTreeMap<String, BTreeSet<String>> = v
+                .properties
+                .iter()
+                .map(|(k, vals)| (k.clone(), vals.iter().cloned().collect()))
+                .collect();
+            for (k, d) in json
+                .get("state_properties")
+                .and_then(|d| d.as_object())
+                .into_iter()
+                .flatten()
+            {
+                let values: BTreeSet<String> = match d["type"].as_str() {
+                    Some("boolean") => ["false", "true"].map(String::from).into(),
+                    _ => d["values"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|x| x.as_str().map(str::to_string))
+                        .collect(),
+                };
+                schema.insert(k.clone(), values);
+            }
+            if let Some((outline, collision)) = model_shapes(&content, b, &schema) {
+                json["shapes"] = outline;
+                if let Some(c) = collision {
+                    json["collision_shapes"] = c;
+                }
+                if !properties.contains_key("occludes") {
+                    properties.insert("occludes".into(), false.into());
+                    json["properties"] = serde_json::Value::Object(properties.clone());
+                }
+                template_from.push_str("; its shape from its models");
+                content.files.insert(
+                    format!("data/{ns}/horizon/block/{block_name}.json"),
+                    pretty(&json),
+                );
+            }
         }
         content.blocks.push(Block {
             name: block_name.to_string(),
@@ -753,6 +849,8 @@ pub struct VanillaBlock {
     pub item: bool,
     /// Its state properties, each with its values.
     pub properties: BTreeMap<String, Vec<String>>,
+    /// Whether every state's outline is the whole block.
+    pub full_cube: bool,
 }
 
 /// The game's blocks (26.3), from `data/vanilla-blocks.json` (`tools/vanilla_blocks.py`).
@@ -771,6 +869,7 @@ fn vanilla_block(id: &str) -> Option<&'static VanillaBlock> {
                         k.clone(),
                         VanillaBlock {
                             item: v["item"].as_bool().unwrap_or(true),
+                            full_cube: v["full_cube"].as_bool().unwrap_or(true),
                             properties: v["properties"]
                                 .as_object()
                                 .into_iter()
@@ -870,6 +969,333 @@ fn fill_variants(
         filled["variants"] = serde_json::Value::Object(variants);
         filled
     })
+}
+
+/// How a Java block class turns its `facing` when placed (its own
+/// `getStateForPlacement`, else the nearest superclass's): quarter turns
+/// clockwise from the way the player looks.
+fn placement_of(scan: &ModScan, class: Option<&str>) -> Option<u8> {
+    let mut name = class.map(str::to_string);
+    for _ in 0..16 {
+        let n = name.take()?;
+        if let Some((_, turns)) = scan.placements.iter().find(|(c, _)| *c == n) {
+            return Some(*turns);
+        }
+        name = scan
+            .classes
+            .iter()
+            .find(|c| c.name == n)?
+            .superclass
+            .clone();
+    }
+    None
+}
+
+/// The same for a template, when the porter knows it: the carved pumpkin and
+/// the furnaces face the player, stairs, doors and gates the way they look.
+fn template_turns(template: &str) -> Option<u8> {
+    match template {
+        "minecraft:carved_pumpkin"
+        | "minecraft:jack_o_lantern"
+        | "minecraft:furnace"
+        | "minecraft:blast_furnace"
+        | "minecraft:smoker"
+        | "minecraft:oak_trapdoor"
+        | "minecraft:iron_trapdoor" => Some(2),
+        "minecraft:oak_stairs"
+        | "minecraft:stone_stairs"
+        | "minecraft:oak_door"
+        | "minecraft:iron_door"
+        | "minecraft:oak_fence_gate" => Some(0),
+        _ => None,
+    }
+}
+
+/// A blockstate whose variant for each horizontal `facing` is the one it had
+/// for that facing turned `turns` quarter turns clockwise. None for one not
+/// drawn by `facing` variants.
+fn turn_facing(blockstate: &serde_json::Value, turns: u8) -> Option<serde_json::Value> {
+    const RING: [&str; 4] = ["north", "east", "south", "west"];
+    let variants = blockstate.get("variants")?.as_object()?;
+    let mut out = serde_json::Map::new();
+    let mut any = false;
+    for (key, model) in variants {
+        // This variant now draws the facing `turns` quarter turns counterclockwise.
+        let parts: Vec<String> = key
+            .split(',')
+            .map(|c| match c.split_once('=') {
+                Some((k, v)) if k.trim() == "facing" => {
+                    match RING.iter().position(|d| *d == v.trim()) {
+                        Some(i) => {
+                            any = true;
+                            format!("facing={}", RING[(i + 4 - turns as usize) % 4])
+                        }
+                        None => c.to_string(),
+                    }
+                }
+                _ => c.to_string(),
+            })
+            .collect();
+        out.insert(parts.join(","), model.clone());
+    }
+    any.then(|| {
+        let mut turned = blockstate.clone();
+        turned["variants"] = serde_json::Value::Object(out);
+        turned
+    })
+}
+
+/// A box in block units: `[minX, minY, minZ, maxX, maxY, maxZ]`.
+type Box6 = [f64; 6];
+
+/// Vanilla's block models: each one's parent and boxes, from
+/// `data/vanilla-models.json` (`tools/vanilla_blocks.py`).
+fn vanilla_model(id: &str) -> Option<&'static (Option<String>, Option<Vec<Box6>>)> {
+    static MODELS: std::sync::OnceLock<BTreeMap<String, (Option<String>, Option<Vec<Box6>>)>> =
+        std::sync::OnceLock::new();
+    MODELS
+        .get_or_init(|| {
+            let json: serde_json::Value =
+                serde_json::from_str(include_str!("../data/vanilla-models.json"))
+                    .unwrap_or_default();
+            json.as_object()
+                .into_iter()
+                .flatten()
+                .map(|(k, v)| {
+                    let parent = v["parent"].as_str().map(str::to_string);
+                    let elements = v["elements"].as_array().map(|a| {
+                        a.iter()
+                            .filter_map(|e| {
+                                let n: Vec<f64> =
+                                    e.as_array()?.iter().filter_map(|x| x.as_f64()).collect();
+                                <[f64; 6]>::try_from(n).ok()
+                            })
+                            .collect()
+                    });
+                    (k.clone(), (parent, elements))
+                })
+                .collect()
+        })
+        .get(id)
+}
+
+/// `block/stone` is `minecraft:block/stone`.
+fn model_id(id: &str) -> String {
+    if id.contains(':') {
+        id.to_string()
+    } else {
+        format!("minecraft:{id}")
+    }
+}
+
+/// A model's boxes in block units, through its parents: the mod's models, else
+/// vanilla's. None when no model in the chain has elements (a block entity's
+/// `builtin/entity`) or the chain can't be read.
+fn model_boxes(content: &Content, id: &str) -> Option<Vec<Box6>> {
+    let mut id = model_id(id);
+    for _ in 0..16 {
+        let (ns, path) = id.split_once(':')?;
+        let (parent, elements) =
+            match resource_json(content, &format!("assets/{ns}/models/{path}.json")) {
+                Some(j) => {
+                    let elements = j.get("elements").and_then(|e| e.as_array()).map(|a| {
+                        a.iter()
+                            .filter_map(|e| {
+                                let corner = |k: &str| -> Option<Vec<f64>> {
+                                    e.get(k)?.as_array()?.iter().map(|x| x.as_f64()).collect()
+                                };
+                                let (f, t) = (corner("from")?, corner("to")?);
+                                (f.len() == 3 && t.len() == 3)
+                                    .then(|| [f[0], f[1], f[2], t[0], t[1], t[2]])
+                            })
+                            .collect::<Vec<_>>()
+                    });
+                    (j["parent"].as_str().map(str::to_string), elements)
+                }
+                None => vanilla_model(&id).cloned()?,
+            };
+        if let Some(e) = elements {
+            return Some(e.into_iter().map(|b| b.map(|v| v / 16.0)).collect());
+        }
+        // A model drawn by a block entity's renderer has no boxes to go by; one
+        // whose chain ends with none draws nothing (raised blinds' lower half).
+        let Some(parent) = parent else {
+            return Some(Vec::new());
+        };
+        if parent.contains("builtin/") {
+            return None;
+        }
+        id = model_id(&parent);
+    }
+    None
+}
+
+/// `b` turned as a blockstate variant turns its model: `x` degrees about the X
+/// axis (up toward north), then `y` about the Y axis (north toward east).
+fn rotate(b: Box6, x: i64, y: i64) -> Box6 {
+    let turn = |p: [f64; 3]| {
+        let mut p = p;
+        for _ in 0..(x.rem_euclid(360) / 90) {
+            p = [p[0], p[2], 1.0 - p[1]];
+        }
+        for _ in 0..(y.rem_euclid(360) / 90) {
+            p = [1.0 - p[2], p[1], p[0]];
+        }
+        p
+    };
+    let (a, c) = (turn([b[0], b[1], b[2]]), turn([b[3], b[4], b[5]]));
+    [
+        a[0].min(c[0]),
+        a[1].min(c[1]),
+        a[2].min(c[2]),
+        a[0].max(c[0]),
+        a[1].max(c[1]),
+        a[2].max(c[2]),
+    ]
+}
+
+/// The shape a variant draws: its model's boxes, turned. Flat ones (a cross
+/// plant's planes, a window's glass) don't count beside solid ones; a model of
+/// planes only outlines their bounds and has no collision, as Java's plants.
+/// None for a model with no boxes. The last flag says the model lies wholly
+/// outside its block (an open shutter swung out), so its shape is a guess.
+fn variant_shape(
+    content: &Content,
+    variant: &serde_json::Value,
+) -> Option<(Vec<Box6>, bool, bool)> {
+    let v = match variant {
+        serde_json::Value::Array(a) => a.first()?,
+        v => v,
+    };
+    let boxes = model_boxes(content, v["model"].as_str()?)?;
+    let (x, y) = (v["x"].as_i64().unwrap_or(0), v["y"].as_i64().unwrap_or(0));
+    let round = |b: Box6| b.map(|c| (c.clamp(0.0, 1.0) * 10000.0).round() / 10000.0);
+    let has_volume = |b: &Box6| b[3] > b[0] && b[4] > b[1] && b[5] > b[2];
+    let outside = boxes.iter().any(has_volume);
+    let turned: Vec<Box6> = boxes.into_iter().map(|b| round(rotate(b, x, y))).collect();
+    let solid: Vec<Box6> = turned.iter().copied().filter(has_volume).collect();
+    if !solid.is_empty() {
+        // At most 16 boxes a shape: more become their bounds.
+        if solid.len() > 16 {
+            return Some((vec![bounds(&solid)], true, false));
+        }
+        return Some((solid, true, false));
+    }
+    if turned.is_empty() {
+        // Nothing drawn: nothing to target or bump into.
+        return Some((Vec::new(), false, false));
+    }
+    Some((vec![bounds(&turned)], false, outside))
+}
+
+fn bounds(boxes: &[Box6]) -> Box6 {
+    let mut out = boxes[0];
+    for b in boxes {
+        for i in 0..3 {
+            out[i] = out[i].min(b[i]);
+            out[i + 3] = out[i + 3].max(b[i + 3]);
+        }
+    }
+    out
+}
+
+/// A block's `shapes` (and `collision_shapes` when some states have none), from
+/// the models its blockstate's variants draw, keyed by the variants' properties.
+/// None when every state is a whole block, the blockstate is multipart, or its
+/// variants don't all name the same properties. Only values `schema` (the
+/// block's own) has are keyed: Horizon refuses a table naming any other.
+fn model_shapes(
+    content: &Content,
+    blockstate: &serde_json::Value,
+    schema: &BTreeMap<String, BTreeSet<String>>,
+) -> Option<(serde_json::Value, Option<serde_json::Value>)> {
+    let variants = blockstate.get("variants")?.as_object()?;
+    let mut props: Option<Vec<String>> = None;
+    let mut rows: Vec<(String, Vec<Box6>, bool)> = Vec::new();
+    let mut outside: Vec<usize> = Vec::new();
+    for (key, variant) in variants {
+        let mut parts: Vec<(String, String)> = key
+            .split(',')
+            .filter_map(|c| c.split_once('='))
+            .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
+            .collect();
+        if parts
+            .iter()
+            .any(|(k, v)| !schema.get(k).is_some_and(|vals| vals.contains(v)))
+        {
+            continue;
+        }
+        parts.sort();
+        let names: Vec<String> = parts.iter().map(|(k, _)| k.clone()).collect();
+        match &props {
+            None => props = Some(names),
+            Some(p) if *p != names => return None,
+            _ => {}
+        }
+        let (boxes, collides, out) = variant_shape(content, variant)?;
+        let values: Vec<&str> = parts.iter().map(|(_, v)| v.as_str()).collect();
+        if out {
+            outside.push(rows.len());
+        }
+        rows.push((values.join(","), boxes, collides));
+    }
+    let props = props?;
+    // A state drawn wholly outside its block (an open shutter swung out) takes
+    // the shape of one that differs from it in one property (the closed one):
+    // Java's shapes don't follow a model past its block.
+    for &i in &outside {
+        let key: Vec<&str> = rows[i].0.split(',').collect();
+        let near = rows.iter().enumerate().find(|(j, (k, b, c))| {
+            !outside.contains(j)
+                && *c
+                && !b.is_empty()
+                && k.split(',').zip(&key).filter(|(a, b)| a != *b).count() == 1
+        });
+        if let Some((_, (_, boxes, _))) = near {
+            let boxes = boxes.clone();
+            rows[i].1 = boxes;
+            rows[i].2 = true;
+        }
+    }
+    const WHOLE: Box6 = [0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+    // Every state a whole block, or none drawing anything (a block its renderer
+    // draws): the template's shape stands.
+    if rows.iter().all(|(_, b, c)| *c && b.as_slice() == [WHOLE])
+        || rows.iter().all(|(_, b, _)| b.is_empty())
+    {
+        return None;
+    }
+    let boxes_json = |b: &[Box6]| serde_json::json!(b);
+    let table = |rows: &[(String, serde_json::Value)]| {
+        if props.is_empty() {
+            return serde_json::json!({ "default": rows[0].1 });
+        }
+        let values: serde_json::Map<String, serde_json::Value> =
+            rows.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        // A state no variant names is drawn as a whole block.
+        serde_json::json!({ "properties": props, "values": values, "default": [WHOLE] })
+    };
+    let outline: Vec<(String, serde_json::Value)> = rows
+        .iter()
+        .map(|(k, b, _)| (k.clone(), boxes_json(b)))
+        .collect();
+    let collision = rows.iter().any(|(_, _, c)| !c).then(|| {
+        let rows: Vec<(String, serde_json::Value)> = rows
+            .iter()
+            .map(|(k, b, c)| {
+                (
+                    k.clone(),
+                    if *c {
+                        boxes_json(b)
+                    } else {
+                        serde_json::json!([])
+                    },
+                )
+            })
+            .collect();
+        table(&rows)
+    });
+    Some((table(&outline), collision))
 }
 
 /// Whether `template` has any of the state properties a blockstate file draws by.
@@ -974,8 +1400,17 @@ fn template_for_states(
     if has("half") && has("shape") && has("facing") {
         return kind("minecraft:stone_stairs", "minecraft:oak_stairs", "stairs");
     }
-    if has("hinge") && has("open") {
+    if has("hinge") && has("open") && has("half") {
         return kind("minecraft:iron_door", "minecraft:oak_door", "door");
+    }
+    // Hinged and opening but one block tall (Macaw's shutters): a door is two,
+    // so it opens on a click as a trapdoor does.
+    if has("hinge") && has("open") {
+        return kind(
+            "minecraft:iron_trapdoor",
+            "minecraft:oak_trapdoor",
+            "shutter (one block, hinged)",
+        );
     }
     if has("in_wall") {
         return Some((
@@ -1673,6 +2108,74 @@ mod tests {
     }
 
     #[test]
+    fn turns_facing_to_place_as_java() {
+        // Java's curtain faces a quarter turn clockwise from the look; a carved
+        // pumpkin stores the opposite of it: a turn of three quarters between them.
+        let curtain = serde_json::json!({ "variants": {
+            "facing=north,open=false": { "model": "m:n" },
+            "facing=east,open=false": { "model": "m:e" },
+            "facing=south,open=false": { "model": "m:s" },
+            "facing=west,open=false": { "model": "m:w" },
+        }});
+        let turned = turn_facing(&curtain, 3).unwrap();
+        // Looking north the pumpkin stores south, where Java stores east.
+        assert_eq!(
+            turned["variants"]["facing=south,open=false"]["model"],
+            "m:e"
+        );
+        assert_eq!(
+            turned["variants"]["facing=north,open=false"]["model"],
+            "m:w"
+        );
+        assert!(turn_facing(&serde_json::json!({ "variants": { "": {} } }), 1).is_none());
+    }
+
+    #[test]
+    fn shapes_follow_the_models() {
+        // A panel against the north side, turned as a blockstate turns it.
+        let north = [0.0, 0.0, 0.0, 1.0, 1.0, 0.125];
+        assert_eq!(rotate(north, 0, 90), [0.875, 0.0, 0.0, 1.0, 1.0, 1.0]);
+        assert_eq!(rotate(north, 0, 180), [0.0, 0.0, 0.875, 1.0, 1.0, 1.0]);
+        // A slab on the floor, turned up toward north, stands against the south side.
+        assert_eq!(
+            rotate([0.0, 0.0, 0.0, 1.0, 0.5, 1.0], 90, 0),
+            [0.0, 0.0, 0.5, 1.0, 1.0, 1.0]
+        );
+        // A curtain model on a full-cube template: a shape for each facing.
+        let mut content = Content::default();
+        content.files.insert(
+            "assets/m/models/block/curtain.json".into(),
+            r#"{"elements":[{"from":[0,0,0],"to":[16,16,2]}]}"#.into(),
+        );
+        let blockstate = serde_json::json!({ "variants": {
+            "facing=north": { "model": "m:block/curtain" },
+            "facing=east": { "model": "m:block/curtain", "y": 90 },
+            "facing=up": { "model": "m:block/curtain" },
+        }});
+        let schema = BTreeMap::from([(
+            "facing".to_string(),
+            ["north", "east"].map(String::from).into(),
+        )]);
+        let (outline, collision) = model_shapes(&content, &blockstate, &schema).unwrap();
+        assert_eq!(outline["properties"], serde_json::json!(["facing"]));
+        assert_eq!(
+            outline["values"]["east"],
+            serde_json::json!([[0.875, 0.0, 0.0, 1.0, 1.0, 1.0]])
+        );
+        // `up` isn't one of the block's values: left out.
+        assert!(outline["values"].get("up").is_none());
+        assert!(collision.is_none());
+        // A cross plant (vanilla's planes): outlined, walked through.
+        let plant = serde_json::json!({ "variants": { "": { "model": "minecraft:block/cross" } } });
+        let (outline, collision) = model_shapes(&content, &plant, &BTreeMap::new()).unwrap();
+        assert_eq!(outline["default"][0][1], 0.0);
+        assert_eq!(collision.unwrap(), serde_json::json!({ "default": [] }));
+        // A whole block needs no shape.
+        let cube = serde_json::json!({ "variants": { "": { "model": "minecraft:block/stone" } } });
+        assert!(model_shapes(&content, &cube, &BTreeMap::new()).is_none());
+    }
+
+    #[test]
     fn fills_the_variants_a_template_stores() {
         // Macaw's window draws north and east only; a carved pumpkin stores four ways.
         let window = serde_json::json!({ "variants": {
@@ -1750,10 +2253,20 @@ mod tests {
         assert!(!has_states_of("minecraft:dirt", &roof));
         assert!(has_states_of("minecraft:oak_stairs", &roof));
         assert!(has_states_of("minecraft:carved_pumpkin", &roof));
-        let door = states(&[("hinge", &["left", "right"]), ("open", &["true", "false"])]);
+        let door = states(&[
+            ("half", &["lower", "upper"]),
+            ("hinge", &["left", "right"]),
+            ("open", &["true", "false"]),
+        ]);
         assert_eq!(
             template_for_states(&door, "fir_door").unwrap().0,
             "minecraft:oak_door"
+        );
+        // One block tall: a door would place a second half above it.
+        let shutter = states(&[("hinge", &["left", "right"]), ("open", &["true", "false"])]);
+        assert_eq!(
+            template_for_states(&shutter, "oak_shutter").unwrap().0,
+            "minecraft:oak_trapdoor"
         );
         assert_eq!(
             template_for_states(&states(&[]), "fir_leaves").unwrap().0,
