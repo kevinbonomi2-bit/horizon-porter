@@ -368,7 +368,7 @@ fn ports_pipes_and_blocks_that_are_not_full_cubes() {
     let cable = json("cable");
     assert_eq!(cable["template"], "minecraft:chorus_plant");
     assert_eq!(cable["thickness"], 4.0);
-    assert_eq!(cable["connects_to"], "wrap:cable_connects");
+    assert_eq!(cable["connects_to"], "#wrap:cable_connects");
     assert_eq!(cable["properties"]["occludes"], false);
     let tag: serde_json::Value =
         serde_json::from_str(&b.files["content/data/wrap/tags/block/cable_connects.json"]).unwrap();

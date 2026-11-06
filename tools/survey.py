@@ -120,6 +120,62 @@ def run(args: list[str], cwd: Path | None = None, env: dict | None = None, timeo
         return -1, f"timed out after {timeout} s"
 
 
+CHECKER_MAIN = r"""//! Reads each content folder given as Horizon's mod loader does, and says what it refuses.
+use horizon_mods::{content::Content, manifest::Package};
+use std::path::Path;
+
+fn main() {
+    let mut bad = 0;
+    for arg in std::env::args().skip(1) {
+        let dir = Path::new(&arg);
+        match Package::read(dir).and_then(|p| Content::read(dir, &p.manifest)) {
+            Ok(_) => println!("ok {arg}"),
+            Err(e) => {
+                bad += 1;
+                println!("REFUSED {arg}: {e}");
+            }
+        }
+    }
+    std::process::exit(i32::from(bad > 0));
+}
+"""
+
+
+def content_checker() -> Path | None:
+    """Horizon's own content loader (horizon-mods, from the launcher's Horizon
+    source), built offline with the launcher's crates: what a player's game
+    refuses to load. None without a Horizon source here."""
+    appdata = Path(os.environ.get("APPDATA", Path.home() / ".local" / "share"))
+    sources = sorted((appdata / "horizon-launcher" / "native" / "source").glob("*/crates/horizon-mods"),
+                     key=lambda p: p.stat().st_mtime)
+    if not sources:
+        return None
+    crate = OUT / "content-check"
+    (crate / "src").mkdir(parents=True, exist_ok=True)
+    manifest = "\n".join([
+        "[package]",
+        'name = "content-check"',
+        'version = "0.0.0"',
+        'edition = "2024"',
+        "publish = false",
+        "",
+        "[dependencies]",
+        f"horizon-mods = {{ path = {json.dumps(sources[-1].as_posix())} }}",
+        "",
+        "[workspace]",
+        "",
+    ])
+    (crate / "Cargo.toml").write_text(manifest, encoding="utf-8")
+    (crate / "src" / "main.rs").write_text(CHECKER_MAIN, encoding="utf-8")
+    code, out = run([str(CARGO), "build", "-q", "--offline"], cwd=crate,
+                    env={"CARGO_HOME": str(appdata / "horizon-launcher" / "cargo")})
+    exe = crate / "target" / "debug" / ("content-check.exe" if os.name == "nt" else "content-check")
+    return exe if code == 0 and exe.exists() else None
+
+
+CHECKER: Path | None = None
+
+
 def first_errors(text: str, n: int = 3) -> list[str]:
     lines = [l.strip() for l in text.splitlines()]
     errs = [l for l in lines if l.startswith("error") or l.startswith("Error")]
@@ -169,6 +225,13 @@ def survey_one(slug: str, hit: dict | None, skip_download: bool) -> dict:
     m = re.search(r"Hooks to port into \(helpers ready\): (.+)", out)
     r["stubbed"] = len(m.group(1).split(",")) if m else 0
     r["mobs"] = len(list(port.glob("content/data/*/horizon/entity_type/*.json")))
+    # The content as Horizon's loader reads it.
+    if CHECKER and (port / "content" / "horizon-mod.toml").exists():
+        code, out = run([str(CHECKER), str(port / "content")])
+        if code != 0:
+            r["stage"] = "content refused"
+            r["errors"] = [l.split(": ", 1)[-1] for l in out.splitlines() if l.startswith("REFUSED")][:3]
+            return r
     mixins = list((port / "mixins").glob("*"))
     r["native"] = bool(mixins)
     r["todo"] = sum(
@@ -245,6 +308,9 @@ def main() -> None:
     ap.add_argument("--server", action="store_true", help="only mods a server needs too: gameplay and content")
     args = ap.parse_args()
     OUT.mkdir(parents=True, exist_ok=True)
+    global CHECKER
+    CHECKER = content_checker()
+    print("Horizon's content loader:", "found" if CHECKER else "not found (content not checked)", flush=True)
     if args.slugs:
         mods = [(s, None) for s in args.slugs.split(",") if s]
     else:

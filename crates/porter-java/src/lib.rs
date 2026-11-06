@@ -911,37 +911,51 @@ fn registrations(parsed: &[(String, ParsedFile)]) -> Vec<Registration> {
         }
     };
     // Ids kept in constants (`CABBAGE_CRATE = id("cabbage_crate")`): a static
-    // field's initializer's last literal that reads as an id, by `Class.FIELD`
-    // and, when no other class has a field of that name, by `FIELD`.
-    let mut constants: HashMap<String, String> = HashMap::new();
-    let mut bare: HashMap<String, Option<String>> = HashMap::new();
+    // field's initializer's literals that read as ids, by `Class.FIELD` and, when
+    // no other class has a field of that name, by `FIELD`. A constant with two
+    // (`CABBAGE_CROP = id("cabbages", "cabbage_seeds")`) names a block, then its
+    // item.
+    let mut constants: HashMap<String, Vec<String>> = HashMap::new();
+    let mut bare: HashMap<String, Option<Vec<String>>> = HashMap::new();
     for (_, file) in parsed {
         for t in &file.types {
             for m in t.members.iter().filter(|m| !m.is_method && m.is_static) {
                 let Some(init) = m.init.as_deref() else {
                     continue;
                 };
-                let Some(id) = init
+                let ids: Vec<String> = init
                     .split('"')
                     .skip(1)
                     .step_by(2)
                     .filter(|l| valid_id(l))
-                    .last()
-                else {
+                    .map(str::to_string)
+                    .collect();
+                if ids.is_empty() {
                     continue;
-                };
-                constants.insert(format!("{}.{}", t.name, m.name), id.to_string());
+                }
+                constants.insert(format!("{}.{}", t.name, m.name), ids.clone());
                 bare.entry(m.name.clone())
                     .and_modify(|v| {
-                        if v.as_deref() != Some(id) {
+                        if v.as_ref() != Some(&ids) {
                             *v = None;
                         }
                     })
-                    .or_insert_with(|| Some(id.to_string()));
+                    .or_insert_with(|| Some(ids));
             }
         }
     }
-    let constant_id = |arg: &str| -> Option<String> {
+    // A first literal many constants share is a namespace
+    // (`fromNamespaceAndPath("farmersdelight", "stove")`), not an id.
+    let mut firsts: HashMap<&str, usize> = HashMap::new();
+    for ids in constants.values().filter(|v| v.len() > 1) {
+        *firsts.entry(ids[0].as_str()).or_default() += 1;
+    }
+    let namespaces: BTreeSet<String> = firsts
+        .into_iter()
+        .filter(|(_, n)| *n >= 3)
+        .map(|(ns, _)| ns.to_string())
+        .collect();
+    let constant_id = |arg: &str, registry: &str| -> Option<String> {
         let a = arg.trim();
         if a.is_empty()
             || !a
@@ -952,27 +966,31 @@ fn registrations(parsed: &[(String, ParsedFile)]) -> Vec<Registration> {
         }
         let parts: Vec<&str> = a.split('.').collect();
         let key = parts[parts.len().saturating_sub(2)..].join(".");
-        constants
+        let ids = constants
             .get(&key)
             .cloned()
-            .or_else(|| bare.get(*parts.last()?).cloned().flatten())
+            .or_else(|| bare.get(*parts.last()?).cloned().flatten())?;
+        let ids: Vec<&String> = ids.iter().filter(|i| !namespaces.contains(*i)).collect();
+        let pick = if registry == "block" {
+            ids.first()
+        } else {
+            ids.last()
+        };
+        pick.map(|i| (*i).clone())
     };
     let mut inferred = Vec::new();
     for (_, file) in parsed {
         for call in &file.calls {
-            // The id: its first literal that reads as one, wherever it is
-            // (`register(func, "blood", p -> new BloodBlock(...), props)`), else a
-            // constant holding one (`regBlock(ModBlockItemIds.CABBAGE_CRATE, ...)`).
-            let Some(id) = call
+            let literal = call
                 .literal_args
                 .iter()
                 .flatten()
                 .find(|a| valid_id(a))
-                .cloned()
-                .or_else(|| call.args.iter().find_map(|a| constant_id(a)))
-            else {
+                .cloned();
+            let has_constant = call.args.iter().any(|a| constant_id(a, "").is_some());
+            if literal.is_none() && !has_constant {
                 continue;
-            };
+            }
             // An unqualified call to a method of the mod's own, or a library
             // registrar's `register...` (Balm's `blocks.register("warp_plate", ...)`).
             let own = call.object.is_empty() && file.methods.iter().any(|m| m.name == call.method);
@@ -1000,6 +1018,14 @@ fn registrations(parsed: &[(String, ParsedFile)]) -> Vec<Registration> {
             let Some(registry) = kind_of(&creates).or(mob.then_some("entity_type")) else {
                 continue;
             };
+            // The id: its first literal that reads as one, wherever it is
+            // (`register(func, "blood", p -> new BloodBlock(...), props)`), else a
+            // constant holding one (`regBlock(ModBlockItemIds.CABBAGE_CRATE, ...)`).
+            let Some(id) =
+                literal.or_else(|| call.args.iter().find_map(|a| constant_id(a, registry)))
+            else {
+                continue;
+            };
             let known = out.iter().chain(inferred.iter()).any(|r: &Registration| {
                 r.registry == registry && r.id.as_deref() == Some(id.as_str())
             });
@@ -1025,7 +1051,7 @@ fn registrations(parsed: &[(String, ParsedFile)]) -> Vec<Registration> {
     {
         r.id = machines::split_top(&r.args)
             .iter()
-            .find_map(|a| constant_id(a));
+            .find_map(|a| constant_id(a, &r.registry));
     }
     // The same id twice in a registry (found two ways): the first.
     let mut seen_ids: BTreeSet<(String, String)> = BTreeSet::new();

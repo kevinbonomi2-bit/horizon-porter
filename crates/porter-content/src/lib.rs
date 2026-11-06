@@ -266,7 +266,7 @@ pub fn generate_with(
             declared_states(&template, &states, block_name, &mut content.skipped);
         let mut json = serde_json::json!({ "template": template });
         if let Some(thickness) = connecting {
-            json["connects_to"] = format!("{ns}:{block_name}_connects").into();
+            json["connects_to"] = format!("#{ns}:{block_name}_connects").into();
             json["thickness"] = thickness.into();
             pipes.push((block_name.to_string(), class.clone()));
         }
