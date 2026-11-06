@@ -484,10 +484,16 @@ fn compiles_against_the_mock(b: &bundle::Bundle, name: &str) {
     let _ = std::fs::remove_dir_all(&dir);
     let bundle_dir = dir.join("bundle");
     bundle::write(b, &bundle_dir, false).unwrap();
-    let mixins = bundle_dir.join("mixins").join(&b.id);
+    folder_compiles_against_the_mock(&bundle_dir.join("mixins").join(&b.id), &dir);
+}
 
+/// A port folder's `mixins/<id>` (its helpers and runtime) against the mock, built
+/// in `dir`.
+fn folder_compiles_against_the_mock(mixins: &Path, dir: &Path) {
+    let mixins = mixins.to_path_buf();
     let manifest: toml::Table =
-        toml::from_str(&b.files[&format!("mixins/{}/horizon-mixin.toml", b.id)]).unwrap();
+        toml::from_str(&std::fs::read_to_string(mixins.join("horizon-mixin.toml")).unwrap())
+            .unwrap();
     let module = manifest["module"][0]["name"].as_str().unwrap();
 
     let mut hooks = String::new();
@@ -559,7 +565,24 @@ fn compiles_against_the_mock(b: &bundle::Bundle, name: &str) {
     );
     // Warnings in generated code count as failures too.
     assert!(!stderr.contains("warning"), "{stderr}");
-    std::fs::remove_dir_all(&dir).ok();
+    std::fs::remove_dir_all(dir).ok();
+}
+
+/// A port folder `port` (or the app) wrote, as it is now, translated or not:
+/// `PORTER_PORT=<folder> cargo test -p porter-translate --test horizon_mock --
+/// --ignored port_folder`.
+#[test]
+#[ignore]
+fn port_folder_compiles_against_horizon_api() {
+    let folder = PathBuf::from(std::env::var("PORTER_PORT").expect("PORTER_PORT names the folder"));
+    let native: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(folder.join("horizon-native.json")).unwrap())
+            .unwrap();
+    let id = native["id"].as_str().unwrap();
+    let dir =
+        std::env::temp_dir().join(format!("porter-horizon-mock-folder-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    folder_compiles_against_the_mock(&folder.join("mixins").join(id), &dir);
 }
 
 /// Any mod's helpers against the mock: `PORTER_MOD=<source folder or jar>` and

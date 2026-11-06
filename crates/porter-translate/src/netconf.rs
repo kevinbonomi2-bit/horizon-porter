@@ -576,7 +576,14 @@ pub fn config_runtime(settings: &[Setting], java: &str) -> String {
         };
         let _ = writeln!(r, "        format!(\"{}: {{}}\", {value}),", s.label);
     }
-    r.push_str("    ]\n}\n\n/// A settings button was clicked: the value it changes, as (key, value) to save.\n/// On and off toggle, a choice moves to the next one, a number steps through its\n/// range and starts over.\npub fn settings_click(button: usize, get: impl Fn(&str) -> Option<String>) -> Option<(String, String)> {\n    let mut c = load_config(get);\n    match button {\n");
+    r.push_str("    ]\n}\n\n/// A settings button was clicked: the value it changes, as (key, value) to save.\n/// On and off toggle, a choice moves to the next one, a number steps through its\n/// range and starts over.\npub fn settings_click(button: usize, get: impl Fn(&str) -> Option<String>) -> Option<(String, String)> {\n");
+    // Only text values: no button changes anything (they're edited in their files).
+    if settings.iter().all(|s| s.entry.kind == ConfigKind::String) {
+        r.push_str("    let _ = (button, get);\n    None\n}\n");
+        r.push_str(CONFIG_HELPERS);
+        return r;
+    }
+    r.push_str("    let mut c = load_config(get);\n    match button {\n");
     for (i, s) in settings.iter().enumerate() {
         let f = &s.field;
         let kind = s.entry.kind;
