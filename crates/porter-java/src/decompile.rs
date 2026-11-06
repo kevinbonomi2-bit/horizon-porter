@@ -345,8 +345,10 @@ fn run_vineflower(java: &Path, vineflower: &Path, input: &Path, dest: &Path) -> 
     let result = Command::new(java)
         .arg("-jar")
         .arg(vineflower)
-        // Quiet, and keep generic signatures: what the scanner reads.
-        .args(["-log=WARN", "-dgs=1"])
+        // Quiet, and keep generic signatures: what the scanner reads. Kotlin
+        // classes as Java too: Vineflower's Kotlin plugin writes `.kt` files,
+        // which the porter doesn't read (Vein Miner, Fzzy Config).
+        .args(["-log=WARN", "-dgs=1", "--kt-enable=0"])
         .arg(input)
         .arg(dest)
         .stdin(Stdio::null())

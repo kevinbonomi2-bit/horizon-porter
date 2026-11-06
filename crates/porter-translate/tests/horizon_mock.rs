@@ -309,6 +309,9 @@ pub mod game {
         #![allow(unused_variables, dead_code)]
         use super::Game;
         use crate::containers::{ModBlockEntity, ModContainer, ModEnergyBuffer, ModFluidTanks};
+        // Horizon's native_hooks.rs has it in scope: stubbed helpers name it bare.
+        #[allow(unused_imports)]
+        use std::time::Duration;
         use crate::crafting::{CustomRecipe, Ingredient};
         use crate::extras_hud::Corners;
         use crate::items::ItemStack;

@@ -110,7 +110,7 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
     let version = meta
         .and_then(|m| m.version.clone())
         .filter(|v| !v.contains('$') && !v.is_empty())
-        .unwrap_or_else(|| "0.1.0".into());
+        .map_or_else(|| "0.1.0".into(), |v| semver(&v));
     let description = meta
         .and_then(|m| m.description.clone())
         .unwrap_or_else(|| format!("{name}, ported to Horizon."));
@@ -2890,6 +2890,57 @@ fn unmapped_ports(scan: &ModScan, horizon: &Path) -> BTreeMap<String, Vec<ledger
     ledger::ports(horizon, &keys.into_iter().collect::<Vec<_>>(), 3)
 }
 
+/// A mod's version as Cargo and Horizon take one, `major.minor.patch`: its first
+/// three numbers, and the rest as build metadata (`31.17.0.109` → `31.17.0+109`,
+/// `2.31` → `2.31.0`, `26.3-v2.21.0` → `26.3.0+v2.21.0`).
+pub fn semver(version: &str) -> String {
+    let v = version.trim().trim_start_matches(['v', 'V']);
+    let mut numbers = Vec::new();
+    let mut rest = v;
+    while numbers.len() < 3 {
+        let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+        if digits.is_empty() {
+            break;
+        }
+        // Leading zeros aren't allowed: `08` is 8.
+        numbers.push(digits.trim_start_matches('0').to_string());
+        rest = &rest[digits.len()..];
+        match rest.strip_prefix('.') {
+            Some(r) if r.starts_with(|c: char| c.is_ascii_digit()) && numbers.len() < 3 => rest = r,
+            _ => break,
+        }
+    }
+    if numbers.is_empty() {
+        return "0.1.0".into();
+    }
+    numbers.resize(3, "0".into());
+    let numbers: Vec<String> = numbers
+        .into_iter()
+        .map(|n| if n.is_empty() { "0".into() } else { n })
+        .collect();
+    let build: String = rest
+        .trim_start_matches(['.', '-', '+', '_'])
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' {
+                c
+            } else {
+                '.'
+            }
+        })
+        .collect::<String>()
+        .split('.')
+        .filter(|p| !p.is_empty())
+        .collect::<Vec<_>>()
+        .join(".");
+    let core = numbers.join(".");
+    if build.is_empty() {
+        core
+    } else {
+        format!("{core}+{build}")
+    }
+}
+
 /// Text for a comment or a table cell: on one line.
 fn one_line(s: &str) -> String {
     s.split_whitespace()
@@ -2922,6 +2973,20 @@ fn toml_str(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn versions_become_semver() {
+        assert_eq!(semver("1.2.0"), "1.2.0");
+        assert_eq!(semver("31.17.0.109"), "31.17.0+109");
+        assert_eq!(semver("2.31"), "2.31.0");
+        assert_eq!(semver("26.3-v2.21.0"), "26.3.0+v2.21.0");
+        assert_eq!(
+            semver("0.7.7+fix3+26.3+neoforge"),
+            "0.7.7+fix3.26.3.neoforge"
+        );
+        assert_eq!(semver("v08.1"), "8.1.0");
+        assert_eq!(semver("beta"), "0.1.0");
+    }
 
     #[test]
     fn sanitizes_ids() {
