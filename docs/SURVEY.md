@@ -6,7 +6,9 @@ content-tagged mods, and 50 mods a server needs too (gameplay and content), 100 
 all once overlaps are counted once. For each one it downloaded the jar (NeoForge
 first, else Fabric; checked against Modrinth's SHA-512), ran `horizon-porter port`,
 ran the generated port's own tests, and compiled its Horizon helpers against the
-API mock. The jars stay local (`ai-test/`, not committed).
+API mock, and read its content (blocks, items, mobs) with Horizon's own content
+loader (`horizon-mods`, built from the launcher's Horizon source): what a player's
+game refuses to load. The jars stay local (`ai-test/`, not committed).
 
 Nothing here was translated by a model or built into Horizon: it measures what
 `port` does by itself.
@@ -15,7 +17,7 @@ Nothing here was translated by a model or built into Horizon: it measures what
 
 | | Mods |
 | --- | --- |
-| Port, and the port compiles and passes its tests | 97 |
+| Port, Horizon's loader takes the content, the code compiles and passes its tests | 97 |
 | Port as a content mod only (no code to port) | 3 |
 | Fail | 0 |
 
@@ -37,7 +39,7 @@ What the report says before porting, from what each mod's Mixins change:
 | --- | --- | --- | --- | --- | --- |
 | BetterNether | 678 | 88 | 4 | 6 | 5 |
 | Biomes O' Plenty | 493 | 33 | 1 | 0 | 1 |
-| Farmer's Delight (Refabricated) | 139 | 91 | 6 | 0 | 26 |
+| Farmer's Delight (Refabricated) | 135 | 95 | 6 | 0 | 26 |
 | BetterEnd | 100 | 11 | 6 | 6 | 19 |
 | Traveler's Backpack | 60 | 20 | 1 | 0 | 32 |
 | Waystones | 31 | 19 | 6 | 0 | 52 |
@@ -46,7 +48,7 @@ What the report says before porting, from what each mod's Mixins change:
 | Sophisticated Backpacks | 6 | 65 | 1 | 0 | 35 |
 | Guard Villagers | 0 | 2 | 0 | 1 | 7 |
 
-1,537 blocks, 339 items, 36 block entities and 13 mobs in all. Each mob copies the
+1,533 blocks, 343 items, 39 block entities and 13 mobs in all. Each mob copies the
 vanilla mob Horizon offers that it is most like (hostile ones a zombie, other
 creatures a wandering trader, villagers a villager) with its own health, speed,
 armor and attack; mob effects keep their category and color (Farmer's Delight's
@@ -72,6 +74,9 @@ With Claude Haiku a mod like Tom's Simple Storage costs about $0.05 to translate
 - **Kotlin mods** (Vein Miner, Fzzy Config) decompile to Java.
 - **Data-only mods** (Dungeons and Taverns, Towns and Towers) port as content mods.
 - **Version numbers** that aren't semver (`19.21.0.1247`) no longer break a port.
+- **Content Horizon's loader refused**: a cable's `connects_to` without its `#`, a
+  constant naming a block and its item (`id("cabbages", "cabbage_seeds")`) read as
+  one id, and files an earlier `port --force` left behind.
 - **Generated code** that warned or clashed: text-only configs, config keys that are
   sentences, a message named `Payload`, two messages on one channel.
 - **The report** calls performance mods partly portable: their Mixins patch the

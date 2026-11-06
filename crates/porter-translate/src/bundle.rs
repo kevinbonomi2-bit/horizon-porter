@@ -462,6 +462,13 @@ pub fn write(bundle: &Bundle, out: &Path, overwrite: bool) -> Result<()> {
                 out.display()
             );
         }
+        // The content mod is all generated: a file an earlier port wrote that this
+        // one doesn't (a block the porter no longer declares) would still load.
+        let content = out.join("content");
+        if overwrite && content.join("horizon-mod.toml").is_file() {
+            fs::remove_dir_all(&content)
+                .with_context(|| format!("clearing {}", content.display()))?;
+        }
     }
     for (rel, content) in &bundle.files {
         let path = out.join(rel);
