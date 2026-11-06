@@ -51,10 +51,11 @@ def get(url: str) -> bytes:
     raise RuntimeError("unreachable")
 
 
-def popular(count: int) -> list[dict]:
-    facets = json.dumps(
-        [["versions:26.3"], ["project_type:mod"], ["categories:neoforge", "categories:fabric"]]
-    )
+def popular(count: int, categories: list[str]) -> list[dict]:
+    groups = [["versions:26.3"], ["project_type:mod"], ["categories:neoforge", "categories:fabric"]]
+    if categories:
+        groups.append([f"categories:{c}" for c in categories])
+    facets = json.dumps(groups)
     out: list[dict] = []
     offset = 0
     while len(out) < count and offset < 400:
@@ -235,21 +236,24 @@ def main() -> None:
     ap.add_argument("--count", type=int, default=40)
     ap.add_argument("--slugs", default="")
     ap.add_argument("--skip-download", action="store_true", help="reuse the jars already here")
+    ap.add_argument("--categories", default="", help="only mods in these Modrinth categories (any of them)")
+    ap.add_argument("--name", default="report", help="the report's name: <name>.md and <name>.json")
     args = ap.parse_args()
     OUT.mkdir(parents=True, exist_ok=True)
     if args.slugs:
         mods = [(s, None) for s in args.slugs.split(",") if s]
     else:
-        mods = [(h["slug"], h) for h in popular(args.count)]
+        cats = [c for c in args.categories.split(",") if c]
+        mods = [(h["slug"], h) for h in popular(args.count, cats)]
     results = []
     for i, (slug, hit) in enumerate(mods, 1):
         print(f"[{i}/{len(mods)}] {slug}", flush=True)
         r = survey_one(slug, hit, args.skip_download)
         print(f"    {r.get('stage')}", flush=True)
         results.append(r)
-        (OUT / "results.json").write_text(json.dumps(results, indent=1), encoding="utf-8")
-        (OUT / "report.md").write_text(report(results), encoding="utf-8")
-    print(f"Wrote {OUT / 'report.md'}")
+        (OUT / f"{args.name}.json").write_text(json.dumps(results, indent=1), encoding="utf-8")
+        (OUT / f"{args.name}.md").write_text(report(results), encoding="utf-8")
+    print(f"Wrote {OUT / (args.name + '.md')}")
 
 
 if __name__ == "__main__":

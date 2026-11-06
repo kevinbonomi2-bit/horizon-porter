@@ -222,7 +222,17 @@ pub fn outlook(scan: &ModScan) -> Outlook {
         (true, false) => "how Minecraft draws the game",
         _ => "how Minecraft draws its screens",
     };
-    let (portability, summary) = if total == 0 || out == 0 {
+    // A mod made of patches to the game's internals (a performance mod): each
+    // must be rewritten against Horizon's own code, which is its own engine.
+    let internals = out == 0 && total >= 5 && hook * 10 <= total && !has_content;
+    let (portability, summary) = if internals {
+        (
+            Portability::Partly,
+            format!(
+                "Partly portable. {horizon} of its {total} Mixins patch the game's own code, with no Horizon hook for them: each is ported by hand into Horizon's matching Rust function. Horizon is its own engine, so a performance mod's gains may not carry over."
+            ),
+        )
+    } else if total == 0 || out == 0 {
         (
             Portability::Likely,
             if total == 0 {
@@ -335,6 +345,20 @@ mod tests {
         assert_eq!(o.portability, Portability::NotYet, "{o:?}");
         assert_eq!(o.total(), 3);
         assert!(o.summary.contains("wouldn't do anything"), "{}", o.summary);
+    }
+
+    #[test]
+    fn a_mod_of_internal_patches_is_partly_portable() {
+        let members = (0..6)
+            .map(|i| member("Inject", &format!("internal{i}")))
+            .collect();
+        let scan = ModScan {
+            mixins: vec![mixin("net.minecraft.world.level.chunk.LevelChunk", members)],
+            ..ModScan::default()
+        };
+        let o = outlook(&scan);
+        assert_eq!(o.portability, Portability::Partly, "{o:?}");
+        assert!(o.summary.contains("performance mod"), "{}", o.summary);
     }
 
     #[test]
