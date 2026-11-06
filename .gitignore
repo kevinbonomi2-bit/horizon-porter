@@ -8,3 +8,7 @@
 /app/gen
 ai-test/
 /target-dev
+/target-horizon-check
+# Written for the Horizon source the launcher has (tools/horizon_check.py).
+tools/horizon-check/Cargo.toml
+tools/horizon-check/Cargo.lock

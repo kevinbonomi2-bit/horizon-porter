@@ -174,6 +174,8 @@ def content_checker() -> Path | None:
 
 
 CHECKER: Path | None = None
+# Whether to load each port with Horizon's own code too (--horizon).
+HORIZON = False
 VANILLA = json.loads((ROOT / "crates" / "porter-content" / "data" / "vanilla-blocks.json").read_text(encoding="utf-8"))
 
 
@@ -278,6 +280,13 @@ def survey_one(slug: str, hit: dict | None, skip_download: bool) -> dict:
         r["stage"] = "content refused"
         r["errors"] = problems[:3]
         return r
+    # Horizon's own code loads it: the content build, a world's rules, every model.
+    if HORIZON and (port / "content" / "horizon-mod.toml").exists():
+        code, out = run([sys.executable, "-I", str(ROOT / "tools" / "horizon_check.py"), str(port / "content")], timeout=1800)
+        if code != 0:
+            r["stage"] = "won't load in Horizon"
+            r["errors"] = [l for l in out.splitlines() if l[:1].isupper() and not l.startswith("models:")][:3]
+            return r
     mixins = list((port / "mixins").glob("*"))
     r["native"] = bool(mixins)
     r["todo"] = sum(
@@ -351,11 +360,13 @@ def main() -> None:
     ap.add_argument("--skip-download", action="store_true", help="reuse the jars already here")
     ap.add_argument("--categories", default="", help="only mods in these Modrinth categories (any of them)")
     ap.add_argument("--name", default="report", help="the report's name: <name>.md and <name>.json")
+    ap.add_argument("--horizon", action="store_true", help="also load each port's content with Horizon's own code (tools/horizon_check.py, ~1 min a mod)")
     ap.add_argument("--server", action="store_true", help="only mods a server needs too: gameplay and content")
     args = ap.parse_args()
     OUT.mkdir(parents=True, exist_ok=True)
-    global CHECKER
+    global CHECKER, HORIZON
     CHECKER = content_checker()
+    HORIZON = args.horizon
     print("Horizon's content loader:", "found" if CHECKER else "not found (content not checked)", flush=True)
     if args.slugs:
         mods = [(s, None) for s in args.slugs.split(",") if s]
