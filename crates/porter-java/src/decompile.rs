@@ -164,8 +164,21 @@ pub fn decompile(jar: &Path, cache: &Path, mut progress: impl FnMut(&str)) -> Re
         }
     }
     let classes: usize = parts.iter().map(|(_, b)| class_count(b)).sum();
+    // A data-only mod (structures, worldgen in a jar: Dungeons and Taverns): its
+    // resources are the whole mod, ported as a content mod.
     if classes == 0 {
-        bail!("{} has no classes to decompile", jar.display());
+        let _ = fs::remove_dir_all(&out);
+        for (set, part) in &parts {
+            let res_dir = out.join("src").join(set).join("resources");
+            fs::create_dir_all(&res_dir)?;
+            unpack_resources(part, &res_dir)?;
+        }
+        fs::create_dir_all(out.join("src").join("main").join("java"))?;
+        fs::write(
+            out.join(".decompiled"),
+            format!("{}\nno classes: resources only\n", jar.display()),
+        )?;
+        return Ok(out);
     }
     let java = find_java().context(
         "no Java runtime to decompile the jar with: open the Horizon launcher once (it keeps one), or install Java",

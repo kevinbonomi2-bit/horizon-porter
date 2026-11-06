@@ -51,7 +51,7 @@ def get(url: str) -> bytes:
     raise RuntimeError("unreachable")
 
 
-def popular(count: int, categories: list[str]) -> list[dict]:
+def popular(count: int, categories: list[str], server: bool = False) -> list[dict]:
     groups = [["versions:26.3"], ["project_type:mod"], ["categories:neoforge", "categories:fabric"]]
     if categories:
         groups.append([f"categories:{c}" for c in categories])
@@ -68,6 +68,9 @@ def popular(count: int, categories: list[str]) -> list[dict]:
         for h in hits:
             kinds = set(h["categories"]) - {"fabric", "neoforge", "forge", "quilt", "babric"}
             if kinds and kinds <= LIBRARY_ONLY:
+                continue
+            # Gameplay and content: mods a server needs too.
+            if server and h.get("server_side") != "required":
                 continue
             out.append(h)
             if len(out) == count:
@@ -238,13 +241,14 @@ def main() -> None:
     ap.add_argument("--skip-download", action="store_true", help="reuse the jars already here")
     ap.add_argument("--categories", default="", help="only mods in these Modrinth categories (any of them)")
     ap.add_argument("--name", default="report", help="the report's name: <name>.md and <name>.json")
+    ap.add_argument("--server", action="store_true", help="only mods a server needs too: gameplay and content")
     args = ap.parse_args()
     OUT.mkdir(parents=True, exist_ok=True)
     if args.slugs:
         mods = [(s, None) for s in args.slugs.split(",") if s]
     else:
         cats = [c for c in args.categories.split(",") if c]
-        mods = [(h["slug"], h) for h in popular(args.count, cats)]
+        mods = [(h["slug"], h) for h in popular(args.count, cats, args.server)]
     results = []
     for i, (slug, hit) in enumerate(mods, 1):
         print(f"[{i}/{len(mods)}] {slug}", flush=True)

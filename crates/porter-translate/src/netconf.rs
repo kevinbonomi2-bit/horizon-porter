@@ -151,11 +151,16 @@ pub fn messages(payloads: &[PayloadInfo], mod_id: &str) -> Vec<Message> {
             continue;
         }
         let snake = snake(&name);
+        // One message a channel: a second one read the same channel (from a
+        // literal that isn't its own), so it takes one named after itself.
+        let own = format!("{mod_id}:{snake}");
+        let channel = p
+            .channel
+            .clone()
+            .filter(|c| !out.iter().any(|m| m.channel == *c))
+            .unwrap_or(own);
         out.push(Message {
-            channel: p
-                .channel
-                .clone()
-                .unwrap_or_else(|| format!("{mod_id}:{snake}")),
+            channel,
             fields: p
                 .fields
                 .iter()
@@ -448,7 +453,18 @@ pub fn settings(config: &[ConfigEntry]) -> Vec<Setting> {
         }
         let last = e.path.rsplit('.').next().unwrap_or(&e.path);
         out.push(Setting {
-            key: e.path.clone(),
+            // Horizon keeps each setting in a file named by its key: safe characters.
+            key: e
+                .path
+                .chars()
+                .map(|c| {
+                    if c.is_ascii_alphanumeric() || "._-".contains(c) {
+                        c
+                    } else {
+                        '_'
+                    }
+                })
+                .collect(),
             field: rust_field(&e.path.replace(['.', '-'], "_")),
             label: words(last),
             entry: e.clone(),
@@ -762,7 +778,26 @@ fn snake(name: &str) -> String {
 
 /// A Java name as a Rust field: `defaultTime` → `default_time`, keywords escaped.
 fn rust_field(name: &str) -> String {
-    let s = snake(name).replace("__", "_");
+    // Only letters, digits and single underscores (a config key can be a sentence:
+    // `how many times a villager can heal a guard's equipment`).
+    let cleaned: String = snake(name)
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let mut s = cleaned
+        .split('_')
+        .filter(|p| !p.is_empty())
+        .collect::<Vec<_>>()
+        .join("_");
+    if s.is_empty() || s.starts_with(|c: char| c.is_ascii_digit()) {
+        s.insert_str(0, "v_");
+    }
     const KEYWORDS: &[&str] = &[
         "type", "match", "move", "ref", "fn", "mod", "use", "loop", "impl", "trait", "self",
         "crate", "super", "where", "async", "await", "dyn", "box", "yield",
@@ -797,6 +832,11 @@ mod tests {
         assert_eq!(snake("SetSpeed"), "set_speed");
         assert_eq!(rust_field("defaultTime"), "default_time");
         assert_eq!(rust_field("type"), "r#type");
+        assert_eq!(
+            rust_field("villager stuff_how many times a guard's"),
+            "villager_stuff_how_many_times_a_guard_s"
+        );
+        assert_eq!(rust_field("2fast"), "v_2fast");
         assert_eq!(words("defaultTime"), "Default time");
     }
 }
