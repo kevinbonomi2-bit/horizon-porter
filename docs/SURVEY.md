@@ -62,6 +62,28 @@ are stone-like.
 has 6; FancyMenu, the most, 131): what the mod does, as opposed to what it adds.
 With Claude Haiku a mod like Tom's Simple Storage costs about $0.05 to translate.
 
+## A second batch: 50 more
+
+The next 50 popular mods a server needs too: all 50 port (32 with code, 18 content
+only), Horizon's loader takes their content, 6,228 blocks, 202 items, 11 block
+entities and 59 mobs.
+
+| Mod | Blocks | Items | Mobs |
+| --- | --- | --- | --- |
+| Rechiseled | 3,849 | 1 | 0 |
+| Macaw's Roofs | 633 | 2 | 0 |
+| Stoneworks | 572 | 0 | 0 |
+| Macaw's Windows | 364 | 6 | 0 |
+| Macaw's Doors | 301 | 13 | 0 |
+| Macaw's Fences and Walls | 198 | 0 | 0 |
+| Macaw's Bridges | 157 | 1 | 0 |
+| Beautify | 65 | 0 | 0 |
+| Naturalist | 35 | 111 | 48 |
+| Friends and Foes | 24 | 19 | 10 |
+
+Across both batches: 150 mods, 7,761 blocks, 545 items, 50 block entities and 72
+mobs.
+
 ## What the survey fixed
 
 - **Registrations through a mod's own wrappers** (Tom's Simple Storage, Biomes O'
@@ -77,6 +99,9 @@ With Claude Haiku a mod like Tom's Simple Storage costs about $0.05 to translate
 - **Content Horizon's loader refused**: a cable's `connects_to` without its `#`, a
   constant naming a block and its item (`id("cabbages", "cabbage_seeds")`) read as
   one id, and files an earlier `port --force` left behind.
+- **A description with line breaks** made an invalid `horizon-mod.toml` (Advanced
+  Netherite, Villagers Plus), and two statics with one Rust name (AzureLib's
+  `MAX_OVERHANG` and `maxOverhang`) clashed.
 - **Generated code** that warned or clashed: text-only configs, config keys that are
   sentences, a message named `Payload`, two messages on one channel.
 - **The report** calls performance mods partly portable: their Mixins patch the
