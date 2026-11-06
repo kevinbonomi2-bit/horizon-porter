@@ -86,6 +86,18 @@ pub fn find(scan: &ModScan, roots: &BTreeSet<String>) -> Vec<Module> {
                 })
             })
             .collect();
+        // Two Java fields can make one Rust name (`MAX_OVERHANG` and
+        // `maxOverhang`): the later ones get a number.
+        let mut statics = statics;
+        let mut taken: BTreeSet<String> = BTreeSet::new();
+        for s in &mut statics {
+            let base = s.name.clone();
+            let mut n = 2;
+            while !taken.insert(s.name.clone()) {
+                s.name = format!("{base}_{n}");
+                n += 1;
+            }
+        }
         let name = snake(simple);
         if statics.is_empty() || !names.insert(name.clone()) {
             continue;

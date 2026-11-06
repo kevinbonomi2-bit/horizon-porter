@@ -1276,7 +1276,20 @@ fn pretty(json: &serde_json::Value) -> String {
 }
 
 fn toml_text(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('"', "\\\"")
+    // A basic string: one line, so a description's line breaks are escaped.
+    let mut out = String::new();
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            '\r' => {}
+            c if c.is_control() => out.push(' '),
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 #[cfg(test)]
