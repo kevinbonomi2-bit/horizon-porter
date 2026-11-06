@@ -454,7 +454,7 @@ mod tests {
     }
 
     #[test]
-    fn refuses_an_empty_jar() {
+    fn unpacks_a_jar_without_classes() {
         let dir = std::env::temp_dir().join(format!("porter-decompile-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
@@ -464,9 +464,10 @@ mod tests {
             .unwrap();
         std::io::Write::write_all(&mut z, b"{}").unwrap();
         z.finish().unwrap();
-        // No classes: refused before Java or Vineflower are needed.
-        let err = decompile(&jar, &dir.join("cache"), |_| {}).unwrap_err();
-        assert!(format!("{err:#}").contains("no classes"), "{err:#}");
+        // No classes (a data-only mod): its resources, without Java or Vineflower.
+        let out = decompile(&jar, &dir.join("cache"), |_| {}).unwrap();
+        assert!(out.join("src/main/resources/fabric.mod.json").is_file());
+        assert!(out.join("src/main/java").is_dir());
         fs::remove_dir_all(&dir).ok();
     }
 }
