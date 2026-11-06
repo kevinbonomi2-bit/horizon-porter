@@ -1,0 +1,89 @@
+# Survey: 100 popular 26.3 mods through horizon-porter
+
+On 2026-11-05 `tools/survey.py` took the most downloaded mods on Modrinth with a
+Minecraft 26.3 version (libraries left out): the overall top 40, 40 popular
+content-tagged mods, and 50 mods a server needs too (gameplay and content), 100 in
+all once overlaps are counted once. For each one it downloaded the jar (NeoForge
+first, else Fabric; checked against Modrinth's SHA-512), ran `horizon-porter port`,
+ran the generated port's own tests, and compiled its Horizon helpers against the
+API mock. The jars stay local (`ai-test/`, not committed).
+
+Nothing here was translated by a model or built into Horizon: it measures what
+`port` does by itself.
+
+## Results
+
+| | Mods |
+| --- | --- |
+| Port, and the port compiles and passes its tests | 97 |
+| Port as a content mod only (no code to port) | 3 |
+| Fail | 0 |
+
+At the start of the day, 26 of the first 90 failed or carried nothing over (see
+"What the survey fixed").
+
+What the report says before porting, from what each mod's Mixins change:
+
+| Verdict | Mods | What it means |
+| --- | --- | --- |
+| No Mixins to judge | 25 | The mod works through hooks and its own code |
+| Its Mixins reach Horizon | 17 | Every Mixin has a Horizon hook or a Horizon function to port into |
+| Partly portable | 32 | Some Mixins draw, or patch the game's internals (performance mods) |
+| Not portable yet | 26 | Most Mixins change how Minecraft draws: shaders, culling, entity models |
+
+### Content
+
+| Mod | Blocks | Items | Block entities | Left to port |
+| --- | --- | --- | --- | --- |
+| BetterNether | 678 | 88 | 4 | 5 |
+| Biomes O' Plenty | 493 | 33 | 1 | 1 |
+| Farmer's Delight (Refabricated) | 139 | 91 | 6 | 26 |
+| BetterEnd | 100 | 11 | 6 | 19 |
+| Traveler's Backpack | 60 | 20 | 1 | 32 |
+| Waystones | 31 | 19 | 6 | 52 |
+| Lootr | 15 | 0 | 0 | 9 |
+| Tom's Simple Storage | 15 | 7 | 11 | 19 |
+| Sophisticated Backpacks | 6 | 65 | 1 | 35 |
+
+1,537 blocks, 339 items and 36 block entities in all. Each block copies the vanilla
+block it is most like (from its Java class, its properties, its blockstate file or
+its name): Biomes O' Plenty's slabs, stairs, doors, fences, leaves, saplings, signs
+and shelves copy theirs, 80 of its 493 blocks are left on stone, mostly blocks that
+are stone-like.
+
+"Left to port" counts the functions `port` leaves for translation (the median mod
+has 6; FancyMenu, the most, 131): what the mod does, as opposed to what it adds.
+With Claude Haiku a mod like Tom's Simple Storage costs about $0.05 to translate.
+
+## What the survey fixed
+
+- **Registrations through a mod's own wrappers** (Tom's Simple Storage, Biomes O'
+  Plenty, Farmer's Delight, Waystones): a helper call's id wherever it is among its
+  arguments, ids kept in constants, library registrars (`blocks.register(...)`,
+  `RegUtils.regBlockEntity(...)`), and, failing all of those, the blockstate and item
+  files. Biomes O' Plenty went from 0 blocks to 493.
+- **Templates**: from blockstate properties, class name endings, the vanilla class a
+  block is made of, its name, and 26.x's colored sets (`Blocks.CARPET.white()`).
+- **Kotlin mods** (Vein Miner, Fzzy Config) decompile to Java.
+- **Data-only mods** (Dungeons and Taverns, Towns and Towers) port as content mods.
+- **Version numbers** that aren't semver (`19.21.0.1247`) no longer break a port.
+- **Generated code** that warned or clashed: text-only configs, config keys that are
+  sentences, a message named `Payload`, two messages on one channel.
+- **The report** calls performance mods partly portable: their Mixins patch the
+  game's internals, and Horizon is its own engine.
+
+## What to target next
+
+1. **Translation, automatically.** 989 functions are left across the 100 mods. The
+   app translates them for a few cents, but only with a Claude API key or a local
+   model; making that step need no setup is the largest remaining step to
+   instant porting.
+2. **Entities.** Mods' mobs (BetterEnd's, BetterNether's) are not ported yet.
+3. **Rendering mods** (26 "not portable yet") need Horizon's renderer to open up:
+   shaders, culling, entity models. That is work for Horizon, not the porter.
+4. **Checking content in game.** The survey proves ports build; whether every block
+   looks and behaves right needs playing them, starting with Biomes O' Plenty and
+   Farmer's Delight.
+
+Run it again with `python tools/survey.py --count 40` (add `--server` for gameplay
+mods, `--slugs a,b` for given ones, `--skip-download` to reuse the jars).
