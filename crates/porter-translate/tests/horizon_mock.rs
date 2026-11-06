@@ -559,7 +559,7 @@ fn block_behaviour_helpers_compile_against_horizon_api() {
     assert!(runtime.contains("TODO: port from net.shutters.Gate (`updateShape`)"));
     assert!(
         runtime.contains(
-            "const SHUTTER_USE: &[&str] = &[\n    \"shutters:oak_shutter\",\n    \"shutters:iron_gate\",\n];"
+            "const SHUTTER_USE: &[&str] = &[\n    \"shutters:iron_gate\",\n    \"shutters:oak_shutter\",\n];"
         ),
         "{runtime}"
     );

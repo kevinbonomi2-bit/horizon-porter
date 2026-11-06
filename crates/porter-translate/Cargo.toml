@@ -8,6 +8,8 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.104"
+# The API key the app saves, read by `translate` too (the app's KEY_SERVICE and KEY_USER).
+keyring = { version = "3", features = ["windows-native", "apple-native", "sync-secret-service", "crypto-rust"] }
 porter-content = { path = "../porter-content" }
 porter-map = { path = "../porter-map" }
 porter-model = { path = "../porter-model" }

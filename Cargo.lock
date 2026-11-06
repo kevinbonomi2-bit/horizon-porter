@@ -3010,6 +3010,7 @@ name = "porter-translate"
 version = "0.7.0"
 dependencies = [
  "anyhow",
+ "keyring",
  "porter-content",
  "porter-java",
  "porter-map",

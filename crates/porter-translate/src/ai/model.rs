@@ -57,7 +57,8 @@ enum Auth {
 
 impl Anthropic {
     /// Credentials from `ANTHROPIC_API_KEY`, else `ANTHROPIC_AUTH_TOKEN`, else the
-    /// `ant` CLI's signed-in profile (`ant auth login`).
+    /// `ant` CLI's signed-in profile (`ant auth login`), else the key saved in the
+    /// app (the system's credential store).
     pub fn from_env(model: Option<&str>, effort: Option<&str>) -> Result<Anthropic> {
         let auth = if let Some(key) = std::env::var("ANTHROPIC_API_KEY")
             .ok()
@@ -71,10 +72,12 @@ impl Anthropic {
             Auth::Bearer(token)
         } else if let Some(token) = ant_token() {
             Auth::Bearer(token)
+        } else if let Some(key) = saved_key() {
+            Auth::ApiKey(key)
         } else {
             bail!(
                 "no Claude API credentials: set ANTHROPIC_API_KEY (an API key from platform.claude.com), \
-                 or sign in with `ant auth login`, or use --ai claude-code or --ai \"<command>\""
+                 or sign in with `ant auth login`, or save one in the app, or use --ai claude-code or --ai \"<command>\""
             );
         };
         Ok(Anthropic {
@@ -104,6 +107,19 @@ impl Anthropic {
         ]
         .contains(&self.model.as_str())
     }
+}
+
+/// The API key the app keeps in the system's credential store (Windows Credential
+/// Manager, the macOS keychain, the Secret Service), when one is saved there.
+fn saved_key() -> Option<String> {
+    keyring::Entry::new(
+        "io.github.kevinbonomi2bit.horizonporter",
+        "anthropic-api-key",
+    )
+    .ok()?
+    .get_password()
+    .ok()
+    .filter(|k| !k.trim().is_empty())
 }
 
 /// A short-lived token from the `ant` CLI, when it is installed and signed in.

@@ -86,7 +86,10 @@ pub fn find(scan: &ModScan, ns: &str, blocks: &[porter_content::Block]) -> Vec<B
     }
     let mut used = BTreeSet::new();
     by.into_iter()
-        .map(|((kind, class), blocks)| {
+        .map(|((kind, class), mut blocks)| {
+            // Sorted, for the hooks to find a block by binary search.
+            blocks.sort();
+            blocks.dedup();
             let methods = scan
                 .classes
                 .iter()
@@ -154,6 +157,13 @@ pub fn runtime(behaviours: &[Behaviour], blocks: &[(String, porter_content::Bloc
         return String::new();
     }
     let mut r = String::from(RUNTIME_TYPES);
+    let ns = behaviours[0].blocks[0]
+        .split_once(':')
+        .map_or("", |(ns, _)| ns);
+    let _ = write!(
+        r,
+        "\n/// The mod's blocks' namespace: the world hooks run for every block in the world,\n/// and this turns away all others with one comparison.\nconst NAMESPACE: &str = \"{ns}:\";\n"
+    );
 
     r.push_str(
         "\n/// Quarter turns clockwise from the `facing` each block stores to the one its Java\n/// knows: its blockstate is turned so each draws what Java draws.\nconst FACING_TURNS: &[(&str, u8)] = &[\n",
@@ -236,10 +246,13 @@ pub fn runtime(behaviours: &[Behaviour], blocks: &[(String, porter_content::Bloc
         } else {
             let any = of
                 .iter()
-                .map(|b| format!("{}.contains(&block)", consts(&b.function)))
+                .map(|b| format!("{}.binary_search(&block).is_ok()", consts(&b.function)))
                 .collect::<Vec<_>>()
-                .join("\n        || ");
-            let _ = writeln!(r, "    {any}\n}}");
+                .join("\n            || ");
+            let _ = writeln!(
+                r,
+                "    block.starts_with(NAMESPACE)\n        && ({any})\n}}"
+            );
         }
         r.push_str(DISPATCH_DOCS[kind as usize]);
         let _ = writeln!(r, "pub fn {dispatch}({sig}) -> {ret} {{");
@@ -247,7 +260,7 @@ pub fn runtime(behaviours: &[Behaviour], blocks: &[(String, porter_content::Bloc
         for b in &of {
             let _ = writeln!(
                 r,
-                "    if {}.contains(&block) {{\n        return {}({call});\n    }}",
+                "    if {}.binary_search(&block).is_ok() {{\n        return {}({call});\n    }}",
                 consts(&b.function),
                 b.function
             );
