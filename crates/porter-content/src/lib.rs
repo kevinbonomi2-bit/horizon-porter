@@ -134,6 +134,30 @@ pub fn generate_with(
             if !SHARED_NAMESPACES.contains(ns) && *ns != id {
                 namespaces.insert(ns.to_string());
             }
+            // JSON as Horizon reads it, strictly: Java's reader skips a UTF-8 byte
+            // order mark (Macaw's tags have one) and Horizon's doesn't, and one file
+            // it can't read keeps every content mod from loading.
+            if rel.ends_with(".json") || rel.ends_with(".mcmeta") {
+                if content.copies.contains_key(&rel) || content.files.contains_key(&rel) {
+                    continue;
+                }
+                let Ok(bytes) = std::fs::read(&src) else {
+                    continue;
+                };
+                let text =
+                    String::from_utf8_lossy(bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes))
+                        .into_owned();
+                if serde_json::from_str::<serde_json::Value>(&text).is_err() {
+                    content
+                        .skipped
+                        .push(format!("{rel}: not JSON Horizon can read (left out)"));
+                    continue;
+                }
+                if bytes.starts_with(b"\xEF\xBB\xBF") {
+                    content.files.insert(rel, text);
+                    continue;
+                }
+            }
             content.copies.entry(rel).or_insert(src);
         }
     }

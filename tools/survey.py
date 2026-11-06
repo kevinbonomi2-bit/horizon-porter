@@ -179,6 +179,16 @@ VANILLA = json.loads((ROOT / "crates" / "porter-content" / "data" / "vanilla-blo
 
 def registry_problems(content: Path) -> list[str]:
     out = []
+    # Horizon reads JSON strictly: no byte order mark, nothing malformed.
+    for f in sorted(content.rglob("*.json")):
+        raw = f.read_bytes()
+        if raw.startswith(bytes([0xEF, 0xBB, 0xBF])):
+            out.append(f"{f.relative_to(content).as_posix()}: starts with a byte order mark")
+            continue
+        try:
+            json.loads(raw.decode("utf-8"))
+        except Exception as e:  # noqa: BLE001
+            out.append(f"{f.relative_to(content).as_posix()}: {e}")
     for f in sorted(content.glob("data/*/horizon/block/*.json")):
         b = json.loads(f.read_text(encoding="utf-8"))
         t = b.get("template", "")
