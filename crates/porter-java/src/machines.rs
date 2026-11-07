@@ -359,11 +359,14 @@ pub fn renderer(class: &str, source: &str) -> Option<RendererInfo> {
     None
 }
 
+/// The property fields a block class adds, and its (field, default value) pairs.
+pub(crate) type StateFields = (Vec<String>, Vec<(String, String)>);
+
 /// A block class's state definition: the property fields its
 /// `createBlockStateDefinition` adds (`builder.add(FACING, OPEN)`), and the values its
 /// constructor's `registerDefaultState` sets, as (field, value) with the value as
 /// a blockstate names it (`Direction.NORTH` is `north`, `GaragePart.TOP` `top`).
-pub(crate) fn state_definition(source: &str) -> Option<(Vec<String>, Vec<(String, String)>)> {
+pub(crate) fn state_definition(source: &str) -> Option<StateFields> {
     let constant = |t: &str| {
         let w = t
             .trim()

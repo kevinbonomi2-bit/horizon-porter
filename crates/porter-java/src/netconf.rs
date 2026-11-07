@@ -191,13 +191,12 @@ pub fn creative_tabs(source: &str) -> Vec<CreativeTabInfo> {
 /// `(ItemLike)BlockInit.OAK_ROOF.get()`.
 fn last_constant(text: &str) -> Option<String> {
     text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-        .filter(|w| {
+        .rfind(|w| {
             w.len() >= 2
                 && w.chars().any(|c| c.is_ascii_uppercase())
                 && w.chars()
                     .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
         })
-        .last()
         .map(str::to_ascii_lowercase)
 }
 

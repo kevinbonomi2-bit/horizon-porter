@@ -235,7 +235,7 @@ pub struct ModScan {
     /// `createBlockStateDefinition` adds (`FACING`, `PART`), the values its
     /// `registerDefaultState` sets as (field, value): `("PART", "top")`).
     #[serde(default)]
-    pub state_definitions: Vec<(String, Vec<String>, Vec<(String, String)>)>,
+    pub state_definitions: Vec<StateDefinition>,
     /// How block classes turn their `facing` when placed (`getStateForPlacement`):
     /// (class, quarter turns clockwise from the way the player looks), so
     /// `context.getHorizontalDirection().getOpposite()` is 2 (toward the player).
@@ -571,6 +571,11 @@ pub struct CreativeTabInfo {
     /// Its items in order (`displayItems`'s `accept` calls).
     pub items: Vec<String>,
 }
+
+/// A block class's state definition: (class, the property fields its
+/// `createBlockStateDefinition` adds, the (field, value) pairs its
+/// `registerDefaultState` sets).
+pub type StateDefinition = (String, Vec<String>, Vec<(String, String)>);
 
 /// One registry entry the mod adds, as found in its code.
 #[derive(Debug, Clone, Serialize, Deserialize)]

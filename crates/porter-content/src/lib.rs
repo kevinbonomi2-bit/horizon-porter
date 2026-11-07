@@ -480,8 +480,9 @@ pub fn generate_with(
         if connecting.is_none()
             && vanilla_block(&template).is_some_and(|v| v.full_cube || shutter)
             && let Some(b) = blockstate.as_ref()
+            && let Some((outline, collision)) = model_shapes(&content, b, &schema)
         {
-            if let Some((outline, collision)) = model_shapes(&content, b, &schema) {
+            {
                 json["shapes"] = outline;
                 if let Some(c) = collision {
                     json["collision_shapes"] = c;
@@ -1095,9 +1096,11 @@ type Box6 = [f64; 6];
 
 /// Vanilla's block models: each one's parent and boxes, from
 /// `data/vanilla-models.json` (`tools/vanilla_blocks.py`).
-fn vanilla_model(id: &str) -> Option<&'static (Option<String>, Option<Vec<Box6>>)> {
-    static MODELS: std::sync::OnceLock<BTreeMap<String, (Option<String>, Option<Vec<Box6>>)>> =
-        std::sync::OnceLock::new();
+/// A vanilla model's parent, and its boxes when it has elements.
+type VanillaModel = (Option<String>, Option<Vec<Box6>>);
+
+fn vanilla_model(id: &str) -> Option<&'static VanillaModel> {
+    static MODELS: std::sync::OnceLock<BTreeMap<String, VanillaModel>> = std::sync::OnceLock::new();
     MODELS
         .get_or_init(|| {
             let json: serde_json::Value =
