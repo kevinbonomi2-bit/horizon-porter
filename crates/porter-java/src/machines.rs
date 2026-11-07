@@ -282,10 +282,31 @@ pub fn storage(class: &str, source: &str) -> Option<StorageInfo> {
             };
         }
     }
-    (!tanks.is_empty() || energy.is_some()).then(|| StorageInfo {
+    // Item slots: the largest handler or list it makes.
+    let mut items = 0usize;
+    for name in [
+        "new ItemStackHandler",
+        "new SimpleContainer",
+        "NonNullList.withSize",
+        "new ItemStacksResourceHandler",
+    ] {
+        for args in calls(source, name) {
+            // `new ItemStackHandler()` holds one.
+            let n = if args.trim().is_empty() {
+                Some(1)
+            } else {
+                split_top(&args).first().and_then(|a| constant(a, source))
+            };
+            if let Some(n) = n {
+                items = items.max(n.clamp(0, 256) as usize);
+            }
+        }
+    }
+    (!tanks.is_empty() || energy.is_some() || items > 0).then(|| StorageInfo {
         class: class.to_string(),
         tanks,
         energy,
+        items,
     })
 }
 

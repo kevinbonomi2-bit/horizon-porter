@@ -35,6 +35,8 @@ pub struct BlockEntity {
     pub tanks: Vec<i32>,
     /// Its energy buffer: capacity, most one insert moves, most one extract moves.
     pub energy: Option<[i32; 3]>,
+    /// How many item slots it holds (`new ItemStackHandler(1)`), 0 for none.
+    pub items: usize,
     /// Whether its Java code looks at the blocks beside it (it uses `Direction`):
     /// its tick then gets them (`machine.neighbour(side)`).
     pub neighbours: bool,
@@ -179,6 +181,7 @@ pub fn find(scan: &ModScan, ns: &str) -> Vec<BlockEntity> {
             renderer: None,
             tanks: Vec::new(),
             energy: None,
+            items: 0,
             neighbours: false,
             left_out: Vec::new(),
         };
@@ -197,6 +200,7 @@ pub fn find(scan: &ModScan, ns: &str) -> Vec<BlockEntity> {
             if let Some(s) = scan.storages.iter().find(|s| s.class == class.name) {
                 be.tanks = s.tanks.clone();
                 be.energy = s.energy;
+                be.items = s.items;
             }
         }
         out.push(be);
@@ -620,6 +624,9 @@ pub struct Frame {
     /// The frame's partial tick, 0 to 1, and the level's game time.
     pub partial: f32,
     pub game_time: i64,
+    /// Its item slots as the server sent them (`getItem(slot)`): what a renderer
+    /// draws on it (a skillet's food, a cutting board's ingredient). (item, count).
+    pub items: Vec<Option<(String, u32)>>,
 }
 
 impl Frame {

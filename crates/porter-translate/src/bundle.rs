@@ -308,6 +308,27 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
                 .map(move |b| (b.clone(), menu.clone(), slots))
         })
         .collect();
+    // Block entities that hold items without a menu (a skillet's pan, a cutting
+    // board): their slots, so a click's code and the renderer reach them. No menu,
+    // and no side a hopper reaches, as in Java.
+    let item_holders: Vec<(String, String, usize)> = block_entities
+        .iter()
+        .filter(|be| be.items > 0)
+        .filter(|be| !machines.iter().any(|m| m.entity == be.id))
+        .filter(|be| {
+            !vanilla_containers
+                .iter()
+                .any(|(b, _, _)| be.blocks.contains(b))
+        })
+        .flat_map(|be| {
+            be.blocks
+                .iter()
+                .map(move |b| (b.clone(), String::new(), be.items))
+        })
+        .collect();
+    let mut vanilla_containers = vanilla_containers;
+    vanilla_containers.extend(item_holders);
+    let cooking = cooking_recipes(&content);
     if !vanilla_containers.is_empty() && !content.is_empty() {
         let classes: BTreeSet<String> = block_entities
             .iter()
@@ -431,6 +452,7 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
         behaviours: &behaviours,
         behaviour_blocks: &behaviour_blocks,
         vanilla_containers: &vanilla_containers,
+        cooking: &cooking,
         statics: &java_statics,
         ledger: horizon.map(|src| (src.to_path_buf(), unmapped_ports(scan, src))),
     };
@@ -810,11 +832,71 @@ struct Ctx<'a> {
     /// Blocks whose block entity opens a vanilla menu over its slots: (block, menu
     /// type, slots).
     vanilla_containers: &'a [(String, String, usize)],
+    /// Cooking recipes, vanilla's and the mod's: (type, ingredient, result, count, ticks).
+    cooking: &'a [(String, String, String, u32, u32)],
     /// The Java statics the mod's code shares.
     statics: &'a [crate::statics::Module],
     /// The Horizon checkout read, and the functions that port each unmapped
     /// Mixin's target (`FarmBlock.turnToDirt`).
     ledger: Option<(PathBuf, BTreeMap<String, Vec<ledger::Port>>)>,
+}
+
+/// Vanilla's cooking recipes (`tools/vanilla_cooking.py`), with the mod's own recipes
+/// of those types from its data.
+fn cooking_recipes(content: &porter_content::Content) -> Vec<(String, String, String, u32, u32)> {
+    const VANILLA: &str = include_str!("../data/vanilla-cooking.json");
+    type Row = (String, String, String, u32, u32);
+    let mut rows: Vec<Row> = serde_json::from_str(VANILLA).unwrap_or_default();
+    const TYPES: [&str; 4] = [
+        "minecraft:campfire_cooking",
+        "minecraft:smoking",
+        "minecraft:smelting",
+        "minecraft:blasting",
+    ];
+    for (path, file) in &content.copies {
+        if !(path.starts_with("data/") && path.contains("/recipe/") && path.ends_with(".json")) {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(file) else {
+            continue;
+        };
+        let Ok(r) = serde_json::from_str::<serde_json::Value>(text.trim_start_matches('\u{feff}'))
+        else {
+            continue;
+        };
+        let Some(kind) = r["type"].as_str().filter(|k| TYPES.contains(k)) else {
+            continue;
+        };
+        let input = match &r["ingredient"] {
+            serde_json::Value::String(s) => Some(s.clone()),
+            serde_json::Value::Object(o) => o
+                .get("item")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+                .or_else(|| {
+                    o.get("tag")
+                        .and_then(|v| v.as_str())
+                        .map(|t| format!("#{t}"))
+                }),
+            _ => None,
+        };
+        let (result, count) = match &r["result"] {
+            serde_json::Value::String(s) => (Some(s.clone()), 1),
+            serde_json::Value::Object(o) => (
+                o.get("id")
+                    .or_else(|| o.get("item"))
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string),
+                o.get("count").and_then(|v| v.as_u64()).unwrap_or(1) as u32,
+            ),
+            _ => (None, 1),
+        };
+        if let (Some(input), Some(result)) = (input, result) {
+            let ticks = r["cookingtime"].as_u64().unwrap_or(200) as u32;
+            rows.push((kind.to_string(), input, result, count, ticks));
+        }
+    }
+    rows
 }
 
 /// The container helper's part for a machine: its slots, with hoppers putting in
@@ -1103,6 +1185,16 @@ pub const DESCRIPTION: &str = "{description}";
             );
             for (block, menu, slots) in self.vanilla_containers {
                 let _ = writeln!(r, "    ({block:?}, {menu:?}, {slots}),");
+            }
+            r.push_str("];\n");
+            r.push_str(
+                "\n/// Cooking recipes, vanilla's and the mod's own, which `world.recipes` reads for\n/// those types: (type, ingredient, result, count, ticks).\npub const COOKING: &[(&str, &str, &str, u32, u32)] = &[\n",
+            );
+            for (kind, input, result, count, ticks) in self.cooking {
+                let _ = writeln!(
+                    r,
+                    "    ({kind:?}, {input:?}, {result:?}, {count}, {ticks}),"
+                );
             }
             r.push_str("];\n");
         }
@@ -1680,15 +1772,16 @@ fn {id}_block_entity_container(block: &str, container: &mut Option<horizon_clien
     if container.is_some() {{
         return;
     }}
-    // A chest-like block: every slot reached from every side, as a chest's.
+    // A chest-like block: every slot reached from every side, as a chest's. One
+    // without a menu (a skillet) only holds its items: no side reaches them.
     if let Some((_, menu, slots)) = m::VANILLA_CONTAINERS.iter().find(|(b, _, _)| *b == block) {{
-        let all: Vec<usize> = (0..*slots).collect();
+        let all: Vec<usize> = if menu.is_empty() {{ Vec::new() }} else {{ (0..*slots).collect() }};
         *container = Some(horizon_client::containers::ModContainer {{
             slots: *slots,
             faces: std::array::from_fn(|_| all.clone()),
             inputs: all.clone(),
             outputs: all,
-            menu: Some((*menu).into()),
+            menu: (!menu.is_empty()).then(|| (*menu).into()),
         }});
         return;
     }}
@@ -1930,7 +2023,15 @@ fn {id}_block_entity_update_tag(
     use crate::game::{m} as m;
     let _ = pos;
     if m::BLOCK_ENTITIES.iter().any(|(_, id, _)| *id == entity.id) {{
-        *tag = Some(entity.nbt.clone());
+        let mut nbt = entity.nbt.clone();
+        // Its items, which its renderer draws (a skillet's food): `item.N` and `count.N`.
+        for (i, slot) in entity.items.iter().enumerate() {{
+            if let Some(stack) = slot {{
+                nbt.insert(format!("item.{{i}}").as_str().into(), horizon_world::nbt::Tag::String(stack.item.as_ref().into()));
+                nbt.insert(format!("count.{{i}}").as_str().into(), horizon_world::nbt::Tag::Int(stack.count as i32));
+            }}
+        }}
+        *tag = Some(nbt);
     }}
 }}
 "#
@@ -1960,6 +2061,22 @@ fn {id}_block_entity_submit(
         facing: game.native_block_state_property(state, "facing").map(str::to_string),
         partial: draw.partial,
         game_time: draw.game_time,
+        // Its items, as the update tag carries them.
+        items: {{
+            let nbt = &entity.nbt;
+            let text = |key: String| match nbt.get(&JavaString::from(key.as_str())) {{
+                Some(Tag::String(s)) => Some(s.to_string_lossy()),
+                _ => None,
+            }};
+            let count = |key: String| match nbt.get(&JavaString::from(key.as_str())) {{
+                Some(Tag::Int(n)) => (*n).max(0) as u32,
+                _ => 1,
+            }};
+            let slots = (0..64).rev().find(|i| text(format!("item.{{i}}")).is_some()).map_or(0, |i| i + 1);
+            (0..slots)
+                .map(|i| text(format!("item.{{i}}")).map(|item| (item, count(format!("count.{{i}}")))))
+                .collect()
+        }},
     }};
     let mut ops = m::Draw::default();
     {{

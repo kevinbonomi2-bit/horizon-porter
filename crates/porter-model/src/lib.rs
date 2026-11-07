@@ -365,6 +365,10 @@ pub struct StorageInfo {
     /// The energy buffer: capacity, most one insert moves, most one extract moves
     /// (`new SimpleEnergyHandler(10000, 100, 100)`, `new EnergyStorage(...)`).
     pub energy: Option<[i32; 3]>,
+    /// How many item slots it holds (`new ItemStackHandler(1)`,
+    /// `NonNullList.withSize(9, ItemStack.EMPTY)`), 0 for none.
+    #[serde(default)]
+    pub items: usize,
 }
 
 /// A screen of the mod's own that isn't a container's: a guidebook, a menu opened

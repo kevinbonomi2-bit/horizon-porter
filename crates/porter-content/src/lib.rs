@@ -716,6 +716,21 @@ pub fn generate_with(
         if let Some((template, components)) = equipment::equipment(scan, ns, &reg.args) {
             json["template"] = template.into();
             json["components"] = components;
+        } else if let Some(mob) = item_name.strip_suffix("_spawn_egg") {
+            // A spawn egg (`SpawnEggItem`): vanilla's, spawning the mod's mob, or the
+            // vanilla one of that name (Friends & Foes' illusioner).
+            let own = format!("{ns}:{mob}");
+            let id = if content
+                .entities
+                .iter()
+                .any(|e| e.split(' ').next() == Some(own.as_str()))
+            {
+                own
+            } else {
+                format!("minecraft:{mob}")
+            };
+            json["template"] = "minecraft:pig_spawn_egg".into();
+            json["components"] = serde_json::json!({ "minecraft:entity_data": { "id": id } });
         } else if reg.args.contains("fireResistant()") {
             // `Item.Properties.fireResistant()`: it doesn't burn in lava or fire.
             json["components"] = serde_json::json!({ "minecraft:damage_resistant": { "types": "#minecraft:is_fire" } });

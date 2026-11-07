@@ -303,7 +303,18 @@ fn machine_guis(root: &Path, scan: &mut ModScan) {
             continue;
         };
         let simple = sup.rsplit('.').next().unwrap_or(sup);
-        let is_menu = simple.ends_with("ContainerMenu") || simple.ends_with("ScreenHandler");
+        // Vanilla's menu bases: `AbstractContainerMenu`, and those built on it that a
+        // mod's machine extends (Farmer's Delight's cooking pot is a `RecipeBookMenu`).
+        let is_menu = simple.ends_with("ContainerMenu")
+            || simple.ends_with("ScreenHandler")
+            || matches!(
+                simple,
+                "RecipeBookMenu"
+                    | "AbstractFurnaceMenu"
+                    | "AbstractCraftingMenu"
+                    | "ItemCombinerMenu"
+                    | "RecipeBookMenu<?>"
+            );
         let is_screen = simple.ends_with("ContainerScreen") || simple == "HandledScreen";
         if !is_menu && !is_screen {
             continue;
@@ -734,6 +745,11 @@ fn second_type_argument(ty: &str) -> Option<&str> {
 struct Helper {
     registry: String,
     param: usize,
+    /// The class its body creates (`register(name, Blinds::new, ..)` in
+    /// `registerBlinds`), and the arguments it registers with (its properties):
+    /// a call of the helper names neither.
+    creates: Option<String>,
+    args: String,
 }
 
 /// Which parameter of the enclosing method an id argument is built from, if any:
@@ -805,10 +821,23 @@ fn registrations(parsed: &[(String, ParsedFile)]) -> Vec<Registration> {
                         .filter(|d| d.id.is_none())
                         .and_then(|d| {
                             let arg = call.args.get(d.id_arg)?;
-                            let param = id_param(arg, &method.params)?;
+                            // The id through a local (`key = ResourceKey.create(..,
+                            // id(name))`): the method's one `String` parameter.
+                            let param = id_param(arg, &method.params).or_else(|| {
+                                let strings: Vec<usize> = method
+                                    .param_types
+                                    .iter()
+                                    .enumerate()
+                                    .filter(|(_, t)| t.as_str() == "String")
+                                    .map(|(i, _)| i)
+                                    .collect();
+                                (strings.len() == 1).then(|| strings[0])
+                            })?;
                             Some(Helper {
                                 registry: d.registry,
                                 param,
+                                creates: created_class(&call.args),
+                                args: call.args.join(", "),
                             })
                         })
                 } else {
@@ -821,6 +850,8 @@ fn registrations(parsed: &[(String, ParsedFile)]) -> Vec<Registration> {
                             Some(Helper {
                                 registry: h.registry.clone(),
                                 param,
+                                creates: created_class(&call.args).or_else(|| h.creates.clone()),
+                                args: format!("{}, {}", call.args.join(", "), h.args),
                             })
                         })
                 };
@@ -884,8 +915,9 @@ fn registrations(parsed: &[(String, ParsedFile)]) -> Vec<Registration> {
                 id,
                 via: "helper method".into(),
                 class,
-                creates: created_class(&call.args),
-                args: call.args.join(", "),
+                creates: created_class(&call.args).or_else(|| helper.creates.clone()),
+                // The call's own arguments, then what the helper registers with.
+                args: format!("{}, {}", call.args.join(", "), helper.args),
             });
         }
     }

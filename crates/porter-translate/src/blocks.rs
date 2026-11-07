@@ -490,9 +490,9 @@ fn {id}_right_click_block({params}) {
         *canceled = true;
         return;
     }
-    let held = game
+    let (held, held_count) = game
         .native_held()
-        .map_or_else(|| "minecraft:air".to_string(), |(item, _, _)| item);
+        .map_or_else(|| ("minecraft:air".to_string(), 0), |(item, count, _)| (item, count));
     // Where the click landed: the player's look from their eyes into the block's boxes.
     let player = game.native_acting_player();
     let hit = match &player {
@@ -512,6 +512,7 @@ fn {id}_right_click_block({params}) {
         face,
         hit,
         held,
+        held_count,
         facing,
         creative,
     };
@@ -629,6 +630,13 @@ const ITEM_WORLD: &str = r#"    struct Here<'g, 'a> {
         fn give(&mut self, item: &str, count: u32) -> u32 {
             self.game.native_give_items(item, count)
         }
+        fn item_is(&mut self, item: &str, tag: &str) -> bool {
+            // A `#tag` ingredient, as a recipe names one, lists the tag's items.
+            let tag = String::from('#') + tag.trim_start_matches('#');
+            self.game
+                .native_recipe_ingredient(&serde_json::Value::String(tag))
+                .is_some_and(|i| i.order.iter().any(|x| x == item))
+        }
     }
 {entities}"#;
 
@@ -696,6 +704,101 @@ const ENTITY_WORLD: &str = r#"    impl m::BlockEntities for Here<'_, '_> {
             }
             set
         }
+        fn recipes(&mut self, kind: &str) -> Vec<m::Recipe> {
+            let game = &*self.game;
+            let items = |v: serde_json::Value| -> Vec<String> {
+                game.native_recipe_ingredient(&v).map(|i| i.order).unwrap_or_default()
+            };
+            // Cooking types: vanilla's and the mod's own recipes of them, from the
+            // table the porter wrote (Horizon's lookup serves the mods' own types).
+            if m::COOKING.iter().any(|(k, ..)| *k == kind) {
+                return m::COOKING
+                    .iter()
+                    .filter(|(k, ..)| *k == kind)
+                    .map(|(_, input, result, count, ticks)| m::Recipe {
+                        id: format!("{kind}/{result}"),
+                        ingredients: vec![items(serde_json::Value::String((*input).into()))],
+                        result: Some(m::Stack::new(result, *count)),
+                        values: vec![("cookingtime".into(), ticks.to_string())],
+                    })
+                    .collect();
+            }
+            // An ingredient as recipe files write it: an item, a `#tag`, `{"item": ..}`,
+            // `{"tag": ..}`, or a list of them.
+            fn names(v: &serde_json::Value) -> Option<serde_json::Value> {
+                use serde_json::Value;
+                let one = |v: &Value| match v {
+                    Value::String(s) => Some(s.clone()),
+                    Value::Object(o) => o
+                        .get("item")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                        .or_else(|| o.get("tag").and_then(Value::as_str).map(|t| String::from('#') + t)),
+                    _ => None,
+                };
+                match v {
+                    Value::Array(a) => Some(Value::Array(a.iter().filter_map(one).map(Value::String).collect())),
+                    other => one(other).map(Value::String),
+                }
+            }
+            game.native_recipes_of_type(kind)
+                .iter()
+                .map(|r| {
+                    let json = &*r.json;
+                    let mut ingredients = Vec::new();
+                    for key in ["ingredient", "input"] {
+                        if let Some(v) = json.get(key).and_then(names) {
+                            ingredients.push(items(v));
+                        }
+                    }
+                    for key in ["ingredients", "inputs"] {
+                        if let Some(serde_json::Value::Array(list)) = json.get(key) {
+                            ingredients.extend(list.iter().filter_map(names).map(&items));
+                        }
+                    }
+                    // `"result": "id"`, `{"id": ..}`, `{"item": ..}`, or a list of them
+                    // (Farmer's Delight's cutting gives several): the first.
+                    let result = json.get("result").and_then(|v| {
+                        let v = match v {
+                            serde_json::Value::Array(a) => a.first()?.clone(),
+                            other => other.clone(),
+                        };
+                        let v = match v {
+                            serde_json::Value::String(s) => serde_json::json!({ "id": s }),
+                            serde_json::Value::Object(o) if !o.contains_key("id") => match o.get("item") {
+                                Some(serde_json::Value::Object(inner)) => serde_json::Value::Object(inner.clone()),
+                                Some(item) => {
+                                    let mut o = o.clone();
+                                    o.remove("item");
+                                    o.insert("id".into(), item.clone());
+                                    serde_json::Value::Object(o)
+                                }
+                                None => serde_json::Value::Object(o),
+                            },
+                            other => other,
+                        };
+                        let stack = game.native_recipe_result(&v)?;
+                        Some(m::Stack::new(&stack.item, stack.count))
+                    });
+                    let values = json
+                        .as_object()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|(k, v)| match v {
+                            serde_json::Value::String(s) => Some((k.clone(), s.clone())),
+                            serde_json::Value::Number(_) | serde_json::Value::Bool(_) => Some((k.clone(), v.to_string())),
+                            _ => None,
+                        })
+                        .collect();
+                    m::Recipe {
+                        id: r.id.clone(),
+                        ingredients,
+                        result,
+                        values,
+                    }
+                })
+                .collect()
+        }
     }
 "#;
 
@@ -729,6 +832,9 @@ pub trait BlockEntities {
     /// Puts `item` in slot `slot` (`setItem`), None or a count of 0 empties it; false
     /// when there is no such slot.
     fn set_entity_item(&mut self, pos: [i32; 3], slot: usize, item: Option<(&str, u32)>) -> bool;
+    /// The recipes of type `kind` (`farmersdelight:cutting`, `minecraft:campfire_cooking`),
+    /// ingredients resolved to items: what Java's `level.recipeAccess()` finds.
+    fn recipes(&mut self, kind: &str) -> Vec<Recipe>;
 }
 "#;
 
@@ -1032,6 +1138,12 @@ pub trait World: Blocks {
         let _ = (item, count);
         0
     }
+    /// Whether `item` is in item tag `tag` (`stack.is(ItemTags.FLOWERS)`, a mod's
+    /// `TagKey<Item>`: `villagersplus:small_plantable_items`).
+    fn item_is(&mut self, item: &str, tag: &str) -> bool {
+        let _ = (item, tag);
+        false
+    }
 }
 
 /// A right click on one of the mod's blocks (`useItemOn`'s arguments). Horizon
@@ -1045,6 +1157,8 @@ pub struct BlockUse {
     pub hit: [f64; 3],
     /// The item in the player's main hand, `minecraft:air` when empty.
     pub held: String,
+    /// How many of it the hand holds (`stack.getCount()`), 0 when empty.
+    pub held_count: u32,
     /// The way the player looks, flat (`player.getDirection()`): `north`, `east`,
     /// `south` or `west`.
     pub facing: String,
