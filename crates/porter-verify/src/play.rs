@@ -486,8 +486,20 @@ pub fn held_wanted(port_dir: &Path) -> (Vec<String>, bool) {
                                         || c == '/'
                                 })
                         });
-                    if looks && id != "minecraft:air" && !items.iter().any(|x| x == id) {
-                        items.push(id.to_string());
+                    // A tag the code tests (`world.item_is(held, "c:buckets/water")`): an
+                    // item of it, as the mod's data or the game's lists it.
+                    let id = if looks && code.contains("_is(") {
+                        tag_item(port_dir, id)
+                    } else if looks {
+                        Some(id.to_string())
+                    } else {
+                        None
+                    };
+                    if let Some(id) = id
+                        && id != "minecraft:air"
+                        && !items.contains(&id)
+                    {
+                        items.push(id);
                     }
                 }
             }
@@ -500,6 +512,49 @@ pub fn held_wanted(port_dir: &Path) -> (Vec<String>, bool) {
         }
     }
     (items, own)
+}
+
+/// An item of item tag `tag`: the first plain one its file lists (the mod's own
+/// data, else the game's, from the launcher's newest version), nested tags followed.
+fn tag_item(port_dir: &Path, tag: &str) -> Option<String> {
+    fn find(port_dir: &Path, tag: &str, depth: u8) -> Option<String> {
+        if depth > 6 {
+            return None;
+        }
+        let tag = tag.trim_start_matches('#');
+        let (ns, path) = tag.split_once(':').unwrap_or(("minecraft", tag));
+        let rel = format!("data/{ns}/tags/item/{path}.json");
+        let game = launcher_data().ok().and_then(|d| {
+            let mut versions: Vec<_> = std::fs::read_dir(d.join("versions"))
+                .ok()?
+                .flatten()
+                .map(|e| e.path().join(".local/horizon-client/26.3"))
+                .filter(|p| p.is_dir())
+                .collect();
+            versions.sort_by_key(|p| p.metadata().and_then(|m| m.modified()).ok());
+            versions.pop()
+        });
+        let text = std::fs::read_to_string(port_dir.join("content").join(&rel))
+            .ok()
+            .or_else(|| std::fs::read_to_string(game?.join(&rel)).ok())?;
+        let json: Value = serde_json::from_str(text.trim_start_matches('\u{feff}')).ok()?;
+        for v in json["values"].as_array()? {
+            let entry = v.as_str().or_else(|| v["id"].as_str())?;
+            if entry.starts_with('#') {
+                if let Some(item) = find(port_dir, entry, depth + 1) {
+                    return Some(item);
+                }
+            } else {
+                return Some(if entry.contains(':') {
+                    entry.to_string()
+                } else {
+                    format!("minecraft:{entry}")
+                });
+            }
+        }
+        None
+    }
+    find(port_dir, tag, 0)
 }
 
 /// The content mod's blocks (sorted ids), and those whose Java acts on a right click.
