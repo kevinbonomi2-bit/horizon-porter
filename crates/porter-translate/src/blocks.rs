@@ -429,7 +429,13 @@ fn {id}_right_click_block({params}) {
         }
     }
     impl m::World for Here<'_, '_> {
-        fn set_block(&mut self, pos: [i32; 3], block: &str, properties: &[(&str, &str)]) -> bool {
+        fn set_block_flags(
+            &mut self,
+            pos: [i32; 3],
+            block: &str,
+            properties: &[(&str, &str)],
+            flags: i32,
+        ) -> bool {
             // `block.defaultBlockState().setValue(..)`, from the registry Horizon's
             // own `native_set_block` reads (no helper names a block's states yet).
             let state = {
@@ -450,8 +456,8 @@ fn {id}_right_click_block({params}) {
                 state
             };
             let dimension = self.game.native_dimension();
-            // Level.setBlock(pos, state, Block.UPDATE_ALL): neighbours hear it.
-            self.game.native_set_block(dimension, pos, state, 3)
+            // Level.setBlock(pos, state, flags)
+            self.game.native_set_block(dimension, pos, state, flags)
         }
         fn random(&mut self) -> f32 {
             let dimension = self.game.native_dimension();
@@ -459,14 +465,14 @@ fn {id}_right_click_block({params}) {
                 .native_level_random(dimension)
                 .map_or(0.5, horizon_core::random::RandomSource::next_float)
         }
-        fn set_property(&mut self, pos: [i32; 3], key: &str, value: &str) -> bool {
+        fn set_property_flags(&mut self, pos: [i32; 3], key: &str, value: &str, flags: i32) -> bool {
             let value = if key == "facing" {
                 m::stored_facing(&self.game.native_block(pos), value)
             } else {
                 value.to_string()
             };
-            // Level.setBlock(pos, state, Block.UPDATE_ALL)
-            self.game.native_set_block_property_with(pos, key, &value, 3)
+            // Level.setBlock(pos, state.setValue(..), flags)
+            self.game.native_set_block_property_with(pos, key, &value, flags)
         }
         fn play_sound(&mut self, sound: &str, pos: [i32; 3], volume: f32, pitch: f32) {
             let at = [
@@ -676,7 +682,14 @@ pub trait Blocks {
 pub trait World: Blocks {
     /// Sets property `key` of the block at `pos` (`level.setBlock(pos,
     /// state.setValue(..), 3)`); false when it has no such property or value.
-    fn set_property(&mut self, pos: [i32; 3], key: &str, value: &str) -> bool;
+    fn set_property(&mut self, pos: [i32; 3], key: &str, value: &str) -> bool {
+        self.set_property_flags(pos, key, value, 3)
+    }
+    /// The same with `level.setBlock`'s `flags` as Java passes them: 3 tells the
+    /// neighbours and reshapes them (`Block.UPDATE_ALL`), 2 only sends it to the
+    /// players, 18 (2 | 16, `UPDATE_KNOWN_SHAPE`) keeps neighbours from reshaping
+    /// it straight back, as a block that cycles its own shape on a click does.
+    fn set_property_flags(&mut self, pos: [i32; 3], key: &str, value: &str, flags: i32) -> bool;
     /// Plays `sound` (`minecraft:block.wooden_door.open`, or one of the mod's own)
     /// at the middle of `pos` for the players near it (`level.playSound`).
     fn play_sound(&mut self, sound: &str, pos: [i32; 3], volume: f32, pitch: f32);
@@ -684,8 +697,18 @@ pub trait World: Blocks {
     fn random(&mut self) -> f32;
     /// Puts `block` at `pos` with `properties` (`level.setBlock(pos,
     /// block.defaultBlockState().setValue(..), 3)`); `minecraft:air` removes what
-    /// is there. Its neighbours are not told. False when it couldn't.
-    fn set_block(&mut self, pos: [i32; 3], block: &str, properties: &[(&str, &str)]) -> bool;
+    /// is there. False when it couldn't.
+    fn set_block(&mut self, pos: [i32; 3], block: &str, properties: &[(&str, &str)]) -> bool {
+        self.set_block_flags(pos, block, properties, 3)
+    }
+    /// The same with `level.setBlock`'s `flags` (see `set_property_flags`).
+    fn set_block_flags(
+        &mut self,
+        pos: [i32; 3],
+        block: &str,
+        properties: &[(&str, &str)],
+        flags: i32,
+    ) -> bool;
 }
 
 /// A right click on one of the mod's blocks (`useItemOn`'s arguments). Horizon

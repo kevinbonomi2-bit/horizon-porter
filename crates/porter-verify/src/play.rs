@@ -101,7 +101,7 @@ pub fn play_check(
         }
     }
     let launched = game.run(
-        &["launch", "--world", "porter-check", "--creative", "--wait"],
+        &["launch", "--world", &game.world, "--creative", "--wait"],
         300,
     );
     let Some(start) = launched["player"]["position"].as_array().cloned() else {
@@ -218,6 +218,19 @@ pub fn play_check(
     }
 
     let clicks: Vec<_> = spots.iter().filter(|(b, _)| acting.contains(b)).collect();
+    // Many blocks act only on a tool in hand (Macaw's on their pliers, hammer or
+    // shears): a click that changes nothing empty-handed is tried with each of the
+    // mod's own tools, then shears. They go in the hotbar's first slots; the
+    // empty hand is its last.
+    let mut tools = mod_tools(port_dir);
+    tools.truncate(7);
+    tools.push("minecraft:shears".into());
+    if !clicks.is_empty() {
+        for tool in &tools {
+            game.run(&["give", tool], 30);
+        }
+        game.select("9");
+    }
     for (n, (block, pos)) in clicks.iter().enumerate() {
         progress(&format!(
             "Right-clicking {} of {}: {block}",
@@ -238,10 +251,7 @@ pub fn play_check(
             30,
         );
         let before = game.state(*pos);
-        let mut clicked = game.interact(*pos, "south");
-        if clicked["ok"] == Value::Bool(false) {
-            clicked = game.interact(*pos, "up");
-        }
+        let clicked = game.click(*pos);
         std::thread::sleep(Duration::from_secs(1));
         if !game.alive() {
             report
@@ -256,15 +266,29 @@ pub fn play_check(
             std::thread::sleep(Duration::from_secs(1));
             after = game.state(*pos);
         }
+        if before == after && clicked["ok"] != Value::Bool(false) {
+            // Then with each tool in hand, back to the empty hand after.
+            for tool in &tools {
+                game.select(tool);
+                game.click(*pos);
+                std::thread::sleep(Duration::from_secs(1));
+                after = game.state(*pos);
+                if before != after {
+                    break;
+                }
+            }
+            game.select("9");
+        }
         if clicked["ok"] == Value::Bool(false) {
             report.notes.push(format!(
                 "{block}: couldn't be clicked ({})",
                 clicked["error"].as_str().unwrap_or("not reached")
             ));
         } else if before == after {
-            report
-                .notes
-                .push(format!("{block}: a right click changed nothing"));
+            report.notes.push(format!(
+                "{block}: a right click changed nothing, empty-handed or with a tool ({})",
+                tools.join(", ")
+            ));
         } else {
             report.responded += 1;
         }
@@ -346,6 +370,41 @@ fn log_assets(log: &[String], namespaces: &[String], report: &mut PlayReport) {
 /// Whether a block state as the game prints it (`mod:door[facing=north]`) is `block`'s.
 fn is_block(state: &str, block: &str) -> bool {
     state.split('[').next() == Some(block)
+}
+
+/// The mod's own items named as tools are (pliers, a hammer, a wrench): what its
+/// blocks' code may want in hand before it acts.
+pub fn mod_tools(port_dir: &Path) -> Vec<String> {
+    const TOOLS: &[&str] = &[
+        "pliers",
+        "hammer",
+        "wrench",
+        "shears",
+        "screwdriver",
+        "key",
+        "tool",
+        "chisel",
+        "saw",
+    ];
+    let mut out = Vec::new();
+    if let Ok(namespaces) = std::fs::read_dir(port_dir.join("content").join("data")) {
+        for ns in namespaces.flatten() {
+            let dir = ns.path().join("horizon").join("item");
+            for f in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+                let name = f
+                    .path()
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().into_owned());
+                if let Some(name) = name
+                    && TOOLS.iter().any(|t| name.split('_').any(|w| w == *t))
+                {
+                    out.push(format!("{}:{name}", ns.file_name().to_string_lossy()));
+                }
+            }
+        }
+    }
+    out.sort();
+    out
 }
 
 /// The content mod's blocks (sorted ids), and those whose Java acts on a right click.
@@ -452,12 +511,21 @@ struct Game {
     ctl: PathBuf,
     home: PathBuf,
     socket: PathBuf,
+    /// The check's own world, new each time (an empty inventory, no one's
+    /// blocks): deleted when it ends.
+    world: String,
 }
 
 impl Game {
     fn new(ctl: PathBuf, home: PathBuf) -> Game {
         let socket = std::env::temp_dir().join("horizon-porter-check.json");
-        Game { ctl, home, socket }
+        let world = format!("porter-check-{}", std::process::id());
+        Game {
+            ctl,
+            home,
+            socket,
+            world,
+        }
     }
 
     /// Runs one command; its JSON answer, or `{"ok": false, "error": ..}`.
@@ -512,6 +580,24 @@ impl Game {
         )
     }
 
+    /// Puts `what` (a hotbar slot, or an item in the hotbar) in hand, and waits
+    /// until the server has heard: a click right after would still find the hand
+    /// that was before.
+    fn select(&self, what: &str) {
+        self.run(&["select", what], 30);
+        self.run(&["wait", "4"], 30);
+    }
+
+    /// A right click on the block at `pos`: on its side toward the player, else on
+    /// its top (a low block, a bridge's deck, shows no side from eye height).
+    fn click(&self, pos: [i32; 3]) -> Value {
+        let reply = self.interact(pos, "south");
+        if reply["ok"] == Value::Bool(false) {
+            return self.interact(pos, "up");
+        }
+        reply
+    }
+
     fn interact(&self, [x, y, z]: [i32; 3], face: &str) -> Value {
         self.run(
             &[
@@ -525,9 +611,22 @@ impl Game {
         )
     }
 
+    /// Closes the game and deletes the check's world (unless `keep`).
     fn finish(&self, keep: bool) {
-        if !keep {
-            self.run(&["quit"], 60);
+        if keep {
+            return;
+        }
+        self.run(&["quit"], 60);
+        for _ in 0..30 {
+            if !self.alive() {
+                break;
+            }
+            std::thread::sleep(Duration::from_secs(1));
+        }
+        // Only the world this check made: its name is its own.
+        let saves = self.home.join("saves").join(&self.world);
+        if self.world.starts_with("porter-check-") && saves.is_dir() {
+            let _ = std::fs::remove_dir_all(saves);
         }
     }
 }
@@ -549,6 +648,11 @@ mod tests {
             "const SHUTTER_USE: &[&str] = &[\n    \"shutters:oak_shutter\",\n];\nconst SHUTTER_PLACE: &[&str] = &[\n    \"shutters:iron_gate\",\n];\n",
         )
         .unwrap();
+        let items = dir.join("content/data/shutters/horizon/item");
+        std::fs::create_dir_all(&items).unwrap();
+        std::fs::write(items.join("pliers.json"), "{}").unwrap();
+        std::fs::write(items.join("ruby.json"), "{}").unwrap();
+        assert_eq!(mod_tools(&dir), ["shutters:pliers"]);
         let (all, acting) = mod_blocks(&dir);
         assert_eq!(all, ["shutters:iron_gate", "shutters:oak_shutter"]);
         assert_eq!(acting, ["shutters:oak_shutter"]);

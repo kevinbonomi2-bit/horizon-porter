@@ -11,7 +11,10 @@ loader (`horizon-mods`, built from the launcher's Horizon source): what a player
 game refuses to load. The jars stay local (`ai-test/`, not committed).
 
 Nothing here was translated by a model or built into Horizon: it measures what
-`port` does by itself.
+`port` does by itself. A port that builds is not a mod that works: what its code
+does waits for translation, and a mod built on Java's renderer or internals (a
+performance or shader mod, the verdict "Not portable yet" below) can't carry over at
+all. Whether a port plays is what `horizon-porter check` says, in the game.
 
 ## Results
 

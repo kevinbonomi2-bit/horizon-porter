@@ -320,7 +320,7 @@ def survey_one(slug: str, hit: dict | None, skip_download: bool) -> dict:
         locs = re.findall(r"--> .*?([\w.]+\.rs:\d+)", out)
         r["errors"] = [f"{e} ({l})" for e, l in zip(errs, locs + [""] * len(errs))][:3] or first_errors(out)
         return r
-    r["stage"] = "ported, compiles"
+    r["stage"] = "ported, its code builds"
     return r
 
 
@@ -333,6 +333,12 @@ def report(results: list[dict]) -> str:
         "",
         f"{len(results)} mods, {time.strftime('%Y-%m-%d %H:%M')}. "
         + ", ".join(f"{n} {s}" for s, n in sorted(stages.items(), key=lambda x: -x[1])),
+        "",
+        "What a result means: the porter got this far, nothing more. \"Its code builds\" says the",
+        "generated code compiles against Horizon's hook API, not that the mod works: what it does",
+        "waits for translation, and a mod built on Java's renderer or internals (the Verdict",
+        "column's \"Not portable yet\") can't carry over at all. Content (blocks, items) is checked",
+        "with Horizon's loader with --horizon; whether it plays is `horizon-porter check`'s to say.",
         "",
         "| Mod | Loader | Classes | Mixins | Verdict | Blocks | Items | BEs | Mobs | Hooks | Left to port | Result |",
         "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",

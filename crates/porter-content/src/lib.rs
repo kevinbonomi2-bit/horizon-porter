@@ -368,6 +368,24 @@ pub fn generate_with(
                     .contains_key(&format!("assets/{ns}/items/{block_name}.json")));
         if !item {
             json["item"] = false.into();
+        } else if (stand_in(&template_from)
+            // The carved pumpkin is what a block that only turns copies.
+            || (template == "minecraft:carved_pumpkin" && !template_from.contains("CarvedPumpkin")))
+            && let Some(v) = vanilla_block(&template)
+        {
+            // A template copied for its facing or shape only: its item is a plain
+            // block item, not one worn on the head (a carved pumpkin's), composted
+            // or holding a container's items, as the Java block's item isn't.
+            let mut components = serde_json::Map::new();
+            for k in &v.item_extras {
+                components.insert(format!("!{k}"), serde_json::json!({}));
+            }
+            for (k, value) in &v.item_plain {
+                components.insert(k.clone(), value.clone());
+            }
+            if !components.is_empty() {
+                json["components"] = serde_json::Value::Object(components);
+            }
         }
         // A sign's item places the mod's own wall form (`fir_wall_sign` beside
         // `fir_sign`), not the template's oak one.
@@ -897,6 +915,12 @@ pub struct VanillaBlock {
     pub properties: BTreeMap<String, Vec<String>>,
     /// Whether every state's outline is the whole block.
     pub full_cube: bool,
+    /// Components its item has that a plain block item's (stone's) hasn't: a carved
+    /// pumpkin's `equippable`, a furnace's `container`.
+    pub item_extras: Vec<String>,
+    /// Components every block item has, with the plain item's value where its own
+    /// differs (the pumpkin's `attribute_modifiers`, which hide its wearer).
+    pub item_plain: serde_json::Map<String, serde_json::Value>,
 }
 
 /// The game's blocks (26.3), from `data/vanilla-blocks.json` (`tools/vanilla_blocks.py`).
@@ -916,6 +940,13 @@ fn vanilla_block(id: &str) -> Option<&'static VanillaBlock> {
                         VanillaBlock {
                             item: v["item"].as_bool().unwrap_or(true),
                             full_cube: v["full_cube"].as_bool().unwrap_or(true),
+                            item_extras: v["item_extras"]
+                                .as_array()
+                                .into_iter()
+                                .flatten()
+                                .filter_map(|x| x.as_str().map(str::to_string))
+                                .collect(),
+                            item_plain: v["item_plain"].as_object().cloned().unwrap_or_default(),
                             properties: v["properties"]
                                 .as_object()
                                 .into_iter()
@@ -1223,22 +1254,111 @@ fn variant_shape(
     let turned: Vec<Box6> = boxes.into_iter().map(|b| round(rotate(b, x, y))).collect();
     let solid: Vec<Box6> = turned.iter().copied().filter(has_volume).collect();
     if !solid.is_empty() {
-        // A model of many small parts (blinds' slats and their cords), or of flat
-        // panes between solid ones (a window's glass in its frame), outlines as one
-        // box, as Java's shapes for such blocks do: a click lands on the panel, not
-        // between slats or through the glass. A few solid parts keep their own.
-        // Horizon takes at most 16 boxes a shape anyway.
-        let flat = turned.len() > solid.len();
-        if solid.len() > 4 || flat {
-            return Some((vec![bounds(&turned)], true, false));
-        }
-        return Some((solid, true, false));
+        // Flat panes among solid parts (a window's glass, blinds' slats) are thin
+        // walls: a click lands on them, not through. More parts than Horizon takes
+        // (16) are merged on a voxel grid, so a bridge keeps its deck low and its
+        // rails apart, and you walk on the deck as in Java.
+        let parts: Vec<Box6> = turned.iter().map(|b| thicken(*b)).collect();
+        return Some((merge_parts(&parts), true, false));
     }
     if turned.is_empty() {
         // Nothing drawn: nothing to target or bump into.
         return Some((Vec::new(), false, false));
     }
     Some((vec![bounds(&turned)], false, outside))
+}
+
+/// A box flat along an axis (a pane, a slat) made one pixel thick about its middle.
+fn thicken(b: Box6) -> Box6 {
+    let mut b = b;
+    for i in 0..3 {
+        if b[i + 3] - b[i] < 1.0 / 16.0 {
+            let mid = (b[i] + b[i + 3]) / 2.0;
+            b[i] = (mid - 1.0 / 32.0).clamp(0.0, 1.0 - 1.0 / 16.0);
+            b[i + 3] = b[i] + 1.0 / 16.0;
+        }
+    }
+    b
+}
+
+/// At most 16 boxes covering `parts`, as Horizon takes a shape: the parts
+/// themselves when they are few, else their union on a voxel grid, merged into
+/// boxes, the grid coarser until they fit; their bounds as a last resort.
+fn merge_parts(parts: &[Box6]) -> Vec<Box6> {
+    if parts.len() <= 16 {
+        return parts.to_vec();
+    }
+    for n in [16usize, 8, 4, 2] {
+        let merged = voxel_boxes(parts, n);
+        if merged.len() <= 16 {
+            return merged;
+        }
+    }
+    vec![bounds(parts)]
+}
+
+/// The union of `parts` on an n³ grid (a cell is in when a part covers most of
+/// it along each axis), greedily merged into boxes: runs along x, then rows along
+/// z, then layers along y.
+fn voxel_boxes(parts: &[Box6], n: usize) -> Vec<Box6> {
+    let cell = 1.0 / n as f64;
+    let covered = |lo: f64, hi: f64, i: usize| {
+        let (a, b) = (i as f64 * cell, (i + 1) as f64 * cell);
+        hi.min(b) - lo.max(a) >= cell / 2.0 - 1e-9
+    };
+    let mut on = vec![false; n * n * n];
+    let at = |x: usize, y: usize, z: usize| (y * n + z) * n + x;
+    for p in parts {
+        for y in 0..n {
+            if !covered(p[1], p[4], y) {
+                continue;
+            }
+            for z in 0..n {
+                if !covered(p[2], p[5], z) {
+                    continue;
+                }
+                for x in 0..n {
+                    if covered(p[0], p[3], x) {
+                        on[at(x, y, z)] = true;
+                    }
+                }
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for y in 0..n {
+        for z in 0..n {
+            for x in 0..n {
+                if !on[at(x, y, z)] {
+                    continue;
+                }
+                // Grow along x, then z, then y while every cell is in.
+                let mut x2 = x;
+                while x2 + 1 < n && on[at(x2 + 1, y, z)] {
+                    x2 += 1;
+                }
+                let row = |zz: usize, yy: usize| (x..=x2).all(|xx| on[at(xx, yy, zz)]);
+                let mut z2 = z;
+                while z2 + 1 < n && row(z2 + 1, y) {
+                    z2 += 1;
+                }
+                let mut y2 = y;
+                while y2 + 1 < n && (z..=z2).all(|zz| row(zz, y2 + 1)) {
+                    y2 += 1;
+                }
+                for yy in y..=y2 {
+                    for zz in z..=z2 {
+                        for xx in x..=x2 {
+                            on[at(xx, yy, zz)] = false;
+                        }
+                    }
+                }
+                let c = |i: usize| (i as f64 * cell * 10000.0).round() / 10000.0;
+                out.push([c(x), c(y), c(z), c(x2 + 1), c(y2 + 1), c(z2 + 1)]);
+            }
+        }
+    }
+    out
 }
 
 fn bounds(boxes: &[Box6]) -> Box6 {
@@ -1557,6 +1677,22 @@ fn plain_variants(blockstate: &serde_json::Value) -> Option<serde_json::Value> {
         b["variants"] = serde_json::Value::Object(out);
         b
     })
+}
+
+/// Whether a template was picked to stand in for the Java block's facing, shape or
+/// menu (`template_from` says why), not because the block is one of its kind
+/// (`extends X`, `Blocks.X in its properties`, a door's or leaves' states).
+fn stand_in(template_from: &str) -> bool {
+    [
+        "its blockstates turn on",
+        "it opens a menu",
+        "a pipe",
+        "no template found",
+        "is not a block of 26.3",
+        "shutter (one block",
+    ]
+    .iter()
+    .any(|why| template_from.contains(why))
 }
 
 /// Whether `template` has any of the state properties a blockstate file draws by.
@@ -2414,6 +2550,56 @@ mod tests {
             "m:w"
         );
         assert!(turn_facing(&serde_json::json!({ "variants": { "": {} } }), 1).is_none());
+    }
+
+    #[test]
+    fn stand_ins_give_a_plain_item() {
+        assert!(stand_in("its blockstates turn on a horizontal `facing`"));
+        assert!(stand_in(
+            "extends HorizontalDirectionalBlock; its blockstates turn on a horizontal `facing`"
+        ));
+        assert!(!stand_in("extends CarvedPumpkinBlock"));
+        assert!(!stand_in("Blocks.OAK_PLANKS in its properties"));
+        let pumpkin = vanilla_block("minecraft:carved_pumpkin").unwrap();
+        assert!(
+            pumpkin
+                .item_extras
+                .iter()
+                .any(|k| k == "minecraft:equippable")
+        );
+        assert_eq!(
+            pumpkin.item_plain["minecraft:attribute_modifiers"],
+            serde_json::json!([])
+        );
+    }
+
+    #[test]
+    fn many_parts_merge_and_keep_their_gaps() {
+        // A bridge: a deck and two rails of many small posts. Merged, the deck stays
+        // low and the middle above it open, so the deck can be walked on.
+        let mut parts = vec![[0.0, 0.0, 0.0, 1.0, 0.25, 1.0]];
+        for i in 0..8 {
+            let x = i as f64 / 8.0;
+            parts.push([x, 0.25, 0.0, x + 0.0625, 1.0, 0.125]);
+            parts.push([x, 0.25, 0.875, x + 0.0625, 1.0, 1.0]);
+        }
+        let merged = merge_parts(&parts);
+        assert!(merged.len() <= 16, "{merged:?}");
+        let open = |x: f64, y: f64, z: f64| {
+            !merged
+                .iter()
+                .any(|b| b[0] <= x && x < b[3] && b[1] <= y && y < b[4] && b[2] <= z && z < b[5])
+        };
+        assert!(!open(0.5, 0.1, 0.5), "the deck");
+        assert!(open(0.5, 0.5, 0.5), "above the deck: {merged:?}");
+        assert!(!open(0.03, 0.5, 0.06), "a post");
+        // A pane among solid parts becomes a thin wall.
+        assert_eq!(
+            thicken([0.0, 0.0, 0.5, 1.0, 1.0, 0.5]),
+            [0.0, 0.0, 0.46875, 1.0, 1.0, 0.53125]
+        );
+        // Few parts stay as they are.
+        assert_eq!(merge_parts(&parts[..3]), parts[..3].to_vec());
     }
 
     #[test]

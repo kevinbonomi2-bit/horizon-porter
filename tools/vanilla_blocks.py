@@ -54,6 +54,24 @@ def main() -> None:
             blocks[name]["properties"].setdefault(k, set()).add(str(v))
     for b in blocks.values():
         b["properties"] = {k: sorted(v) for k, v in sorted(b["properties"].items())}
+    # What each block's item has beyond a plain block item's (stone's): a carved
+    # pumpkin's is worn on the head and hides the wearer from waypoints. A mod block
+    # that copies one only for its shape or facing leaves these out.
+    items = json.loads((folder / "items.json").read_text(encoding="utf-8"))
+    plain = set(items.get("minecraft:stone", {}))
+    item_of = {state[0]: rows[i].get("item") for i, state in enumerate(states)}
+    stone = items.get("minecraft:stone", {})
+    own = {"minecraft:item_model", "minecraft:item_name", "minecraft:lore"}
+    for name, b in blocks.items():
+        item = items.get(item_of.get(name) or "", {})
+        extras = sorted(set(item) - plain)
+        if b["item"] and extras:
+            b["item_extras"] = extras
+        # Components every block item has, with a value of its own here (the
+        # pumpkin's attribute_modifiers): a plain item's value puts it back.
+        differ = {k: stone[k] for k in item if k in stone and k not in own and item[k] != stone[k]}
+        if b["item"] and differ:
+            b["item_plain"] = differ
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(json.dumps(blocks, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
     print(f"{len(blocks)} blocks, {sum(not b['item'] for b in blocks.values())} without an item, to {OUT}")
