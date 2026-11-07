@@ -325,8 +325,32 @@ pub fn generate_with(
                 format!("{stand_in}: {template} grows only as itself in Horizon ({template_from})");
             template = stand_in.into();
         }
-        let (declared, default_state) =
-            declared_states(&template, &states, block_name, &mut content.skipped);
+        // Java's own state definition: properties its code sets that the blockstate
+        // never draws by (a garage door's `powered`), and its defaults (a garage
+        // door is placed `part=top`, `open=true`), which the blockstate can't say.
+        let (java_values, java_defaults) = java_states(scan, class.as_deref());
+        let mut all_states = states.clone();
+        let own = template_properties(&template).unwrap_or_default();
+        for (name, values) in java_values {
+            if !all_states.contains_key(&name) && !own.contains(&name.as_str()) {
+                all_states.insert(name, values);
+            }
+        }
+        let (declared, mut default_state) =
+            declared_states(&template, &all_states, block_name, &mut content.skipped);
+        for (name, value) in java_defaults {
+            let valid = declared
+                .get(&name)
+                .is_some_and(|d| match d["type"].as_str() {
+                    Some("boolean") => value == "true" || value == "false",
+                    _ => d["values"]
+                        .as_array()
+                        .is_some_and(|v| v.iter().any(|x| x.as_str() == Some(&value))),
+                });
+            if valid {
+                default_state.insert(name, value.into());
+            }
+        }
         let mut json = serde_json::json!({ "template": template });
         // A template without an item (a potted plant, a vine's body, a portal) gives
         // the block none: Horizon refuses a block item copying no item, and one
@@ -386,6 +410,11 @@ pub fn generate_with(
         let mut blockstate = blockstate;
         let mut rewritten = false;
         let mut facing_turns = 0;
+        // A loader's own variants (NeoForge custom models: Lootr's barrel) as plain ones.
+        if let Some(plain) = blockstate.as_ref().and_then(plain_variants) {
+            blockstate = Some(plain);
+            rewritten = true;
+        }
         if let Some(filled) = vanilla_block(&template)
             .zip(blockstate.as_ref())
             .and_then(|(v, b)| fill_variants(b, &v.properties))
@@ -1319,6 +1348,214 @@ fn model_shapes(
     Some((table(&outline), collision))
 }
 
+/// A Java block class's state definition (its own, else the nearest superclass's):
+/// the values of each property whose kind its field says (a boolean, an integer
+/// range), and the defaults `registerDefaultState` sets, by property name.
+fn java_states(
+    scan: &ModScan,
+    class: Option<&str>,
+) -> (BTreeMap<String, BTreeSet<String>>, BTreeMap<String, String>) {
+    let chain: Vec<&porter_model::ClassInfo> = {
+        let mut out = Vec::new();
+        let mut name = class.map(str::to_string);
+        while let Some(n) = name.take() {
+            let Some(c) = scan.classes.iter().find(|c| c.name == n) else {
+                break;
+            };
+            out.push(c);
+            if out.len() > 16 {
+                break;
+            }
+            name = c.superclass.clone();
+        }
+        out
+    };
+    let definition = |want_fields: bool| {
+        chain.iter().find_map(|c| {
+            scan.state_definitions.iter().find(|(k, f, d)| {
+                *k == c.name
+                    && if want_fields {
+                        !f.is_empty()
+                    } else {
+                        !d.is_empty()
+                    }
+            })
+        })
+    };
+    // A property field's name and values: `PART = EnumProperty.create("part", ..)`,
+    // `POWERED = BlockStateProperties.POWERED`, `FACING` inherited from vanilla.
+    let property = |field: &str| -> (String, Option<BTreeSet<String>>) {
+        let init = chain
+            .iter()
+            .flat_map(|c| c.fields.iter())
+            .find(|f| f.name == field)
+            .and_then(|f| f.init.clone())
+            .unwrap_or_default();
+        let literal = init
+            .split('"')
+            .nth(1)
+            .filter(|_| init.contains(".create(\""));
+        let constant = init
+            .rsplit('.')
+            .next()
+            .filter(|c| {
+                !c.is_empty()
+                    && c.chars()
+                        .all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit() || ch == '_')
+            })
+            .unwrap_or(field);
+        let name = literal.map_or_else(|| vanilla_property_name(constant), str::to_string);
+        let values = if init.starts_with("BooleanProperty")
+            || (literal.is_none() && BOOLEAN_PROPERTIES.contains(&constant))
+        {
+            Some(["false", "true"].map(String::from).into())
+        } else if init.starts_with("IntegerProperty.create(") {
+            let nums: Vec<i64> = init
+                .split([',', '(', ')'])
+                .filter_map(|w| w.trim().parse().ok())
+                .collect();
+            match nums.as_slice() {
+                [lo, hi] if lo <= hi && hi - lo < 64 => {
+                    Some((*lo..=*hi).map(|n| n.to_string()).collect())
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
+        (name, values)
+    };
+    let mut values = BTreeMap::new();
+    if let Some((_, fields, _)) = definition(true) {
+        for f in fields {
+            if let (name, Some(v)) = property(f) {
+                values.insert(name, v);
+            }
+        }
+    }
+    let mut defaults = BTreeMap::new();
+    if let Some((_, _, d)) = definition(false) {
+        for (f, v) in d {
+            defaults.insert(property(f).0, v.clone());
+        }
+    }
+    (values, defaults)
+}
+
+/// Vanilla's boolean state properties, as `BlockStateProperties` names them.
+const BOOLEAN_PROPERTIES: &[&str] = &[
+    "OPEN",
+    "POWERED",
+    "WATERLOGGED",
+    "LIT",
+    "ATTACHED",
+    "OCCUPIED",
+    "TRIGGERED",
+    "ENABLED",
+    "IN_WALL",
+    "EXTENDED",
+    "HANGING",
+    "SNOWY",
+    "INVERTED",
+    "PERSISTENT",
+    "UNSTABLE",
+    "BOTTOM",
+    "DISARMED",
+    "CONDITIONAL",
+    "DRAG",
+    "EYE",
+    "HAS_BOOK",
+    "SIGNAL_FIRE",
+    "BERRIES",
+    "SHORT",
+    "LOCKED",
+    "CRACKED",
+    "NATURAL",
+    "TIP",
+    "SHRIEKING",
+    "CAN_SUMMON",
+    "BLOOM",
+];
+
+/// The name a vanilla `BlockStateProperties` constant has in a blockstate:
+/// `HORIZONTAL_FACING` is `facing`, `DOOR_HINGE` `hinge`, `OPEN` `open`.
+fn vanilla_property_name(constant: &str) -> String {
+    match constant {
+        "HORIZONTAL_FACING" | "FACING_HOPPER" | "VERTICAL_DIRECTION" => "facing".into(),
+        "DOOR_HINGE" => "hinge".into(),
+        "DOUBLE_BLOCK_HALF" | "HALF" => "half".into(),
+        "HORIZONTAL_AXIS" => "axis".into(),
+        "STAIRS_SHAPE" | "RAIL_SHAPE" | "RAIL_SHAPE_STRAIGHT" => "shape".into(),
+        "SLAB_TYPE" | "CHEST_TYPE" | "PISTON_TYPE" => "type".into(),
+        "ATTACH_FACE" => "face".into(),
+        "BED_PART" => "part".into(),
+        "BELL_ATTACHMENT" => "attachment".into(),
+        "NOTEBLOCK_INSTRUMENT" => "instrument".into(),
+        c if c.starts_with("AGE_") => "age".into(),
+        c if c.starts_with("LEVEL") => "level".into(),
+        c => c.to_ascii_lowercase(),
+    }
+}
+
+/// A blockstate whose variants a model loader of a mod's own draws (NeoForge's
+/// custom block state models: `{"type": "lootr:custom", "unopened": ..,
+/// "vanilla": .., "state": {"x": 180}}`) with plain variants Horizon reads: the
+/// model a player first sees (`unopened`, else `vanilla`, `base`, `model`, else the
+/// first block model it names), turned as its `state` says. None when every
+/// variant is plain already.
+fn plain_variants(blockstate: &serde_json::Value) -> Option<serde_json::Value> {
+    let variants = blockstate.get("variants")?.as_object()?;
+    let plain = |v: &serde_json::Value| -> Option<serde_json::Value> {
+        let o = v.as_object()?;
+        if o.get("model").is_some_and(|m| m.is_string()) && !o.contains_key("type") {
+            return None;
+        }
+        let model = ["unopened", "vanilla", "base", "model"]
+            .iter()
+            .find_map(|k| o.get(*k)?.as_str())
+            .or_else(|| {
+                o.values()
+                    .filter_map(|x| x.as_str())
+                    .find(|x| x.contains("block/"))
+            })?;
+        let mut out = serde_json::Map::new();
+        out.insert("model".into(), model.into());
+        let turn = o.get("state").and_then(|s| s.as_object()).unwrap_or(o);
+        for k in ["x", "y", "uvlock"] {
+            if let Some(x) = turn.get(k).or_else(|| o.get(k)) {
+                out.insert(k.into(), x.clone());
+            }
+        }
+        Some(serde_json::Value::Object(out))
+    };
+    let mut changed = false;
+    let mut out = serde_json::Map::new();
+    for (key, v) in variants {
+        let fixed = match v {
+            serde_json::Value::Array(a) => {
+                let items: Vec<serde_json::Value> = a
+                    .iter()
+                    .map(|x| {
+                        plain(x)
+                            .inspect(|_| changed = true)
+                            .unwrap_or_else(|| x.clone())
+                    })
+                    .collect();
+                serde_json::Value::Array(items)
+            }
+            other => plain(other)
+                .inspect(|_| changed = true)
+                .unwrap_or_else(|| other.clone()),
+        };
+        out.insert(key.clone(), fixed);
+    }
+    changed.then(|| {
+        let mut b = blockstate.clone();
+        b["variants"] = serde_json::Value::Object(out);
+        b
+    })
+}
+
 /// Whether `template` has any of the state properties a blockstate file draws by.
 fn has_states_of(template: &str, states: &BTreeMap<String, BTreeSet<String>>) -> bool {
     template_properties(template)
@@ -2126,6 +2363,31 @@ mod tests {
             2.0
         );
         assert!(block_properties("CrankBlock::new").is_empty());
+    }
+
+    #[test]
+    fn reads_a_loaders_own_variants_as_plain_ones() {
+        let barrel = serde_json::json!({ "variants": {
+            "facing=down,open=false": {
+                "type": "lootr:custom", "open": false,
+                "opened": "lootr:block/opened_barrel",
+                "state": { "x": 180 },
+                "unopened": "lootr:block/barrel_unopened",
+                "vanilla": "minecraft:block/barrel"
+            },
+            "facing=up,open=false": { "model": "minecraft:block/barrel" }
+        }});
+        let plain = plain_variants(&barrel).unwrap();
+        assert_eq!(
+            plain["variants"]["facing=down,open=false"],
+            serde_json::json!({ "model": "lootr:block/barrel_unopened", "x": 180 })
+        );
+        assert_eq!(
+            plain["variants"]["facing=up,open=false"],
+            barrel["variants"]["facing=up,open=false"]
+        );
+        // Plain already: nothing to do.
+        assert!(plain_variants(&plain).is_none());
     }
 
     #[test]

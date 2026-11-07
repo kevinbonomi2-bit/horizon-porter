@@ -235,6 +235,13 @@ fn network_and_config(root: &Path, scan: &mut ModScan) {
             opened_by,
         });
     }
+    // Block classes' own state definitions and defaults.
+    for (name, text) in &sources {
+        if let Some((fields, defaults)) = machines::state_definition(text) {
+            scan.state_definitions
+                .push((name.clone(), fields, defaults));
+        }
+    }
     // Which way blocks face when placed.
     for (name, text) in &sources {
         if let Some(turns) = machines::placement_turns(text) {
@@ -416,6 +423,7 @@ fn assemble(
         standalone_models: Vec::new(),
         creative_tabs: Vec::new(),
         placements: Vec::new(),
+        state_definitions: Vec::new(),
         storages: Vec::new(),
         block_shapes: Vec::new(),
         mobs: Vec::new(),

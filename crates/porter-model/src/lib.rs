@@ -231,6 +231,11 @@ pub struct ModScan {
     /// (`ModelEvent.RegisterStandalone`, `PartialModel`): `grind:block/crusher_wheel`.
     #[serde(default)]
     pub standalone_models: Vec<String>,
+    /// Block classes' state definitions: (class, the property fields its
+    /// `createBlockStateDefinition` adds (`FACING`, `PART`), the values its
+    /// `registerDefaultState` sets as (field, value): `("PART", "top")`).
+    #[serde(default)]
+    pub state_definitions: Vec<(String, Vec<String>, Vec<(String, String)>)>,
     /// How block classes turn their `facing` when placed (`getStateForPlacement`):
     /// (class, quarter turns clockwise from the way the player looks), so
     /// `context.getHorizontalDirection().getOpposite()` is 2 (toward the player).

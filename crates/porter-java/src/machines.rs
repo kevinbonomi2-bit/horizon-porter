@@ -359,6 +359,80 @@ pub fn renderer(class: &str, source: &str) -> Option<RendererInfo> {
     None
 }
 
+/// A block class's state definition: the property fields its
+/// `createBlockStateDefinition` adds (`builder.add(FACING, OPEN)`), and the values its
+/// constructor's `registerDefaultState` sets, as (field, value) with the value as
+/// a blockstate names it (`Direction.NORTH` is `north`, `GaragePart.TOP` `top`).
+pub(crate) fn state_definition(source: &str) -> Option<(Vec<String>, Vec<(String, String)>)> {
+    let constant = |t: &str| {
+        let w = t
+            .trim()
+            .rsplit(['.', ' ', '(', ')'])
+            .next()
+            .unwrap_or("")
+            .to_string();
+        (!w.is_empty()
+            && w.chars()
+                .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_'))
+        .then_some(w)
+    };
+    let mut fields = Vec::new();
+    if let Some(i) = source.find("createBlockStateDefinition(")
+        && let Some(open) = source[i..].find('{')
+        && let Some(body) = balanced_braces(&source[i + open..])
+    {
+        for args in calls(body, "add") {
+            let inner = args.trim();
+            let inner = inner
+                .find('{')
+                .map_or(inner, |b| inner[b + 1..].trim_end_matches('}'));
+            for a in split_top(inner) {
+                if let Some(f) = constant(&a)
+                    && !fields.contains(&f)
+                {
+                    fields.push(f);
+                }
+            }
+        }
+    }
+    let mut defaults = Vec::new();
+    for args in calls(source, "registerDefaultState") {
+        for set in calls(&args, "setValue") {
+            let parts = split_top(&set);
+            let [field, value] = parts.as_slice() else {
+                continue;
+            };
+            let (Some(field), Some(value)) = (constant(field), state_value(value)) else {
+                continue;
+            };
+            if !defaults.iter().any(|(f, _): &(String, String)| *f == field) {
+                defaults.push((field, value));
+            }
+        }
+    }
+    (!fields.is_empty() || !defaults.is_empty()).then_some((fields, defaults))
+}
+
+/// A state value as Java writes it, as a blockstate names it: `true`,
+/// `Boolean.FALSE` (`false`), `3`, `Direction.NORTH` (`north`), `Part.TOP` (`top`).
+fn state_value(text: &str) -> Option<String> {
+    let t = text.trim();
+    let t = t.strip_prefix("(Boolean)").unwrap_or(t).trim();
+    let t = t
+        .strip_prefix("Integer.valueOf(")
+        .and_then(|r| r.strip_suffix(')'))
+        .unwrap_or(t)
+        .trim();
+    if t.chars().all(|c| c.is_ascii_digit()) && !t.is_empty() {
+        return Some(t.to_string());
+    }
+    let last = t.rsplit('.').next()?.trim();
+    if last.is_empty() || !last.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return None;
+    }
+    Some(last.to_ascii_lowercase())
+}
+
 /// How a block class turns its `facing` from the player's look when placed, in
 /// quarter turns clockwise: its `getStateForPlacement` sets `FACING` to
 /// `context.getHorizontalDirection()` (0, away from the player), with
@@ -511,6 +585,33 @@ fn first_int(text: &str) -> Option<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_a_blocks_state_definition() {
+        let garage = "public GarageDoor(Properties properties) {
+            super(properties);
+            this.registerDefaultState(
+                (BlockState)((BlockState)((BlockState)((BlockState)((BlockState)this.stateDefinition.any()).setValue(FACING, Direction.NORTH)).setValue(OPEN, true))
+                    .setValue(POWERED, Boolean.FALSE))
+                .setValue(PART, GarageDoor.GaragePart.TOP)
+            );
+        }
+        protected void createBlockStateDefinition(Builder<Block, BlockState> builder) {
+            builder.add(new Property[]{FACING, OPEN, POWERED, PART});
+        }";
+        let (fields, defaults) = state_definition(garage).unwrap();
+        assert_eq!(fields, ["FACING", "OPEN", "POWERED", "PART"]);
+        assert_eq!(
+            defaults,
+            [
+                ("FACING".to_string(), "north".to_string()),
+                ("OPEN".into(), "true".into()),
+                ("POWERED".into(), "false".into()),
+                ("PART".into(), "top".into()),
+            ]
+        );
+        assert!(state_definition("class Plain {}").is_none());
+    }
 
     #[test]
     fn reads_which_way_blocks_face_when_placed() {
