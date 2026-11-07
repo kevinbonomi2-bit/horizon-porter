@@ -181,7 +181,7 @@ pub fn play_check(
         ];
         let [x, y, z] = pos;
         let placed = game.set(x, y, z, block);
-        if placed["ok"] == Value::Bool(false) {
+        if !succeeded(&placed) {
             report.faults.push(format!(
                 "{block}: the game refused it ({})",
                 placed["error"].as_str().unwrap_or("no reason given")
@@ -260,13 +260,13 @@ pub fn play_check(
             return Ok(report);
         }
         let mut after = game.state(*pos);
-        if before == after && clicked["ok"] != Value::Bool(false) {
+        if before == after && succeeded(&clicked) {
             // The click may have met another block first: once more, from above.
             game.interact(*pos, "up");
             std::thread::sleep(Duration::from_secs(1));
             after = game.state(*pos);
         }
-        if before == after && clicked["ok"] != Value::Bool(false) {
+        if before == after && succeeded(&clicked) {
             // Then with each tool in hand, back to the empty hand after.
             for tool in &tools {
                 game.select(tool);
@@ -279,7 +279,7 @@ pub fn play_check(
             }
             game.select("9");
         }
-        if clicked["ok"] == Value::Bool(false) {
+        if !succeeded(&clicked) {
             report.notes.push(format!(
                 "{block}: couldn't be clicked ({})",
                 clicked["error"].as_str().unwrap_or("not reached")
@@ -365,6 +365,12 @@ fn log_assets(log: &[String], namespaces: &[String], report: &mut PlayReport) {
             }
         ));
     }
+}
+
+/// Whether horizon-ctl did what it was asked: it answers an error as
+/// `{"error": ..}`, with no `"ok"` at all.
+fn succeeded(reply: &Value) -> bool {
+    reply.get("error").is_none() && reply["ok"] != Value::Bool(false)
 }
 
 /// Whether a block state as the game prints it (`mod:door[facing=north]`) is `block`'s.
@@ -591,11 +597,25 @@ impl Game {
     /// A right click on the block at `pos`: on its side toward the player, else on
     /// its top (a low block, a bridge's deck, shows no side from eye height).
     fn click(&self, pos: [i32; 3]) -> Value {
+        // The click must land on this block: a neighbour in the way takes it
+        // otherwise, and the reply says which block it met.
+        let hit = |reply: &Value| {
+            succeeded(reply)
+                && reply["block"]["pos"].as_array().is_none_or(|p| {
+                    p.iter()
+                        .map(Value::as_i64)
+                        .eq(pos.iter().map(|c| Some(i64::from(*c))))
+                })
+        };
         let reply = self.interact(pos, "south");
-        if reply["ok"] == Value::Bool(false) {
-            return self.interact(pos, "up");
+        if hit(&reply) {
+            return reply;
         }
-        reply
+        let top = self.interact(pos, "up");
+        if hit(&top) {
+            return top;
+        }
+        serde_json::json!({ "ok": false, "error": "another block was in the way" })
     }
 
     fn interact(&self, [x, y, z]: [i32; 3], face: &str) -> Value {
@@ -690,6 +710,20 @@ mod tests {
             ),
             "data/a.json: bad"
         );
+    }
+
+    #[test]
+    fn reads_horizon_ctl_errors() {
+        assert!(!succeeded(
+            &serde_json::json!({ "error": "no face of block [1, 2, 3] is visible from here" })
+        ));
+        assert!(!succeeded(
+            &serde_json::json!({ "ok": false, "error": "x" })
+        ));
+        assert!(succeeded(
+            &serde_json::json!({ "ok": true, "changed": false })
+        ));
+        assert!(succeeded(&serde_json::json!({ "given": 1 })));
     }
 
     #[test]
