@@ -824,11 +824,9 @@ fn turn_facing(facing: &str, turns: u8) -> String {
 /// `ConnectedWindow` → `connected_window`.
 fn snake(name: &str) -> String {
     let mut out = String::new();
-    for (i, c) in name.chars().enumerate() {
+    for c in name.chars() {
         if c.is_ascii_uppercase() {
-            if i > 0 {
-                out.push('_');
-            }
+            out.push('_');
             out.push(c.to_ascii_lowercase());
         } else if c.is_ascii_alphanumeric() {
             out.push(c);
@@ -836,7 +834,15 @@ fn snake(name: &str) -> String {
             out.push('_');
         }
     }
-    out
+    // One underscore between words (`Bridge_Block` is `bridge_block`), none at the ends.
+    let mut joined = String::new();
+    for part in out.split('_').filter(|p| !p.is_empty()) {
+        if !joined.is_empty() {
+            joined.push('_');
+        }
+        joined.push_str(part);
+    }
+    joined
 }
 
 /// The const naming a behaviour's blocks: `SHUTTER_USE`.
@@ -851,6 +857,8 @@ mod tests {
     #[test]
     fn names_functions_after_classes() {
         assert_eq!(snake("ConnectedWindow"), "connected_window");
+        assert_eq!(snake("Bridge_Block"), "bridge_block");
+        assert_eq!(snake("XMLBlock"), "x_m_l_block");
         assert_eq!(consts("shutter_use"), "SHUTTER_USE");
     }
 }
