@@ -187,11 +187,25 @@ pub fn hooks(behaviours: &[Behaviour]) -> Vec<(&'static str, BTreeSet<String>)> 
 /// The runtime.rs part: the types the ported code reads and changes blocks
 /// through, the dispatch from a block to its class's function, and a function
 /// to port into for each behaviour. `blocks` are all the mod's blocks, by id.
-pub fn runtime(behaviours: &[Behaviour], blocks: &[(String, porter_content::Block)]) -> String {
+///
+/// `entities`: the mod has block entities (runtime.rs has their `Saved` values), and
+/// the code that reads and changes blocks reaches them too.
+pub fn runtime(
+    behaviours: &[Behaviour],
+    blocks: &[(String, porter_content::Block)],
+    entities: bool,
+) -> String {
     if behaviours.is_empty() {
         return String::new();
     }
-    let mut r = String::from(RUNTIME_TYPES);
+    let mut r = if entities {
+        RUNTIME_TYPES.replace(
+            "pub trait World: Blocks {",
+            "pub trait World: Blocks + BlockEntities {",
+        ) + ENTITY_TYPES
+    } else {
+        RUNTIME_TYPES.to_string()
+    };
     let ns = behaviours[0].blocks[0]
         .split_once(':')
         .map_or("", |(ns, _)| ns);
@@ -415,7 +429,13 @@ pub fn tests(behaviours: &[Behaviour]) -> String {
 }
 
 /// The helper for one of the block hooks: (file name, source).
-pub fn helper(hook: &str, id: &str, m: &str, name: &str) -> Option<(&'static str, String)> {
+pub fn helper(
+    hook: &str,
+    id: &str,
+    m: &str,
+    name: &str,
+    entities: bool,
+) -> Option<(&'static str, String)> {
     let h = porter_map::hooks::hook(hook)?;
     let params = h
         .bindings()?
@@ -433,6 +453,16 @@ pub fn helper(hook: &str, id: &str, m: &str, name: &str) -> Option<(&'static str
     };
     let body = body
         .replace("{world}", ITEM_WORLD)
+        .replace(
+            "{entities}",
+            &if entities {
+                ENTITY_WORLD
+                    .replace("__FROM_TAG__", crate::block_entity::FROM_TAG)
+                    .replace("__TO_TAG__", crate::block_entity::TO_TAG)
+            } else {
+                String::new()
+            },
+        )
         .replace("{name}", name)
         .replace("{id}", id)
         .replace("{m}", m)
@@ -600,6 +630,106 @@ const ITEM_WORLD: &str = r#"    struct Here<'g, 'a> {
             self.game.native_give_items(item, count)
         }
     }
+{entities}"#;
+
+/// The block entities' part of the shared world, for a mod that has them.
+const ENTITY_WORLD: &str = r#"    impl m::BlockEntities for Here<'_, '_> {
+        fn entity(&mut self, pos: [i32; 3]) -> Option<m::EntityValues> {
+            use horizon_world::nbt::Tag;
+            let read = |tag: &Tag| -> Option<m::Saved> { __FROM_TAG__ };
+            self.game.native_with_mod_block_entity(pos, |e| {
+                m::EntityValues(
+                    e.nbt
+                        .iter()
+                        .filter_map(|(k, tag)| read(tag).map(|v| (k.to_string_lossy(), v)))
+                        .collect(),
+                )
+            })
+        }
+        fn save_entity(&mut self, pos: [i32; 3], values: &[(&str, m::Saved)]) -> bool {
+            use horizon_world::nbt::{JavaString, Tag};
+            let saved = self
+                .game
+                .native_with_mod_block_entity(pos, |e| {
+                    for (key, value) in values {
+                        let value = value.clone();
+                        let tag = __TO_TAG__;
+                        e.nbt.insert(JavaString::from(*key), tag);
+                    }
+                })
+                .is_some();
+            if saved {
+                self.game.native_block_entity_sync(pos);
+            }
+            saved
+        }
+        fn entity_slots(&mut self, pos: [i32; 3]) -> usize {
+            self.game
+                .native_with_mod_block_entity(pos, |e| e.items.len())
+                .unwrap_or(0)
+        }
+        fn entity_item(&mut self, pos: [i32; 3], slot: usize) -> Option<(String, u32)> {
+            self.game
+                .native_with_mod_block_entity(pos, |e| {
+                    e.items
+                        .get(slot)
+                        .and_then(Option::as_ref)
+                        .map(|s| (s.item.to_string(), s.count))
+                })
+                .flatten()
+        }
+        fn set_entity_item(&mut self, pos: [i32; 3], slot: usize, item: Option<(&str, u32)>) -> bool {
+            let set = self
+                .game
+                .native_with_mod_block_entity(pos, |e| {
+                    let Some(cell) = e.items.get_mut(slot) else {
+                        return false;
+                    };
+                    *cell = item
+                        .filter(|(_, count)| *count > 0)
+                        .map(|(id, count)| horizon_client::items::ItemStack::new(id, count));
+                    true
+                })
+                .unwrap_or(false);
+            if set {
+                self.game.native_block_entity_sync(pos);
+            }
+            set
+        }
+    }
+"#;
+
+/// The block entities' part of the world, for a mod that has them.
+const ENTITY_TYPES: &str = r#"
+/// A block entity's saved values, as `world.entity(pos)` reads them: its struct
+/// loads from them (`SinkBlockEntity::load(|k| values.get(k))`).
+pub struct EntityValues(pub Vec<(String, Saved)>);
+
+impl EntityValues {
+    /// The value saved under `key`.
+    pub fn get(&self, key: &str) -> Option<Saved> {
+        self.0.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone())
+    }
+}
+
+/// The mod's block entities, as a click reads and changes them (Java's
+/// `level.getBlockEntity(pos)`).
+pub trait BlockEntities {
+    /// The saved values of the mod's block entity at `pos`, None when there is none
+    /// (Java's `instanceof` check failing): load its struct from them.
+    fn entity(&mut self, pos: [i32; 3]) -> Option<EntityValues>;
+    /// Saves `values` into the block entity at `pos` (its struct's `save()` after a
+    /// change, then Java's `setChanged()`), and sends it to the players; false when
+    /// there is none.
+    fn save_entity(&mut self, pos: [i32; 3], values: &[(&str, Saved)]) -> bool;
+    /// How many item slots it has (`getContainerSize()`), 0 for none.
+    fn entity_slots(&mut self, pos: [i32; 3]) -> usize;
+    /// The stack in slot `slot` (`getItem(slot)`): (item, count), None when empty.
+    fn entity_item(&mut self, pos: [i32; 3], slot: usize) -> Option<(String, u32)>;
+    /// Puts `item` in slot `slot` (`setItem`), None or a count of 0 empties it; false
+    /// when there is no such slot.
+    fn set_entity_item(&mut self, pos: [i32; 3], slot: usize, item: Option<(&str, u32)>) -> bool;
+}
 "#;
 
 const ITEM_USE_ON_HELPER: &str = r#"// {name}'s items that act used on a block (`useOn`): runtime.rs's `use_item_on` runs
@@ -830,7 +960,7 @@ fn {id}_update_shape({params}) {
 
 const DISPATCH_DOCS: [&str; 5] = [
     "\n/// The properties a block is placed with (Java's `getStateForPlacement` setting them\n/// on `defaultBlockState()`), from its class's function. None leaves its template's\n/// placement.\n",
-    "\n/// A right click on a block, run by its class's function. True when it took the click\n/// (`InteractionResult.SUCCESS` or `CONSUME`): neither its template's use nor the held\n/// item's runs then.\n",
+    "\n/// A right click on a block, run by its class's function. True when it took the click\n/// (`InteractionResult.SUCCESS` or `CONSUME`): neither its template's use nor the held\n/// item's runs then. A click that opens a menu in Java (`player.openMenu(..)`) is false\n/// here: it goes on to the block's template (a barrel, a furnace), which opens the menu.\n",
     "\n/// The properties a block changes as its neighbour in `u.direction` changes (Java's\n/// `updateShape`), from its class's function. None keeps it as it is.\n",
     "\n/// One of the mod's items used on a block, run by its class's `useOn` function. True\n/// when it took the use: neither its template's use nor its `use` runs then.\n",
     "\n/// One of the mod's items used, run by its class's `use` function. True when it took\n/// the use: its template's own use doesn't run then.\n",

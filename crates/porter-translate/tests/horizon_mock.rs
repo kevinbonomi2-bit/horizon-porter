@@ -608,9 +608,41 @@ fn block_entity_helpers_compile_against_horizon_api() {
     let scan = porter_java::scan(&path).unwrap();
     let lang = bundle::load_lang(&scan);
     let b = bundle::generate(&scan, &lang);
-    for hook in ["block_entity", "block_entity_ticks", "block_entity_tick"] {
+    for hook in [
+        "block_entity",
+        "block_entity_ticks",
+        "block_entity_tick",
+        "right_click_block",
+    ] {
         assert!(b.wired.contains_key(hook), "{hook}");
     }
+    // The crank's click reaches its block entity: ported as translate would, it
+    // loads the entity's struct, winds it and saves it.
+    let mut b = b;
+    let file = format!("mixins/{}/runtime.rs", b.id);
+    let runtime = b.files[&file].clone();
+    assert!(
+        runtime.contains("pub trait World: Blocks + BlockEntities {"),
+        "{runtime}"
+    );
+    let stub = "fn crank_block_use(u: &BlockUse, world: &mut dyn World) -> bool {\n    let _ = (u, world);\n    false\n}";
+    assert!(runtime.contains(stub), "{runtime}");
+    let ported = runtime.replace(
+        stub,
+        "fn crank_block_use(u: &BlockUse, world: &mut dyn World) -> bool {
+    let Some(values) = world.entity(u.pos) else {
+        return false;
+    };
+    let mut crank = Crank::load(|k| values.get(k));
+    crank.speed = (crank.speed + 16.0).min(256.0);
+    world.save_entity(u.pos, &crank.save());
+    if world.entity_slots(u.pos) > 0 && world.entity_item(u.pos, 0).is_none() {
+        world.set_entity_item(u.pos, 0, Some((\"minecraft:stick\", 1)));
+    }
+    true
+}",
+    );
+    b.files.insert(file, ported);
     compiles_against_the_mock(&b, "blocks");
 }
 
@@ -643,6 +675,12 @@ fn machine_helpers_compile_against_horizon_api() {
     ] {
         assert!(b.wired.contains_key(hook), "{hook}");
     }
+    // The cabinet opens a chest's menu over its own slots.
+    let runtime = &b.files[&format!("mixins/{}/runtime.rs", b.id)];
+    assert!(
+        runtime.contains("(\"grind:cabinet\", \"minecraft:generic_9x3\", 27),"),
+        "{runtime}"
+    );
     compiles_against_the_mock(&b, "machines");
 }
 

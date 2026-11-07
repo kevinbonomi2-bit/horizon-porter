@@ -17,6 +17,11 @@ public class CrankBlockEntity extends BlockEntity {
         super(Demo.CRANK_BE.get(), pos, state);
     }
 
+    public void wind() {
+        speed = Math.min(speed + 16, MAX_SPEED);
+        setChanged();
+    }
+
     public void tick() {
         speed = Math.min(speed + 1, MAX_SPEED);
         if (speed >= MAX_SPEED) {
