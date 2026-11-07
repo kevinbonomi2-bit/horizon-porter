@@ -268,6 +268,8 @@ pub fn play_check(
         let before = game.around(*pos);
         let clicked = game.click(*pos);
         std::thread::sleep(Duration::from_secs(1));
+        // A click that opens the block's menu (a cabinet's chest menu) is its answer.
+        let mut opened = game.opened_menu(&clicked);
         if !game.alive() {
             report
                 .faults
@@ -275,7 +277,7 @@ pub fn play_check(
             return Ok(report);
         }
         let mut after = game.around(*pos);
-        if before == after && succeeded(&clicked) {
+        if before == after && !opened && succeeded(&clicked) {
             // The click may have met another block first: once more, from above.
             game.interact(*pos, "up");
             std::thread::sleep(Duration::from_secs(1));
@@ -285,10 +287,11 @@ pub fn play_check(
             // Then with each tool in hand, back to the empty hand after.
             for tool in &tools {
                 game.select(tool);
-                game.click(*pos);
+                let reply = game.click(*pos);
                 std::thread::sleep(Duration::from_secs(1));
+                opened = game.opened_menu(&reply);
                 after = game.around(*pos);
-                if before != after {
+                if before != after || opened {
                     break;
                 }
             }
@@ -307,7 +310,7 @@ pub fn play_check(
                 "{block}: couldn't be clicked ({})",
                 clicked["error"].as_str().unwrap_or("not reached")
             ));
-        } else if before == after {
+        } else if before == after && !opened {
             report.notes.push(format!(
                 "{block}: a right click changed nothing, empty-handed or with a tool ({})",
                 tools.join(", ")
@@ -659,8 +662,8 @@ impl Game {
             .to_string()
     }
 
-    /// What a click may change: the block's state, and the blocks of the box around
-    /// it, one below to two above (a click that adds a block above, as a bridge
+    /// What a click may change: the block's state, its block entity's data, and the
+    /// blocks of the box around it, one below to two above (a click that adds a block above, as a bridge
     /// pier's own item does, or beside it, as a stair's does).
     fn around(&self, pos: [i32; 3]) -> String {
         let [x, y, z] = pos;
@@ -685,7 +688,11 @@ impl Game {
                 )
             });
         }
-        format!("{} {counts}", self.state(pos))
+        // And its block entity's saved data: a table that takes a flower, a cabinet
+        // that fills, change only that.
+        self.run(&["command", &format!("data get block {x} {y} {z}")], 30);
+        let data = self.run(&["chat-log", "1"], 30)["chat"].to_string();
+        format!("{} {counts} {data}", self.state(pos))
     }
 
     fn set(&self, x: i32, y: i32, z: i32, block: &str) -> Value {
@@ -730,7 +737,64 @@ impl Game {
         if hit(&top) {
             return top;
         }
-        serde_json::json!({ "ok": false, "error": "another block was in the way" })
+        // A low block (a feast, a cutting board, a crop) has no face `interact` sees
+        // from here: aim at it as a player does, and click the mouse.
+        let unseen = |r: &Value| r["error"].as_str().is_some_and(|e| e.contains("no face"));
+        if unseen(&reply) && unseen(&top) {
+            let aim = self.run(
+                &[
+                    "look-at-block",
+                    &pos[0].to_string(),
+                    &pos[1].to_string(),
+                    &pos[2].to_string(),
+                ],
+                30,
+            );
+            if succeeded(&aim) {
+                let clicked = self.run(&["mouse", "right", "click"], 30);
+                if succeeded(&clicked) {
+                    return serde_json::json!({ "ok": true, "aimed": true });
+                }
+            }
+        }
+        // Say what it met: a neighbour, the floor under a block that has no shape to
+        // click (a crop), or nothing.
+        let met = |r: &Value| {
+            let b = &r["block"];
+            match (
+                b["name"].as_str().or(b["state"].as_str()),
+                b["pos"].as_array(),
+            ) {
+                (Some(name), Some(p)) => format!(
+                    "{name} at {}",
+                    p.iter()
+                        .map(|c| c.to_string())
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                ),
+                _ => r["error"].as_str().unwrap_or("nothing").to_string(),
+            }
+        };
+        serde_json::json!({
+            "ok": false,
+            "error": format!(
+                "another block was in the way: from the side {}, from above {}",
+                met(&reply),
+                met(&top)
+            )
+        })
+    }
+
+    /// Whether `reply` (a click's) left a menu open: closes it, so the next click
+    /// reaches the world.
+    fn opened_menu(&self, reply: &Value) -> bool {
+        let open = reply["screen"]
+            .as_str()
+            .is_some_and(|s| !matches!(s, "playing" | "" | "none"));
+        if open {
+            self.run(&["close"], 30);
+        }
+        open
     }
 
     fn interact(&self, [x, y, z]: [i32; 3], face: &str) -> Value {
