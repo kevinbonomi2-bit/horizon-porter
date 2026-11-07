@@ -22,6 +22,10 @@ use serde_json::Value;
 
 use crate::Instance;
 
+/// Blocks between rows of pads: the player stands 2.5 in front of a block to
+/// click it, so the next row must be farther than that or it takes the click.
+const ROW: i32 = 4;
+
 /// What a play check found.
 #[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -150,7 +154,7 @@ pub fn play_check(
     // player stands, so the player can walk to every block whatever the terrain.
     let rows = blocks.len().div_ceil(16) as i32;
     let (x1, x2, z1) = (px - 2, px + 3 + 16 * 2 + 2, pz - 2);
-    let z2 = pz + 3 + rows * 3 + 3;
+    let z2 = pz + 3 + rows * ROW + 3;
     let mut z = z1;
     while z <= z2 {
         // A slab of rows at a time: fill takes a box of limited size.
@@ -177,7 +181,7 @@ pub fn play_check(
         let pos = [
             px + 3 + (i % 16) as i32 * 2,
             py,
-            pz + 3 + (i / 16) as i32 * 3,
+            pz + 3 + (i / 16) as i32 * ROW,
         ];
         let [x, y, z] = pos;
         let placed = game.set(x, y, z, block);
