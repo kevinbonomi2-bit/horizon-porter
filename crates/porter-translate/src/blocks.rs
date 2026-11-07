@@ -1,11 +1,13 @@
-//! A mod's blocks that act in code: placed by their own rule (`getStateForPlacement`),
-//! used with a right click (`useItemOn`, `useWithoutItem`), reshaped as their
-//! neighbours change (`updateShape`). Their template can't do what that code does
+//! A mod's blocks and items that act in code: blocks placed by their own rule
+//! (`getStateForPlacement`), used with a right click (`useItemOn`, `useWithoutItem`),
+//! reshaped as their neighbours change (`updateShape`); items used on a block
+//! (`useOn`) or in the air (`use`). Their template can't do what that code does
 //! (Macaw's shutter picks its hinge from where it is clicked, its blinds open and
-//! close, its portcullis joins the one beside it), so each block class that has such
-//! a method gets a function in runtime.rs to port it into, called from Horizon's
-//! `state_for_placement`, `right_click_block` and `update_shape` hooks. Until it is
-//! ported the function answers nothing and the template's own behaviour stands.
+//! close, a wrench turns the block it is used on), so each class that has such a
+//! method gets a function in runtime.rs to port it into, called from Horizon's
+//! `state_for_placement`, `right_click_block`, `update_shape`, `use_item_on` and
+//! `use_item` hooks. Until it is ported the function answers nothing and the
+//! template's own behaviour stands.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
@@ -21,10 +23,23 @@ pub enum Kind {
     Use,
     /// `updateShape`: the state it takes when a neighbour changes.
     Shape,
+    /// An item's `useOn`: what it does used on a block.
+    ItemUseOn,
+    /// An item's `use`: what it does used in the air (or on a block its `useOn`
+    /// passed).
+    ItemUse,
 }
 
 impl Kind {
-    const ALL: [Kind; 3] = [Kind::Place, Kind::Use, Kind::Shape];
+    const ALL: [Kind; 5] = [
+        Kind::Place,
+        Kind::Use,
+        Kind::Shape,
+        Kind::ItemUseOn,
+        Kind::ItemUse,
+    ];
+    const BLOCK: [Kind; 3] = [Kind::Place, Kind::Use, Kind::Shape];
+    const ITEM: [Kind; 2] = [Kind::ItemUseOn, Kind::ItemUse];
 
     /// The Java methods that make it.
     pub fn methods(self) -> &'static [&'static str] {
@@ -32,6 +47,8 @@ impl Kind {
             Kind::Place => &["getStateForPlacement"],
             Kind::Use => &["useItemOn", "useWithoutItem"],
             Kind::Shape => &["updateShape"],
+            Kind::ItemUseOn => &["useOn"],
+            Kind::ItemUse => &["use"],
         }
     }
 
@@ -41,6 +58,8 @@ impl Kind {
             Kind::Place => "state_for_placement",
             Kind::Use => "right_click_block",
             Kind::Shape => "update_shape",
+            Kind::ItemUseOn => "use_item_on",
+            Kind::ItemUse => "use_item",
         }
     }
 
@@ -49,6 +68,8 @@ impl Kind {
             Kind::Place => "place",
             Kind::Use => "use",
             Kind::Shape => "shape",
+            Kind::ItemUseOn => "use_on",
+            Kind::ItemUse => "use",
         }
     }
 }
@@ -62,25 +83,39 @@ pub struct Behaviour {
     pub class: String,
     /// The methods of the kind it defines.
     pub methods: Vec<String>,
-    /// The blocks it runs for: `mcwwindows:oak_shutter`.
+    /// The blocks (or items, for an item's kinds) it runs for:
+    /// `mcwwindows:oak_shutter`.
     pub blocks: Vec<String>,
     /// Its function's name in runtime.rs: `shutter_use`.
     pub function: String,
 }
 
-/// The block classes of `blocks` (the content mod's) whose Java, or a superclass
-/// of the mod's own, defines a method of each kind.
-pub fn find(scan: &ModScan, ns: &str, blocks: &[porter_content::Block]) -> Vec<Behaviour> {
+/// The classes of `blocks` and `items` (the content mod's) whose Java, or a
+/// superclass of the mod's own, defines a method of each kind.
+pub fn find(
+    scan: &ModScan,
+    ns: &str,
+    blocks: &[porter_content::Block],
+    items: &[porter_content::Item],
+) -> Vec<Behaviour> {
     let mut by: BTreeMap<(Kind, String), Vec<String>> = BTreeMap::new();
-    for b in blocks {
-        let Some(class) = b.class.as_deref() else {
+    let classes = blocks
+        .iter()
+        .map(|b| (&b.name, b.class.as_deref(), &Kind::BLOCK[..]))
+        .chain(
+            items
+                .iter()
+                .map(|i| (&i.name, i.class.as_deref(), &Kind::ITEM[..])),
+        );
+    for (name, class, kinds) in classes {
+        let Some(class) = class else {
             continue;
         };
-        for kind in Kind::ALL {
+        for &kind in kinds {
             if let Some(owner) = owner(scan, class, kind) {
                 by.entry((kind, owner))
                     .or_default()
-                    .push(format!("{ns}:{}", b.name));
+                    .push(format!("{ns}:{name}"));
             }
         }
     }
@@ -235,10 +270,28 @@ pub fn runtime(behaviours: &[Behaviour], blocks: &[(String, porter_content::Bloc
                 "Option<Vec<(String, String)>>",
                 "u.block",
             ),
+            Kind::ItemUseOn => (
+                "item_acts_on_block",
+                "use_item_on",
+                "u: &ItemUse, world: &mut dyn ItemWorld",
+                "u, world",
+                "false",
+                "bool",
+                "u.item",
+            ),
+            Kind::ItemUse => (
+                "item_acts_in_air",
+                "use_item",
+                "u: &ItemUse, world: &mut dyn ItemWorld",
+                "u, world",
+                "false",
+                "bool",
+                "u.item",
+            ),
         };
         let _ = write!(
             r,
-            "\n/// Whether `block` runs its own code from Horizon's `{hook}`.\npub fn {check}(block: &str) -> bool {{\n",
+            "\n/// Whether `block` (or the item) runs its own code from Horizon's `{hook}`.\npub fn {check}(block: &str) -> bool {{\n",
             hook = kind.hook()
         );
         if of.is_empty() {
@@ -282,10 +335,16 @@ pub fn runtime(behaviours: &[Behaviour], blocks: &[(String, porter_content::Bloc
                     "the state its blocks are placed in: return the properties Java sets on\n/// `defaultBlockState()` (`facing` as Java names it: Horizon turns it to the one\n/// stored), or None to leave the template's placement"
                 }
                 Kind::Use => {
-                    "what a right click on its blocks does: read and change blocks through\n/// `world`, and return true where Java returns `SUCCESS` or `CONSUME`, false for `PASS`"
+                    "what a right click on its blocks does: read and change blocks through\n/// `world`, and return true where Java returns `SUCCESS` or `CONSUME`, false for `PASS`.\n/// Where Java opens a menu (`player.openMenu(..)`), return false: the click goes on to\n/// the block's template (a barrel, a furnace), which opens the block's menu itself; true\n/// would stop it"
                 }
                 Kind::Shape => {
                     "the state its blocks take as a neighbour changes: return the properties\n/// Java's `updateShape` changes (`state.setValue(..)`), or None to keep the state"
+                }
+                Kind::ItemUseOn => {
+                    "what its items do used on a block (`u.on`): read and change blocks and\n/// the stack in hand through `world`, and return true where Java returns `SUCCESS` or\n/// `CONSUME`, false for `PASS` (the item's `use` runs next)"
+                }
+                Kind::ItemUse => {
+                    "what its items do used in the air: change blocks and the stack in hand\n/// through `world`, and return true where Java's `InteractionResult` is `SUCCESS` or\n/// `CONSUME`, false for `PASS`"
                 }
             };
             let _ = write!(
@@ -366,11 +425,14 @@ pub fn helper(hook: &str, id: &str, m: &str, name: &str) -> Option<(&'static str
         .join(", ");
     let (file, body) = match hook {
         "right_click_block" => ("right_click_block.rs", USE_HELPER),
+        "use_item_on" => ("use_item_on.rs", ITEM_USE_ON_HELPER),
+        "use_item" => ("use_item.rs", ITEM_USE_HELPER),
         "state_for_placement" => ("state_for_placement.rs", PLACE_HELPER),
         "update_shape" => ("update_shape.rs", SHAPE_HELPER),
         _ => return None,
     };
     let body = body
+        .replace("{world}", ITEM_WORLD)
         .replace("{name}", name)
         .replace("{id}", id)
         .replace("{m}", m)
@@ -493,6 +555,184 @@ fn {id}_right_click_block({params}) {
     };
     if m::use_block(&used, &mut Here { game }) {
         *canceled = true;
+    }
+}
+"#;
+
+/// The world and the acting player, as an item's code sees them: the `World` a
+/// block's click gets, and the stack in hand. Shared by the two item helpers.
+const ITEM_WORLD: &str = r#"    struct Here<'g, 'a> {
+        game: &'g mut crate::game::Game<'a>,
+        creative: bool,
+    }
+    impl m::Blocks for Here<'_, '_> {
+        fn block(&self, pos: [i32; 3]) -> String {
+            self.game.native_block(pos)
+        }
+        fn property(&self, pos: [i32; 3], key: &str) -> Option<String> {
+            let value = self.game.native_block_property(pos, key)?;
+            Some(if key == "facing" {
+                m::java_facing(&self.game.native_block(pos), &value)
+            } else {
+                value
+            })
+        }
+    }
+    impl m::World for Here<'_, '_> {
+        fn set_block_flags(
+            &mut self,
+            pos: [i32; 3],
+            block: &str,
+            properties: &[(&str, &str)],
+            flags: i32,
+        ) -> bool {
+            let state = {
+                let registry = &self.game.pack.assets.registry;
+                let Some(mut state) = registry.default_state(block) else {
+                    return false;
+                };
+                for (k, v) in properties {
+                    let v = if *k == "facing" {
+                        m::stored_facing(block, v)
+                    } else {
+                        v.to_string()
+                    };
+                    if let Some(next) = with_property(registry, state, k, &v) {
+                        state = next;
+                    }
+                }
+                state
+            };
+            let dimension = self.game.native_dimension();
+            self.game.native_set_block(dimension, pos, state, flags)
+        }
+        fn random(&mut self) -> f32 {
+            let dimension = self.game.native_dimension();
+            self.game
+                .native_level_random(dimension)
+                .map_or(0.5, horizon_core::random::RandomSource::next_float)
+        }
+        fn set_property_flags(&mut self, pos: [i32; 3], key: &str, value: &str, flags: i32) -> bool {
+            let value = if key == "facing" {
+                m::stored_facing(&self.game.native_block(pos), value)
+            } else {
+                value.to_string()
+            };
+            self.game.native_set_block_property_with(pos, key, &value, flags)
+        }
+        fn play_sound(&mut self, sound: &str, pos: [i32; 3], volume: f32, pitch: f32) {
+            let at = [
+                f64::from(pos[0]) + 0.5,
+                f64::from(pos[1]) + 0.5,
+                f64::from(pos[2]) + 0.5,
+            ];
+            // SoundSource.PLAYERS
+            let _ = self.game.native_level_play_sound(sound, at, 7, volume, pitch);
+        }
+    }
+    impl m::ItemWorld for Here<'_, '_> {
+        fn shrink_held(&mut self, n: u32) {
+            // The hand's own slot (game.rs `held_mut`): the acting player's, swapped in.
+            let slot = self.game.held_mut();
+            if let Some(stack) = slot.as_mut() {
+                stack.count = stack.count.saturating_sub(n);
+                if stack.count == 0 {
+                    *slot = None;
+                }
+            }
+        }
+        fn hurt_held(&mut self, n: u32) -> bool {
+            if self.creative {
+                return false;
+            }
+            let Some(item) = self.game.held_mut().as_ref().map(|s| s.item.clone()) else {
+                return false;
+            };
+            let max = self.game.res.items().get(&item).map_or(0, |i| i.max_damage);
+            if max == 0 {
+                return false;
+            }
+            let slot = self.game.held_mut();
+            let Some(stack) = slot.as_mut() else {
+                return false;
+            };
+            stack.damage += n;
+            if stack.damage >= max {
+                *slot = None;
+                return true;
+            }
+            false
+        }
+        fn give(&mut self, item: &str, count: u32) -> u32 {
+            self.game.native_give_items(item, count)
+        }
+    }
+"#;
+
+const ITEM_USE_ON_HELPER: &str = r#"// {name}'s items that act used on a block (`useOn`): runtime.rs's `use_item_on` runs
+// their code; a use it takes runs neither the template's use nor the item's `use`.
+fn {id}_use_item_on({params}) {
+    use crate::game::{m} as m;
+    if *claimed || !game.native_on(m::ID) {
+        return;
+    }
+    let item = stack.item.to_string();
+    if !m::item_acts_on_block(&item) {
+        return;
+    }
+    let player = game.native_acting_player();
+    // Where the click landed: the player's look from their eyes into the block's boxes.
+    let hit = match &player {
+        Some(p) => {
+            let eye = [p.position[0], p.position[1] + 1.62, p.position[2]];
+            let (yaw, pitch) = (f64::from(p.yaw).to_radians(), f64::from(p.pitch).to_radians());
+            let look = [-yaw.sin() * pitch.cos(), -pitch.sin(), yaw.cos() * pitch.cos()];
+            m::ray_hit(eye, look, pos, face, &game.native_block_collision(pos))
+        }
+        None => m::ray_hit([0.0; 3], [0.0; 3], pos, face, &[]),
+    };
+    let creative = player.is_some_and(|p| p.game_mode == 1);
+    let used = m::ItemUse {
+        item,
+        count: stack.count,
+        damage: stack.damage,
+        on: Some(m::UseOn {
+            block: game.native_block(pos),
+            pos,
+            face,
+            hit,
+        }),
+        creative,
+    };
+{world}    if m::use_item_on(&used, &mut Here { game, creative }) {
+        *claimed = true;
+    }
+}
+"#;
+
+const ITEM_USE_HELPER: &str = r#"// {name}'s items that act used in the air (`use`): runtime.rs's `use_item` runs their
+// code; a use it takes doesn't run the template's own.
+fn {id}_use_item({params}) {
+    use crate::game::{m} as m;
+    if *claimed || !game.native_on(m::ID) {
+        return;
+    }
+    let item = stack.item.to_string();
+    if !m::item_acts_in_air(&item) {
+        return;
+    }
+    let creative = game
+        .native_acting_player()
+        .is_some_and(|p| p.game_mode == 1);
+    let used = m::ItemUse {
+        item,
+        count: stack.count,
+        damage: stack.damage,
+        on: None,
+        creative,
+    };
+{world}    if m::use_item(&used, &mut Here { game, creative }) {
+        *claimed = true;
     }
 }
 "#;
@@ -655,10 +895,12 @@ fn {id}_update_shape({params}) {
 }
 "#;
 
-const DISPATCH_DOCS: [&str; 3] = [
+const DISPATCH_DOCS: [&str; 5] = [
     "\n/// The properties a block is placed with (Java's `getStateForPlacement` setting them\n/// on `defaultBlockState()`), from its class's function. None leaves its template's\n/// placement.\n",
     "\n/// A right click on a block, run by its class's function. True when it took the click\n/// (`InteractionResult.SUCCESS` or `CONSUME`): neither its template's use nor the held\n/// item's runs then.\n",
     "\n/// The properties a block changes as its neighbour in `u.direction` changes (Java's\n/// `updateShape`), from its class's function. None keeps it as it is.\n",
+    "\n/// One of the mod's items used on a block, run by its class's `useOn` function. True\n/// when it took the use: neither its template's use nor its `use` runs then.\n",
+    "\n/// One of the mod's items used, run by its class's `use` function. True when it took\n/// the use: its template's own use doesn't run then.\n",
 ];
 
 const RUNTIME_TYPES: &str = r#"
@@ -722,6 +964,44 @@ pub struct BlockUse {
     pub hit: [f64; 3],
     /// The item in the player's main hand, `minecraft:air` when empty.
     pub held: String,
+}
+
+/// A right click with one of the mod's items (`Item.use`, or `Item.useOn` with
+/// its `UseOnContext`). Horizon doesn't say whether the player sneaks.
+pub struct ItemUse {
+    /// The item: `mymod:wrench`.
+    pub item: String,
+    /// The stack's count and damage (`stack.getCount()`, `stack.getDamageValue()`).
+    pub count: u32,
+    pub damage: u32,
+    /// The block it is used on (`useOn`), None in the air (`use`).
+    pub on: Option<UseOn>,
+    /// Whether the player is in creative (`player.getAbilities().instabuild`).
+    pub creative: bool,
+}
+
+/// The block an item is used on (`UseOnContext`).
+pub struct UseOn {
+    /// `context.getLevel().getBlockState(pos).getBlock()`: `minecraft:oak_log`.
+    pub block: String,
+    pub pos: [i32; 3],
+    /// The face clicked: `[0, 1, 0]` is the top (`context.getClickedFace()`).
+    pub face: [i32; 3],
+    /// Where the click landed, in world coordinates (`context.getClickLocation()`).
+    pub hit: [f64; 3],
+}
+
+/// The world and the player as an item's code reads and changes them.
+pub trait ItemWorld: World {
+    /// `stack.shrink(n)` on the stack in hand: it empties at 0. Java's own code checks
+    /// `instabuild` itself (`if (!player.getAbilities().instabuild)`), so this doesn't.
+    fn shrink_held(&mut self, n: u32);
+    /// `stack.hurtAndBreak(n, player, slot)`: wears the stack in hand by `n`, never
+    /// in creative; true when that broke it.
+    fn hurt_held(&mut self, n: u32) -> bool;
+    /// `player.getInventory().add(new ItemStack(item, count))`: how many fit
+    /// (nothing is dropped).
+    fn give(&mut self, item: &str, count: u32) -> u32;
 }
 
 /// Where a look from `eye` along `look` first meets `boxes` (block-local, of the

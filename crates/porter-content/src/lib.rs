@@ -40,6 +40,8 @@ pub struct Block {
 pub struct Item {
     pub name: String,
     pub json: serde_json::Value,
+    /// The Java item class, fully qualified, when found.
+    pub class: Option<String>,
 }
 
 /// The content mod, as files under `content/`.
@@ -715,6 +717,7 @@ pub fn generate_with(
         content.items.push(Item {
             name: item_name.to_string(),
             json,
+            class: reg.creates.as_deref().and_then(class_of),
         });
     }
 

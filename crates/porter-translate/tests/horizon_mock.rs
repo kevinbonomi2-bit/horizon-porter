@@ -101,6 +101,14 @@ const HOOKS: &[(&str, &str)] = &[
         "native_right_click_block",
         "&mut self, pos: [i32; 3], face: [i32; 3], canceled: &mut bool",
     ),
+    (
+        "native_use_item_on",
+        "&mut self, stack: &ItemStack, pos: [i32; 3], face: [i32; 3], claimed: &mut bool",
+    ),
+    (
+        "native_use_item",
+        "&mut self, stack: &ItemStack, claimed: &mut bool",
+    ),
 ];
 
 /// The hooks on `GameLevel` (a server level), as in native_hooks.rs.
@@ -313,6 +321,7 @@ pub mod mod_api {
         pub name: String,
         pub dimension: String,
         pub position: [f64; 3],
+        pub game_mode: i32,
         pub yaw: f32,
         pub pitch: f32,
     }
@@ -341,6 +350,38 @@ pub mod game {
         pub pack: PackResources,
         // The hand a use is for (game.rs), which native_hooks reads.
         pub hand: crate::first_person::Hand,
+        // The game's resources (game.rs): its items' facts. Private there: native_hooks,
+        // a child module, reads it.
+        #[allow(dead_code)]
+        res: std::sync::Arc<Resources>,
+        #[allow(dead_code)]
+        held: Option<crate::items::ItemStack>,
+    }
+    // game.rs: the stack in the hand that acts, private to game and its children.
+    #[allow(dead_code)]
+    impl Game<'_> {
+        fn held_mut(&mut self) -> &mut Option<crate::items::ItemStack> {
+            &mut self.held
+        }
+    }
+    pub struct Resources;
+    #[allow(dead_code)]
+    impl Resources {
+        pub fn items(&self) -> &Items {
+            &Items
+        }
+    }
+    // horizon-items' item facts.
+    pub struct Items;
+    pub struct ItemInfo {
+        pub max_stack: u32,
+        pub max_damage: u32,
+    }
+    #[allow(dead_code)]
+    impl Items {
+        pub fn get(&self, _id: &str) -> Option<&ItemInfo> {
+            None
+        }
     }
     pub struct PackResources {
         pub assets: Assets,
@@ -516,6 +557,7 @@ __LEVEL_HOOKS__
             pub fn native_net_send_to_player(&mut self, player: u128, channel: &str, data: &[u8]) -> Result<(), String> { Ok(()) }
             pub fn native_net_send_to_server(&mut self, channel: &str, data: &[u8]) -> Result<(), String> { Ok(()) }
             pub fn native_held(&self) -> Option<(String, u32, bool)> { None }
+            pub fn native_give_items(&mut self, item: &str, count: u32) -> u32 { 0 }
             pub fn native_set_block(&mut self, dimension: &str, pos: [i32; 3], state: BlockStateId, flags: i32) -> bool { false }
             pub fn native_edit_blocks(&mut self, dimension: &str, edit: &super::native_world_edit::NativeBlockEdit) -> Result<u64, String> { Ok(0) }
             pub fn native_acting_player(&self) -> Option<crate::mod_api::NativeServerPlayer> { None }
@@ -628,7 +670,13 @@ fn block_behaviour_helpers_compile_against_horizon_api() {
     let scan = porter_java::scan(&path).unwrap();
     let lang = bundle::load_lang(&scan);
     let b = bundle::generate(&scan, &lang);
-    for hook in ["state_for_placement", "right_click_block", "update_shape"] {
+    for hook in [
+        "state_for_placement",
+        "right_click_block",
+        "update_shape",
+        "use_item_on",
+        "use_item",
+    ] {
         assert!(b.wired.contains_key(hook), "{hook}: {:?}", b.wired.keys());
     }
     let runtime = &b.files["mixins/shutters/runtime.rs"];
@@ -637,6 +685,13 @@ fn block_behaviour_helpers_compile_against_horizon_api() {
     assert!(runtime.contains("TODO: port from net.shutters.Shutter (`getStateForPlacement`)"));
     assert!(runtime.contains("TODO: port from net.shutters.Shutter (`useWithoutItem`)"));
     assert!(runtime.contains("TODO: port from net.shutters.Gate (`updateShape`)"));
+    // The wrench turns what it is used on; the whistle blows in the air.
+    assert!(
+        runtime.contains("TODO: port from net.shutters.Wrench (`useOn`)"),
+        "{runtime}"
+    );
+    assert!(runtime.contains("TODO: port from net.shutters.Whistle (`use`)"));
+    assert!(runtime.contains("const WRENCH_USE_ON: &[&str] = &[\n    \"shutters:wrench\",\n];"));
     assert!(
         runtime.contains(
             "const SHUTTER_USE: &[&str] = &[\n    \"shutters:iron_gate\",\n    \"shutters:oak_shutter\",\n];"

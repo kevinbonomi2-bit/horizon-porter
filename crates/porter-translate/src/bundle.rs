@@ -213,8 +213,8 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
     if !content.is_empty() {
         content.files.extend(machine::content_files(&machines));
     }
-    // Blocks that act in code: placed, used or reshaped by their own Java.
-    let behaviours = blocks::find(scan, &ns, &content.blocks);
+    // Blocks and items that act in code: placed, used or reshaped by their own Java.
+    let behaviours = blocks::find(scan, &ns, &content.blocks, &content.items);
     for (hook, classes) in blocks::hooks(&behaviours) {
         wired.entry(hook).or_default().extend(classes);
     }
@@ -1981,7 +1981,11 @@ fn {id}_net_from_server(game: &mut crate::game::Game<'_>, channel: &str, data: &
                     config = self.ensure_config("&*game"),
                 ),
             ),
-            "right_click_block" | "state_for_placement" | "update_shape"
+            "right_click_block"
+            | "state_for_placement"
+            | "update_shape"
+            | "use_item_on"
+            | "use_item"
                 if !self.behaviours.is_empty() =>
             {
                 blocks::helper(hook, id, m, name).expect("a block hook's bindings")
