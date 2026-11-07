@@ -38,6 +38,9 @@ pub fn find(port: &Path, log: &str, tree: &Path) -> Result<Vec<Refused>> {
     // (inlined in a module) or a helper (pasted into a hook, its name unique).
     let mut helpers: BTreeMap<String, String> = BTreeMap::new();
     let mut runtime: BTreeMap<String, String> = BTreeMap::new();
+    // Every helper `port` wrote, translated or not: an error in one it wrote
+    // whole (a block's click) is no translated function's.
+    let mut all_helpers: std::collections::BTreeSet<String> = Default::default();
     for entry in
         std::fs::read_dir(&mixins).with_context(|| format!("reading {}", mixins.display()))?
     {
@@ -47,6 +50,9 @@ pub fn find(port: &Path, log: &str, tree: &Path) -> Result<Vec<Refused>> {
         }
         let source = std::fs::read_to_string(&path)?;
         let is_runtime = path.file_name().is_some_and(|n| n == "runtime.rs");
+        if !is_runtime {
+            all_helpers.extend(units::function_names(&source));
+        }
         for f in units::ported_functions(&source) {
             if is_runtime {
                 runtime.insert(f, rel(&path));
@@ -62,7 +68,14 @@ pub fn find(port: &Path, log: &str, tree: &Path) -> Result<Vec<Refused>> {
             continue;
         };
         let lines: Vec<&str> = text.lines().collect();
-        let Some(found) = enclosing(&lines, line, &helpers, &runtime, module.as_deref()) else {
+        let Some(found) = enclosing(
+            &lines,
+            line,
+            &helpers,
+            &all_helpers,
+            &runtime,
+            module.as_deref(),
+        ) else {
             continue;
         };
         if !out
@@ -167,6 +180,7 @@ fn enclosing(
     lines: &[&str],
     line: usize,
     helpers: &BTreeMap<String, String>,
+    all_helpers: &std::collections::BTreeSet<String>,
     runtime: &BTreeMap<String, String>,
     module: Option<&str>,
 ) -> Option<(String, String)> {
@@ -186,6 +200,10 @@ fn enclosing(
         };
         if let Some(file) = helpers.get(&name) {
             return Some((file.clone(), name));
+        }
+        // A helper `port` wrote whole: the error is its, not a translated one's.
+        if all_helpers.contains(&name) {
+            return None;
         }
         if let (Some(file), Some(open)) = (runtime.get(&name), opens) {
             let indent = |s: &str| s.len() - s.trim_start().len();

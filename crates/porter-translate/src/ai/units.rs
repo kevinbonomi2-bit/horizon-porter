@@ -263,6 +263,11 @@ pub fn ported_functions(source: &str) -> Vec<String> {
         .collect()
 }
 
+/// The names of `source`'s top-level functions.
+pub fn function_names(source: &str) -> Vec<String> {
+    items(source).into_iter().map(|i| i.name).collect()
+}
+
 /// What `translate` writes above a function it ported.
 pub const PORTED: &str = "Ported by horizon-porter translate";
 

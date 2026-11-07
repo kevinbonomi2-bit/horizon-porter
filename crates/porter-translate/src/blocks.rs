@@ -641,7 +641,7 @@ const ITEM_WORLD: &str = r#"    struct Here<'g, 'a> {
                 ParticleType::from_name(kind).map(ParticleOptions::simple)
             };
             if let Some(options) = options {
-                let _ = self.game.native_send_particles(&options, None, at, spread, speed, count);
+                let _ = self.game.native_level_send_particles(&options, None, at, spread, speed, count);
             }
         }
         fn item_is(&mut self, item: &str, tag: &str) -> bool {

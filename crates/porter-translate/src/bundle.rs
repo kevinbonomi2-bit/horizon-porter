@@ -1760,7 +1760,7 @@ fn {id}_block_entity_tick(
                     ParticleType::from_name(&kind).map(ParticleOptions::simple)
                 }};
                 if let Some(options) = options {{
-                    let _ = game.native_send_particles(&options, None, at, spread, speed, count);
+                    let _ = game.native_level_send_particles(&options, None, at, spread, speed, count);
                 }}
             }}
             m::Effect::Sound {{ sound, at, volume, pitch }} => {{
