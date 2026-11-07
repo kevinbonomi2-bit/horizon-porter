@@ -421,39 +421,28 @@ fn {id}_right_click_block({params}) {
     }
     impl m::World for Here<'_, '_> {
         fn set_block(&mut self, pos: [i32; 3], block: &str, properties: &[(&str, &str)]) -> bool {
-            let props: Vec<String> = properties
-                .iter()
-                .map(|(k, v)| {
+            // `block.defaultBlockState().setValue(..)`, from the registry Horizon's
+            // own `native_set_block` reads (no helper names a block's states yet).
+            let state = {
+                let registry = &self.game.pack.assets.registry;
+                let Some(mut state) = registry.default_state(block) else {
+                    return false;
+                };
+                for (k, v) in properties {
                     let v = if *k == "facing" {
                         m::stored_facing(block, v)
                     } else {
                         v.to_string()
                     };
-                    format!("{k}={v}")
-                })
-                .collect();
-            let state = if props.is_empty() {
-                block.to_string()
-            } else {
-                format!("{block}[{}]", props.join(","))
-            };
-            let edit = crate::game::native_world_edit::NativeBlockEdit {
-                palette: vec![state],
-                filters: Vec::new(),
-                runs: vec![crate::game::native_world_edit::NativeBlockRun {
-                    x: pos[0],
-                    z: pos[2],
-                    y: pos[1],
-                    height: 1,
-                    surface: None,
-                    block: 0,
-                    only: None,
-                }],
+                    if let Some(next) = with_property(registry, state, k, &v) {
+                        state = next;
+                    }
+                }
+                state
             };
             let dimension = self.game.native_dimension();
-            self.game
-                .native_edit_blocks(dimension, &edit)
-                .is_ok_and(|changed| changed > 0)
+            // Level.setBlock(pos, state, Block.UPDATE_ALL): neighbours hear it.
+            self.game.native_set_block(dimension, pos, state, 3)
         }
         fn random(&mut self) -> f32 {
             let dimension = self.game.native_dimension();

@@ -154,6 +154,10 @@ pub mod horizon_world {
     pub mod registry {
         #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
         pub struct BlockStateId(pub u32);
+        pub struct BlockRegistry;
+        impl BlockRegistry {
+            pub fn default_state(&self, _name: &str) -> Option<BlockStateId> { None }
+        }
     }
     pub mod nbt {
         use std::collections::BTreeMap;
@@ -324,6 +328,14 @@ pub mod extras_hud {
 pub mod game {
     pub struct Game<'a> {
         _game: std::marker::PhantomData<&'a ()>,
+        // The game's resources: its block registry (game.rs), which native_hooks reads.
+        pub pack: PackResources,
+    }
+    pub struct PackResources {
+        pub assets: Assets,
+    }
+    pub struct Assets {
+        pub registry: crate::horizon_world::registry::BlockRegistry,
     }
     // native_world_edit.rs: bulk block edits, from block states as commands write them.
     pub mod native_world_edit {
@@ -425,6 +437,10 @@ pub mod game {
             pub replace_clicked: bool,
         }
 
+        // native_hooks.rs: `BlockState.setValue` on a registry's state.
+        #[allow(dead_code)]
+        fn with_property(registry: &crate::horizon_world::registry::BlockRegistry, state: BlockStateId, key: &str, value: &str) -> Option<BlockStateId> { None }
+
         impl crate::mod_api::LevelHost for GameLevel<'_> {
             fn block_state(&self, pos: [i32; 3]) -> BlockStateId { BlockStateId(0) }
         }
@@ -489,6 +505,7 @@ __LEVEL_HOOKS__
             pub fn native_net_send_to_player(&mut self, player: u128, channel: &str, data: &[u8]) -> Result<(), String> { Ok(()) }
             pub fn native_net_send_to_server(&mut self, channel: &str, data: &[u8]) -> Result<(), String> { Ok(()) }
             pub fn native_held(&self) -> Option<(String, u32, bool)> { None }
+            pub fn native_set_block(&mut self, dimension: &str, pos: [i32; 3], state: BlockStateId, flags: i32) -> bool { false }
             pub fn native_edit_blocks(&mut self, dimension: &str, edit: &super::native_world_edit::NativeBlockEdit) -> Result<u64, String> { Ok(0) }
             pub fn native_acting_player(&self) -> Option<crate::mod_api::NativeServerPlayer> { None }
             pub fn native_block_collision(&self, pos: [i32; 3]) -> Vec<[f64; 6]> { Vec::new() }
