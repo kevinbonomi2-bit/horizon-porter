@@ -343,10 +343,11 @@ async function run(skip) {
       notice("busy", `Building "${added.instance}"`, "Starting");
       await invoke("build_installed", { id, trusted: true });
     }
-    finish(ported, added, translated, estimate);
+    const checked = await checkInGame(added);
+    finish(ported, added, translated, estimate, checked);
   } catch (e) {
     const text = String(e);
-    const what = { translate: "Translation stopped", add: "Could not add the mod", build: "The build failed" }[running] || "It stopped";
+    const what = { translate: "Translation stopped", add: "Could not add the mod", build: "The build failed", check: "The game check stopped" }[running] || "It stopped";
     notice("bad", what, text.split("\n").filter(Boolean).slice(-1)[0] || text, [
       button("Open folder", () => openPath(ported.out), "folder"),
       button("Try again", makeItWork, "again", "primary"),
@@ -358,16 +359,53 @@ async function run(skip) {
   }
 }
 
+/**
+ * Plays the mod in a test world of its instance: each block placed, those that act
+ * right-clicked. The report, or `{ error }` when the game couldn't be checked: the
+ * mod is in the instance either way.
+ */
+async function checkInGame(added) {
+  running = "check";
+  notice("busy", `Trying ${modName} in the game`, "A test world opens: each block is placed and tried");
+  try {
+    return await invoke("check_installed", { id: added.instanceId });
+  } catch (e) {
+    return { error: String(e).split("\n").filter(Boolean).slice(-1)[0] || String(e) };
+  }
+}
+
+/** What the game check found, in a few words: `301 of 301 blocks work · 60 respond to a click`. */
+function checkFacts(checked) {
+  if (!checked) return [];
+  if (checked.error) return [`not tried in the game: ${checked.error}`];
+  if (!checked.blocks) return [];
+  const facts = [`${checked.placed} of ${count(checked.blocks, "block")} work in the game`];
+  if (checked.acting) facts.push(`${checked.responded} of ${checked.acting} respond to a click`);
+  return facts;
+}
+
 /** The ending: done, or in the instance with code still to translate, said plainly. */
-function finish(ported, added, translated, estimate) {
+function finish(ported, added, translated, estimate, checked) {
   const left = translated ? translated.left : ported.native && estimate ? estimate.functions : 0;
+  if (checked && checked.faults && checked.faults.length) {
+    const all = [...checked.faults, ...(checked.notes || [])];
+    notice("warn", `${modName} is in "${added.instance}", but ${count(checked.faults.length, "thing")} didn't work in the game`,
+      [checked.faults[0], ...checkFacts(checked)].join(" · "), [
+        button("Play", () => playInstance(added), "play", "primary"),
+        button("Open folder", () => openPath(ported.out), "folder"),
+      ]);
+    setDetail(checked.faults[0], all.join("\n"));
+    return;
+  }
   if (!left) {
     const facts = [];
     if (translated) facts.push(`${count(translated.ported + translated.unchecked, "function")} translated`);
+    facts.push(...checkFacts(checked));
     facts.push("turned on in Options > Mods");
     notice("ok", `${modName} is in "${added.instance}"`, facts.join(" · "), [
       button("Play", () => playInstance(added), "play", "primary"),
     ]);
+    if (checked && checked.notes && checked.notes.length) setDetail(`${count(checked.notes.length, "note")} from the game check`, checked.notes.join("\n"));
     return;
   }
   let why;
@@ -417,7 +455,8 @@ async function translateNow(ported, added) {
         return;
       }
     }
-    finish(ported, again, translated || { ported: 0, unchecked: 0, failed: [], left: 0, stopped: null }, estimate);
+    const checked = await checkInGame(again);
+    finish(ported, again, translated || { ported: 0, unchecked: 0, failed: [], left: 0, stopped: null }, estimate, checked);
   } catch (e) {
     const text = String(e);
     notice("bad", "It stopped", text.split("\n").filter(Boolean).slice(-1)[0] || text, [
@@ -449,6 +488,9 @@ listen("translate-progress", (e) => {
 });
 listen("build-progress", (e) => {
   if (running === "build") setDetail(progressText(e.payload), e.payload);
+});
+listen("check-progress", (e) => {
+  if (running === "check") setDetail(e.payload);
 });
 
 /** Port to a folder: for mod developers, who port, then read and edit the code. */

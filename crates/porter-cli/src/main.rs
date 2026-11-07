@@ -122,6 +122,25 @@ enum Command {
         #[arg(long)]
         trust_native_code: bool,
     },
+    /// Play a ported mod in the real game and say what doesn't work there: it opens a
+    /// test world in the instance it is installed in, places each of its blocks and
+    /// right-clicks those that act
+    Check {
+        /// The folder `port` wrote (installed and built in the instance)
+        path: PathBuf,
+        /// The instance (default: the one the launcher's Play starts)
+        #[arg(long)]
+        instance: Option<String>,
+        /// The Horizon launcher (default: found on PATH and in its usual places)
+        #[arg(long, value_name = "PATH")]
+        launcher: Option<PathBuf>,
+        /// At most this many blocks
+        #[arg(long)]
+        limit: Option<usize>,
+        /// Leave the game running afterwards
+        #[arg(long)]
+        keep: bool,
+    },
     /// Play a ported mod in its instance, with its content loaded, without building it again
     Play {
         /// The folder `port` wrote
@@ -502,6 +521,51 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 path.display()
             );
             Ok(ExitCode::SUCCESS)
+        }
+        Command::Check {
+            path,
+            instance,
+            launcher,
+            limit,
+            keep,
+        } => {
+            let launcher = porter_verify::Launcher::find(launcher.as_deref())?;
+            let list = launcher.instances()?;
+            let target = match &instance {
+                Some(name) => list
+                    .into_iter()
+                    .find(|i| i.name.eq_ignore_ascii_case(name) || i.id.eq_ignore_ascii_case(name)),
+                None => list.into_iter().find(|i| i.selected),
+            }
+            .with_context(|| match &instance {
+                Some(name) => {
+                    format!("no instance named {name}: `horizon-launcher instance list` lists them")
+                }
+                None => "no instance is selected in the launcher".to_string(),
+            })?;
+            let options = porter_verify::play::PlayOptions {
+                limit: limit.unwrap_or(0),
+                keep,
+            };
+            let report = porter_verify::play::play_check(&target, &path, &options, |line| {
+                eprintln!("{line}")
+            })?;
+            println!(
+                "
+{}.",
+                report.summary()
+            );
+            for f in &report.faults {
+                println!("FAULT {f}");
+            }
+            for n in &report.notes {
+                println!("note  {n}");
+            }
+            Ok(if report.faults.is_empty() {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            })
         }
         Command::Install {
             path,

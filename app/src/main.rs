@@ -452,6 +452,7 @@ fn main() {
             install::install_targets,
             install::install_port,
             install::build_installed,
+            install::check_installed,
             install::play_installed
         ])
         .on_window_event(|window, event| {

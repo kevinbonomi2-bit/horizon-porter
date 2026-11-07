@@ -154,6 +154,39 @@ pub async fn build_installed(
     Ok(Some(result))
 }
 
+/// Plays the port in the instance `id` (installed and built there) and says what
+/// doesn't work: a test world opens, each of its blocks is placed and those that act
+/// are right-clicked. Progress arrives as "check-progress" events.
+#[tauri::command]
+pub async fn check_installed(
+    app: AppHandle,
+    ported: State<'_, Ported>,
+    id: String,
+) -> Result<porter_verify::play::PlayReport, String> {
+    let (_, dir) = ported
+        .0
+        .lock()
+        .map_err(message)?
+        .clone()
+        .ok_or_else(|| "Port a mod first".to_string())?;
+    // Found again: a build just changed the version it plays.
+    let instance = find_instance(&app, &id).await?;
+    let events = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        porter_verify::play::play_check(
+            &instance,
+            &dir,
+            &porter_verify::play::PlayOptions::default(),
+            |line| {
+                let _ = events.emit("check-progress", line.to_string());
+            },
+        )
+    })
+    .await
+    .map_err(message)?
+    .map_err(|e| format!("{e:#}"))
+}
+
 /// Starts the instance `id`, its mods installed (nothing loaded from a folder).
 #[tauri::command]
 pub async fn play_installed(app: AppHandle, id: String) -> Result<(), String> {

@@ -5,6 +5,8 @@
 //! sandboxed, so a build needs a [`Trust`]: only the player's explicit choice
 //! creates one (Horizon's rule: trusting native code is the player's decision).
 
+pub mod play;
+
 use std::ffi::OsStr;
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};

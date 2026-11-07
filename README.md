@@ -19,8 +19,11 @@ a short summary: what carries over, who translates its code and what that costs,
 which of your Horizon instances it goes in (the one the launcher's Play starts, unless
 you pick another). Say yes once, and it ports the mod, translates its code, adds it to
 that instance beside your other mods and modpacks, turned on in Options > Mods, builds
-the instance's native mods together, and ends on **Play**. A mod that is only content
-(blocks, items, recipes) needs no translation or build: it is just added.
+the instance's native mods together, then tries it in the game: a test world opens,
+each of its blocks is placed and those that act are right-clicked. It ends on **Play**,
+saying what works ("301 of 301 blocks work in the game · 60 of 60 respond to a click")
+or what didn't. A mod that is only content (blocks, items, recipes) needs no
+translation or build: it is added and tried.
 
 The **⋯** menu has the rest: **Save the report**, **Port to a folder** (for mod
 developers, who read and edit the code), and **Translation settings**. Reading,
@@ -260,6 +263,19 @@ content mod (`<id>.hmod`) in its `horizon-mods/`, the code (`<id>.hnmod`) in its
 `horizon-native-mods/`, turned on in Options > Mods. Every native mod in an instance is
 built into one game, so a ported mod plays alongside other mods and modpacks. Build the
 instance with `--build`, or from the launcher's Mods page, which shows "Needs rebuild".
+
+### Trying it in the game
+
+```
+horizon-porter check my-mod-horizon --instance "My modpack"
+```
+
+`check` plays the port in the instance it is installed and built in, as the app does
+after a build: it opens a creative test world (`porter-check`, never one of yours), on a
+control socket of its own (a game you have open is left alone), places each of the
+mod's blocks and reads it back, right-clicks each block whose Java acts on a click, and
+reads the game's log. Faults (a block the game refuses, content Horizon didn't load, a
+game that stops) fail it; notes (a click that changed nothing) are for you to look at.
 
 Does a port work before its logic is translated? Its content does: blocks, items,
 models, textures, recipes, loot and tags load and play as they are. What the Java code
