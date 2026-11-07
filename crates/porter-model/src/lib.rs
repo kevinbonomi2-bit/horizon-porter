@@ -241,6 +241,10 @@ pub struct ModScan {
     /// `minecraft:generic_9x3`, its slot count).
     #[serde(default)]
     pub vanilla_menus: Vec<(String, String, usize)>,
+    /// Block classes clicked on as a whole block though their outline is smaller
+    /// (`getInteractionShape` returns `Shapes.block()`: a basket's open top).
+    #[serde(default)]
+    pub full_interaction: Vec<String>,
     /// The mod's tool materials (`new ToolMaterial(..)` constants), which its tools'
     /// stats come from.
     #[serde(default)]

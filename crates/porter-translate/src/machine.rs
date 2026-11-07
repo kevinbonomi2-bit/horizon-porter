@@ -288,6 +288,8 @@ pub struct Machine<'a> {
     recipes: &'a dyn Fn(&str) -> Vec<Recipe>,
     /// Tag membership: (`block` or `item`, tag, id).
     pub tags: Option<&'a dyn Fn(&str, &str, &str) -> bool>,
+    /// The random's state: `machine.random()` draws from it.
+    pub seed: u64,
 }
 
 /// A particle burst or a sound a tick plays, near its block.
@@ -446,7 +448,20 @@ impl<'a> Machine<'a> {
             effects: Vec::new(),
             recipes,
             tags: None,
+            seed: 0x9E37_79B9_7F4A_7C15,
         }
+    }
+
+    /// A random number from 0 to 1 (`level.random.nextFloat()`, `random.nextInt(10) == 0`
+    /// as `machine.random() < 0.1`).
+    pub fn random(&mut self) -> f32 {
+        // xorshift64*
+        let mut x = self.seed;
+        x ^= x >> 12;
+        x ^= x << 25;
+        x ^= x >> 27;
+        self.seed = x;
+        ((x.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 40) as f32) / (1u64 << 24) as f32
     }
 
     /// Whether `block` (a neighbour's, `machine.neighbour(Side::Down)`) is in block

@@ -1617,6 +1617,21 @@ fn {id}_block_entity_tick(
 {tag_fn}    let tags = |kind: &str, tag: &str, id: &str| in_tag(&*game, kind, tag, id);
     let mut machine = m::Machine::new(slots.clone(), data.clone(), &recipes);
     machine.tags = Some(&tags);
+    // Its random: a different draw each tick and block.
+    {{
+        thread_local! {{
+            static TICKS: std::cell::Cell<u64> = const {{ std::cell::Cell::new(0) }};
+        }}
+        let n = TICKS.with(|t| {{
+            t.set(t.get().wrapping_add(1));
+            t.get()
+        }});
+        machine.seed = (n.wrapping_mul(0x9E37_79B9_7F4A_7C15)
+            ^ (pos[0] as u64).wrapping_mul(73_856_093)
+            ^ (pos[1] as u64).wrapping_mul(19_349_663)
+            ^ (pos[2] as u64).wrapping_mul(83_492_791))
+            | 1;
+    }}
     machine.neighbours = neighbours;
     machine.block = block_here;
     // Its tanks and energy, as Horizon keeps them: `fluids` (a list of

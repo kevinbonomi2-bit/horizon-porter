@@ -806,6 +806,28 @@ pub(crate) fn vanilla_menu(source: &str) -> Option<(String, usize)> {
     None
 }
 
+/// Whether a block class's `getInteractionShape` returns the whole block
+/// (`Shapes.block()`, or a constant of the class that is).
+pub(crate) fn full_interaction(source: &str) -> bool {
+    let Some(at) = source.find("getInteractionShape(") else {
+        return false;
+    };
+    let body = &source[at..];
+    let Some(ret) = body.find("return ").map(|i| &body[i + 7..]) else {
+        return false;
+    };
+    let value = ret.split(';').next().unwrap_or("").trim();
+    let value = value.trim_start_matches("(VoxelShape)").trim();
+    if value == "Shapes.block()" {
+        return true;
+    }
+    // `OUT_SHAPE`, with `OUT_SHAPE = Shapes.block();` in the class.
+    let name = value.rsplit('.').next().unwrap_or(value);
+    !name.is_empty()
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        && source.contains(&format!("{name} = Shapes.block()"))
+}
+
 /// The constant a method of the class returns, for a value written as a call to
 /// it: `Integer.valueOf(this.getMaxServings())` and `public int getMaxServings() {
 /// return 4; }` give `4`.

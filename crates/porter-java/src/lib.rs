@@ -238,6 +238,12 @@ fn network_and_config(root: &Path, scan: &mut ModScan) {
             opened_by,
         });
     }
+    // Blocks clicked on as a whole block (a basket's open top).
+    for (name, text) in &sources {
+        if machines::full_interaction(text) {
+            scan.full_interaction.push(name.clone());
+        }
+    }
     // Block entities that open a vanilla menu over their slots (a cabinet's chest menu).
     for (name, text) in &sources {
         if let Some((menu, slots)) = machines::vanilla_menu(text) {
@@ -450,6 +456,7 @@ fn assemble(
         placements: Vec::new(),
         state_definitions: Vec::new(),
         vanilla_menus: Vec::new(),
+        full_interaction: Vec::new(),
         tool_materials: Vec::new(),
         armor_materials: Vec::new(),
         storages: Vec::new(),

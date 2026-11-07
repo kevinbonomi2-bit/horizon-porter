@@ -505,9 +505,33 @@ pub fn generate_with(
             && let Some((outline, collision)) = model_shapes(&content, b, &schema)
         {
             {
-                json["shapes"] = outline;
-                if let Some(c) = collision {
-                    json["collision_shapes"] = c;
+                // Clicked on as a whole block (`getInteractionShape` is the full block, a
+                // basket's open top): the outline, which clicks hit, stays whole, and the
+                // model's shape is what the player bumps into.
+                let whole = {
+                    let mut name = class.clone();
+                    let mut found = false;
+                    for _ in 0..8 {
+                        let Some(n) = name.take() else { break };
+                        if scan.full_interaction.contains(&n) {
+                            found = true;
+                            break;
+                        }
+                        name = scan
+                            .classes
+                            .iter()
+                            .find(|c| c.name == n)
+                            .and_then(|c| c.superclass.clone());
+                    }
+                    found
+                };
+                if whole {
+                    json["collision_shapes"] = collision.unwrap_or(outline);
+                } else {
+                    json["shapes"] = outline;
+                    if let Some(c) = collision {
+                        json["collision_shapes"] = c;
+                    }
                 }
                 if !properties.contains_key("occludes") {
                     properties.insert("occludes".into(), false.into());
@@ -921,6 +945,24 @@ fn block_template(scan: &ModScan, reg: &Registration, class: Option<&str>) -> (S
             .iter()
             .find(|c| c.name == name)
             .and_then(|c| c.superclass.clone());
+    }
+    // A vanilla class made directly that one vanilla block is named after
+    // (`StrawBedBlock::new` makes `minecraft:straw_bed`): that block.
+    if class.is_none()
+        && let Some(simple) = reg.creates.as_deref()
+        && let Some(base) = simple.strip_suffix("Block")
+    {
+        let mut snake = String::new();
+        for (i, c) in base.chars().enumerate() {
+            if c.is_ascii_uppercase() && i > 0 {
+                snake.push('_');
+            }
+            snake.push(c.to_ascii_lowercase());
+        }
+        let id = format!("minecraft:{snake}");
+        if vanilla_block(&id).is_some() {
+            return (id, format!("makes vanilla's {simple}"));
+        }
     }
     // A vanilla class made directly: `p -> new StandingSignBlock(WoodType.OAK, p)`.
     if let Some(simple) = reg.creates.as_deref()

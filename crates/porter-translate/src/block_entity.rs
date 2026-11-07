@@ -37,6 +37,9 @@ pub struct BlockEntity {
     pub energy: Option<[i32; 3]>,
     /// How many item slots it holds (`new ItemStackHandler(1)`), 0 for none.
     pub items: usize,
+    /// The class of its block whose `animateTick` plays effects on the client
+    /// (a pot's bubbles, a skillet's sizzle), fully qualified: its tick sends them.
+    pub animate: Option<String>,
     /// Whether its Java code looks at the blocks beside it (it uses `Direction`):
     /// its tick then gets them (`machine.neighbour(side)`).
     pub neighbours: bool,
@@ -169,6 +172,30 @@ pub fn find(scan: &ModScan, ns: &str) -> Vec<BlockEntity> {
             let first = found.next()?;
             found.next().is_none().then_some(first)
         });
+        // Its blocks' class with an `animateTick` (its own or a superclass of the mod's).
+        let animate = scan
+            .registrations
+            .iter()
+            .filter(|r| r.registry == "block")
+            .filter(|r| {
+                r.id.as_deref()
+                    .is_some_and(|id| its_blocks.iter().any(|b| b.ends_with(&format!(":{id}"))))
+            })
+            .filter_map(|r| r.creates.as_deref())
+            .find_map(|simple| {
+                let mut c = scan
+                    .classes
+                    .iter()
+                    .find(|c| c.name.rsplit('.').next() == Some(simple))?;
+                for _ in 0..8 {
+                    if c.method_names.iter().any(|m| m == "animateTick") {
+                        return Some(c.name.clone());
+                    }
+                    let sup = c.superclass.as_deref()?;
+                    c = scan.classes.iter().find(|k| k.name == sup)?;
+                }
+                None
+            });
         let snake = rust_ident(name);
         let mut be = BlockEntity {
             id: format!("{ns}:{name}"),
@@ -182,6 +209,7 @@ pub fn find(scan: &ModScan, ns: &str) -> Vec<BlockEntity> {
             tanks: Vec::new(),
             energy: None,
             items: 0,
+            animate,
             neighbours: false,
             left_out: Vec::new(),
         };
@@ -433,9 +461,16 @@ pub const BLOCK_ENTITIES: &[(&str, &str, bool)] = &[
                 }
                 let _ = write!(
                     r,
-                    "\n/// A server tick of the `{id}` block entity at `pos`, 20 a second. `machine` has\n/// {has} (it has no item slots). What the tick changes in them and in `state` is\n/// kept.\n///\n/// TODO: port the tick of `{java}`.\npub fn tick_{snake}(pos: [i32; 3], state: &mut {ty}, machine: &mut Machine<'_>) {{\n    let _ = (pos, state, machine);\n}}\n",
+                    "\n/// A server tick of the `{id}` block entity at `pos`, 20 a second. `machine` has\n/// {has}{no_slots}. What the tick changes in them and in `state` is\n/// kept.{animate}\n///\n/// TODO: port the tick of `{java}`{animate_todo}.\npub fn tick_{snake}(pos: [i32; 3], state: &mut {ty}, machine: &mut Machine<'_>) {{\n    let _ = (pos, state, machine);\n}}\n",
                     id = be.id,
                     has = has.join("; "),
+                    no_slots = if be.items == 0 {
+                        " (it has no item slots)"
+                    } else {
+                        ""
+                    },
+                    animate = animate_doc(be),
+                    animate_todo = animate_todo(be),
                     snake = be.snake,
                     ty = be.rust
                 );
@@ -472,9 +507,11 @@ pub const BLOCK_ENTITIES: &[(&str, &str, bool)] = &[
                 };
                 let _ = write!(
                     r,
-                    "\n/// A server tick of the `{id}` machine at `pos`, 20 a second. `machine` has its\n/// {slots}, its menu's {data} data slots (`ContainerData`: what its screen\n/// shows){recipes}. What the tick changes in them and in `state` is kept;\n/// `machine.push(slot, Side::Down, 64)` and `machine.pull(...)` move items to and from\n/// the blocks beside it, as a hopper does.\n///\n/// TODO: port the tick of `{java}`.\npub fn tick_{snake}(pos: [i32; 3], state: &mut {ty}, machine: &mut Machine<'_>) {{\n    let _ = (pos, state, machine);\n}}\n",
+                    "\n/// A server tick of the `{id}` machine at `pos`, 20 a second. `machine` has its\n/// {slots}, its menu's {data} data slots (`ContainerData`: what its screen\n/// shows){recipes}. What the tick changes in them and in `state` is kept;\n/// `machine.push(slot, Side::Down, 64)` and `machine.pull(...)` move items to and from\n/// the blocks beside it, as a hopper does.{animate}\n///\n/// TODO: port the tick of `{java}`{animate_todo}.\npub fn tick_{snake}(pos: [i32; 3], state: &mut {ty}, machine: &mut Machine<'_>) {{\n    let _ = (pos, state, machine);\n}}\n",
                     id = be.id,
                     data = m.data_slots,
+                    animate = animate_doc(be),
+                    animate_todo = animate_todo(be),
                     snake = be.snake,
                     ty = be.rust
                 );
@@ -579,6 +616,26 @@ pub const BLOCK_ENTITIES: &[(&str, &str, bool)] = &[
         r.push_str(&crate::machine::runtime(machines, recipe_types));
     }
     r
+}
+
+/// The tick's word on its block's client effects: Horizon has no hook for
+/// `animateTick`, so the tick sends them.
+fn animate_doc(be: &BlockEntity) -> String {
+    match &be.animate {
+        Some(class) => format!(
+            "\n/// Its block's `animateTick` ({}) plays effects on the client in Java (steam,\n/// bubbles, a sizzle): port them here, sent by the server to the players near with\n/// `machine.particles(..)` and `machine.sound(..)`, with Java's random chances\n/// (`machine.random()`).",
+            class.rsplit('.').next().unwrap_or(class)
+        ),
+        None => String::new(),
+    }
+}
+
+/// The TODO's mention of its block's `animateTick`, so translate reads that class.
+fn animate_todo(be: &BlockEntity) -> String {
+    match &be.animate {
+        Some(class) => format!(", and the effects of `{class}`'s `animateTick`"),
+        None => String::new(),
+    }
 }
 
 /// Whether its tick gets a `Machine`: it has slots, tanks, energy, a renderer to

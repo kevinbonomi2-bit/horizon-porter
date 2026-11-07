@@ -265,7 +265,14 @@ fn translate_one(
         let reply = match model.complete(SYSTEM, &prompt.shared, &ask) {
             Ok(r) => r,
             Err(e) => {
-                outcome.status = Status::NoAnswer(format!("{e:#}"));
+                let why = format!("{e:#}");
+                // One function's answer too long, or declined: that function's alone, the
+                // others go on. Anything else (no key, no network) would be the same for all.
+                outcome.status = if why.contains("cut off") || why.contains("declined") {
+                    Status::Failed(why)
+                } else {
+                    Status::NoAnswer(why)
+                };
                 return outcome;
             }
         };

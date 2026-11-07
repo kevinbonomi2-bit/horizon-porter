@@ -230,7 +230,15 @@ impl Model for Anthropic {
                         .as_str()
                         .unwrap_or("no category")
                 ),
-                Some("max_tokens") => bail!("the answer was cut off at 16000 tokens"),
+                // A long function's answer: once more with room for it.
+                Some("max_tokens") if body["max_tokens"] == 16000 => {
+                    eprintln!(
+                        "  the answer was cut off at 16000 tokens; asking again with room for 48000"
+                    );
+                    body["max_tokens"] = 48000.into();
+                    continue;
+                }
+                Some("max_tokens") => bail!("the answer was cut off at 48000 tokens"),
                 _ => {}
             }
             let text = json["content"]
