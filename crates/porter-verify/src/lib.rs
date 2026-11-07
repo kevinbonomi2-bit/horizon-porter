@@ -189,7 +189,7 @@ impl Launcher {
         trust: Trust,
         progress: impl FnMut(&str),
     ) -> Result<String> {
-        self.run_native_build(Some(folder), instance, trust, progress)
+        self.run_native_build(Some(folder), instance, &trust, progress)
     }
 
     /// Builds every native mod turned on in `instance` (its `horizon-native-mods/`),
@@ -200,14 +200,61 @@ impl Launcher {
         trust: Trust,
         progress: impl FnMut(&str),
     ) -> Result<String> {
-        self.run_native_build(None, instance, trust, progress)
+        self.run_native_build(None, instance, &trust, progress)
+    }
+
+    /// [`build_instance`], and when the build fails, `repair` gets its log
+    /// (native/build.log) and the Horizon source it compiled: it changes the mods
+    /// (putting back code the build refused, installing them again) and says what
+    /// it changed, and the build runs again; at most three times. Nothing changed
+    /// leaves the build's error. Returns the build's last line and what was changed.
+    pub fn build_instance_repairing(
+        &self,
+        instance: &Instance,
+        trust: Trust,
+        mut repair: impl FnMut(&str, &Path) -> Result<Vec<String>>,
+        mut progress: impl FnMut(&str),
+    ) -> Result<(String, Vec<String>)> {
+        let mut changed = Vec::new();
+        for round in 0.. {
+            let err = match self.run_native_build(None, instance, &trust, &mut progress) {
+                Ok(last) => return Ok((last, changed)),
+                Err(e) => e,
+            };
+            if round == 3 {
+                return Err(err);
+            }
+            let native = play::launcher_data()?.join("native");
+            let log = std::fs::read_to_string(native.join("build.log")).unwrap_or_default();
+            // The tree it compiled: the newest of the patched copies of Horizon.
+            let tree = std::fs::read_dir(native.join("patched"))
+                .ok()
+                .into_iter()
+                .flatten()
+                .flatten()
+                .filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path())))
+                .max()
+                .map(|(_, p)| p);
+            let Some(tree) = tree else {
+                return Err(err);
+            };
+            let done = repair(&log, &tree)?;
+            if done.is_empty() {
+                return Err(err);
+            }
+            for d in &done {
+                progress(&format!("Put back to its stub, the build refused it: {d}"));
+            }
+            changed.extend(done);
+        }
+        unreachable!()
     }
 
     fn run_native_build(
         &self,
         folder: Option<&Path>,
         instance: &Instance,
-        _trust: Trust,
+        _trust: &Trust,
         mut progress: impl FnMut(&str),
     ) -> Result<String> {
         let mut cmd = command(&self.path);

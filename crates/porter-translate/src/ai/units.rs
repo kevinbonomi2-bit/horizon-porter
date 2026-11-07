@@ -4,6 +4,7 @@
 // functions already ported when `port --force` writes a file again.
 
 use std::collections::BTreeSet;
+use std::fmt::Write;
 
 /// The marker `port` writes on each function left to port.
 pub const TODO: &str = "TODO: port";
@@ -250,6 +251,112 @@ pub fn replace_function(source: &str, name: &str, comment: &str, function: &str)
         &source[..item.comment_start],
         &source[item.end..]
     ))
+}
+
+/// The top-level functions of `source` that `translate` ported (a "Ported by
+/// horizon-porter translate" note above each): their names.
+pub fn ported_functions(source: &str) -> Vec<String> {
+    items(source)
+        .into_iter()
+        .filter(|i| source[i.comment_start..i.fn_start].contains(PORTED))
+        .map(|i| i.name)
+        .collect()
+}
+
+/// What `translate` writes above a function it ported.
+pub const PORTED: &str = "Ported by horizon-porter translate";
+
+/// `source` with the ported function `name` put back to what `port` left: its note
+/// back to the TODO it was (so `translate` ports it again), `why` added below it,
+/// and a body that answers nothing. None when it isn't there or wasn't ported.
+pub fn unport(source: &str, name: &str, why: &str) -> Option<String> {
+    let item = items(source).into_iter().find(|i| i.name == name)?;
+    let comment = &source[item.comment_start..item.fn_start];
+    if !comment.contains(PORTED) {
+        return None;
+    }
+    let mut out = String::new();
+    for line in comment.split_inclusive('\n') {
+        let Some(i) = line.find(PORTED) else {
+            out.push_str(line);
+            continue;
+        };
+        let prefix = &line[..i];
+        // "(claude-haiku-5-5) from these; review it:", "(model) from a.B. Review it.",
+        // "(model): the tick of `a.B`. Review it."
+        let rest = line[i + PORTED.len()..].trim();
+        let rest = rest
+            .strip_prefix('(')
+            .and_then(|r| r.split_once(')'))
+            .map_or(rest, |(_, r)| r)
+            .trim_start_matches(':')
+            .trim();
+        let rest = rest.trim_end_matches("Review it.").trim();
+        let todo = if rest == "from these; review it:" {
+            format!("{TODO} into this function:")
+        } else {
+            format!("{TODO} {rest}")
+        };
+        let why = why.lines().next().unwrap_or(why);
+        let _ = writeln!(out, "{prefix}{todo}");
+        let _ = writeln!(
+            out,
+            "{prefix}Its port was put back: the game's build refused it ({why})."
+        );
+    }
+    let function = &source[item.fn_start..item.end];
+    let head = function.split('{').next()?.trim_end();
+    // No attributes (horizon-mixins refuses a helper with one): its arguments named
+    // to leave none unused, as `port`'s own stubs do.
+    let args = parameter_names(head);
+    let used = match args.len() {
+        0 => String::new(),
+        1 => format!("    let _ = {};\n", args[0]),
+        _ => format!("    let _ = ({});\n", args.join(", ")),
+    };
+    let stub = format!("{head} {{\n{used}    Default::default()\n}}\n");
+    Some(format!(
+        "{}{out}{stub}{}",
+        &source[..item.comment_start],
+        &source[item.end..]
+    ))
+}
+
+/// The parameter names of a function's head (`fn f(&mut self, mut a: [i32; 3],
+/// b: Option<(u8, u8)>)` → `self`, `a`, `b`).
+fn parameter_names(head: &str) -> Vec<String> {
+    let Some(open) = head.find('(') else {
+        return Vec::new();
+    };
+    let mut depth = 0i32;
+    let mut parts = vec![String::new()];
+    for c in head[open + 1..].chars() {
+        match c {
+            '(' | '[' | '<' | '{' => depth += 1,
+            ')' if depth == 0 => break,
+            ')' | ']' | '>' | '}' => depth -= 1,
+            ',' if depth == 0 => {
+                parts.push(String::new());
+                continue;
+            }
+            _ => {}
+        }
+        if let Some(p) = parts.last_mut() {
+            p.push(c);
+        }
+    }
+    parts
+        .iter()
+        .filter_map(|p| {
+            let p = p.trim();
+            if p.ends_with("self") && !p.contains(':') {
+                return Some("self".to_string());
+            }
+            let name = p.split(':').next()?.trim();
+            let name = name.strip_prefix("mut ").unwrap_or(name).trim();
+            (!name.is_empty() && name != "_").then(|| name.to_string())
+        })
+        .collect()
 }
 
 /// The signature of a function's source: everything before its body.

@@ -115,9 +115,12 @@ pub async fn install_port(
 #[tauri::command]
 pub async fn build_installed(
     app: AppHandle,
+    ported: State<'_, Ported>,
     id: String,
     trusted: Option<bool>,
 ) -> Result<Option<String>, String> {
+    // The mod ported last: its translated code the build refuses is put back, then it builds again.
+    let port = ported.0.lock().map_err(message)?.clone();
     let instance = find_instance(&app, &id).await?;
     let trusted = trusted == Some(true) || app
         .dialog()
@@ -144,8 +147,38 @@ pub async fn build_installed(
             "build-progress",
             format!("Building \"{}\" with {}", instance.name, launcher.version),
         );
-        launcher.build_instance(&instance, Trust::given_by_player(), |line| {
-            let _ = events.emit("build-progress", line.to_string());
+        let home = instance.home.clone();
+        let repair = |log: &str, tree: &std::path::Path| -> anyhow::Result<Vec<String>> {
+            let (Some((mod_id, dir)), Some(home)) = (&port, &home) else {
+                return Ok(Vec::new());
+            };
+            let done = porter_translate::refused::repair(dir, log, tree)?;
+            if !done.is_empty() {
+                let files =
+                    porter_translate::bundle::package(dir, &dir.join(".porter").join("dist"))?;
+                let hnmod = files
+                    .iter()
+                    .find(|f| f.extension().is_some_and(|e| e == "hnmod"));
+                porter_verify::install(home, mod_id, None, hnmod.map(|p| p.as_path()))?;
+            }
+            Ok(done)
+        };
+        let (last, put_back) = launcher.build_instance_repairing(
+            &instance,
+            Trust::given_by_player(),
+            repair,
+            |line| {
+                let _ = events.emit("build-progress", line.to_string());
+            },
+        )?;
+        Ok::<_, anyhow::Error>(if put_back.is_empty() {
+            last
+        } else {
+            format!(
+                "{last}
+{} translated function(s) the build refused are back to their stubs: the mod plays without them.",
+                put_back.len()
+            )
         })
     })
     .await

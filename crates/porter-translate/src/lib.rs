@@ -14,6 +14,7 @@ pub mod blocks;
 pub mod bundle;
 pub mod machine;
 pub mod netconf;
+pub mod refused;
 pub mod screens;
 pub mod statics;
 /// The content mod, from the `porter-content` crate.

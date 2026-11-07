@@ -628,11 +628,40 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 println!("It loads the next time \"{}\" starts.", target.name);
             } else if build {
                 println!("Building \"{}\" with {}.", target.name, launcher.version);
-                launcher.build_instance(
+                let (_, put_back) = launcher.build_instance_repairing(
                     &target,
                     porter_verify::Trust::given_by_player(),
+                    |log, tree| {
+                        let done = porter_translate::refused::repair(&path, log, tree)?;
+                        if !done.is_empty() {
+                            let files = porter_translate::bundle::package(
+                                &path,
+                                &path.join(".porter").join("dist"),
+                            )?;
+                            let hnmod = files
+                                .iter()
+                                .find(|f| f.extension().is_some_and(|e| e == "hnmod"));
+                            porter_verify::install(
+                                &home,
+                                &port.id,
+                                None,
+                                hnmod.map(|p| p.as_path()),
+                            )?;
+                        }
+                        Ok(done)
+                    },
                     |line| eprintln!("{line}"),
                 )?;
+                if !put_back.is_empty() {
+                    println!(
+                        "\nThe game's build refused {} translated function(s): each is back to its stub, \
+                         so the mod plays without it (`translate` ports it again):",
+                        put_back.len()
+                    );
+                    for p in &put_back {
+                        println!("  {p}");
+                    }
+                }
                 println!("\nDone: play \"{}\" from the launcher.", target.name);
             } else {
                 println!(
