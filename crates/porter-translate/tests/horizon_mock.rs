@@ -276,6 +276,15 @@ pub mod crafting {
 }
 
 // mod_api.rs: a mod block's screen.
+// first_person.rs: the two hands.
+pub mod first_person {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum Hand {
+        Main,
+        Off,
+    }
+}
+
 pub mod mod_api {
     pub struct NativeScreen {
         pub width: f32,
@@ -330,6 +339,8 @@ pub mod game {
         _game: std::marker::PhantomData<&'a ()>,
         // The game's resources: its block registry (game.rs), which native_hooks reads.
         pub pack: PackResources,
+        // The hand a use is for (game.rs), which native_hooks reads.
+        pub hand: crate::first_person::Hand,
     }
     pub struct PackResources {
         pub assets: Assets,

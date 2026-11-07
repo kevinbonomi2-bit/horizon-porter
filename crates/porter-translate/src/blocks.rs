@@ -389,6 +389,15 @@ fn {id}_right_click_block({params}) {
     if !m::acts_on_use(&block) {
         return;
     }
+    // Horizon asks once per hand. In Java a click the block takes never reaches the
+    // off hand; here the client doesn't know the main hand's was taken and sends the
+    // off hand's too, which would run the block's code a second time (a garage door
+    // lowered, then raised straight back). The block's code runs for the main hand
+    // only, and its off hand's click is taken without it.
+    if game.hand != horizon_client::first_person::Hand::Main {
+        *canceled = true;
+        return;
+    }
     let held = game
         .native_held()
         .map_or_else(|| "minecraft:air".to_string(), |(item, _, _)| item);
