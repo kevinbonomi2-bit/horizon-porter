@@ -152,6 +152,13 @@ and items it also writes `content/`, a Horizon content mod:
   properties its template lacks so its models still match.
 - **A file per item**, from `Item.Properties` (`stacksTo`, `rarity`, tools, food).
 
+Blocks and items whose **Java acts in code** get a function each in `runtime.rs` to
+port into, called from Horizon's hooks: a block placed its own way
+(`getStateForPlacement`), used with a right click (`useItemOn`, `useWithoutItem`) or
+reshaped by its neighbours (`updateShape`); an item used on a block (`useOn`) or in the
+air (`use`), which can change blocks and use up or wear the stack in hand. Until one is
+ported, its template's own behaviour stands.
+
 Each **block entity** becomes a state struct in `runtime.rs`, saved with its block
 under the keys `saveAdditional` writes, plus a `tick_<name>` stub for its Java tick.
 Horizon's `native_block_entity` hooks give the blocks their block entity and run the
@@ -265,6 +272,11 @@ content mod (`<id>.hmod`) in its `horizon-mods/`, the code (`<id>.hnmod`) in its
 built into one game, so a ported mod plays alongside other mods and modpacks. Build the
 instance with `--build`, or from the launcher's Mods page, which shows "Needs rebuild".
 
+A translated function the game's build refuses (one that calls something Horizon
+doesn't have where it runs) doesn't stop the mod: `install --build` and the app put that
+function back to its stub, marked to port again, and build once more. The mod plays
+without it, and the build says which ones it put back.
+
 ### Trying it in the game
 
 ```
@@ -274,8 +286,9 @@ horizon-porter check my-mod-horizon --instance "My modpack"
 `check` plays the port in the instance it is installed and built in, as the app does
 after a build: it opens a creative test world (`porter-check`, never one of yours), on a
 control socket of its own (a game you have open is left alone), places each of the
-mod's blocks and reads it back, right-clicks each block whose Java acts on a click, and
-reads the game's log. Faults (a block the game refuses or can't draw, content Horizon
+mod's blocks and reads it back, right-clicks each block whose Java acts on a click
+(empty-handed, then holding what its ported code asks for: an item it compares the held
+one to, the mod's tools, shears, the block's own item), and reads the game's log. Faults (a block the game refuses or can't draw, content Horizon
 didn't load, a game that stops) fail it; notes (a click that changed nothing, a model or
 texture drawn as Minecraft's missing one) are for you to look at.
 

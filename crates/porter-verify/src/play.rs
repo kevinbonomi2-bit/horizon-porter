@@ -222,13 +222,24 @@ pub fn play_check(
     }
 
     let clicks: Vec<_> = spots.iter().filter(|(b, _)| acting.contains(b)).collect();
-    // Many blocks act only on a tool in hand (Macaw's on their pliers, hammer or
-    // shears): a click that changes nothing empty-handed is tried with each of the
-    // mod's own tools, then shears. They go in the hotbar's first slots; the
-    // empty hand is its last.
-    let mut tools = mod_tools(port_dir);
-    tools.truncate(7);
-    tools.push("minecraft:shears".into());
+    // Many blocks act only on something in hand (Macaw's on their pliers, hammer or
+    // shears, a bridge on a redstone torch or its own item): a click that changes
+    // nothing empty-handed is tried with what the ported code compares the held item
+    // to, the mod's own tools, then shears. They go in the hotbar's first eight
+    // slots; the empty hand is its last. The block's own item, when the code asks
+    // for it, comes last, given for that click and cleared after.
+    let (wanted, own_item) = held_wanted(port_dir);
+    let mut tools: Vec<String> = Vec::new();
+    for t in wanted
+        .into_iter()
+        .chain(mod_tools(port_dir))
+        .chain(["minecraft:shears".to_string()])
+    {
+        if !tools.contains(&t) {
+            tools.push(t);
+        }
+    }
+    tools.truncate(8);
     if !clicks.is_empty() {
         for tool in &tools {
             game.run(&["give", tool], 30);
@@ -280,6 +291,14 @@ pub fn play_check(
                 if before != after {
                     break;
                 }
+            }
+            if before == after && own_item {
+                game.run(&["give", block], 30);
+                game.select(block);
+                game.click(*pos);
+                std::thread::sleep(Duration::from_secs(1));
+                after = game.state(*pos);
+                game.run(&["command", &format!("clear @s {block}")], 30);
             }
             game.select("9");
         }
@@ -417,6 +436,69 @@ pub fn mod_tools(port_dir: &Path) -> Vec<String> {
     out
 }
 
+/// What the port's ported code wants in hand before a block acts: the item ids
+/// it compares the held item to (`u.held == "minecraft:redstone_torch"`, a
+/// `match u.held.as_str()`'s arms), in the order found; and whether it compares it
+/// to the block's own item (`u.held == u.block`).
+pub fn held_wanted(port_dir: &Path) -> (Vec<String>, bool) {
+    let mut items: Vec<String> = Vec::new();
+    let mut own = false;
+    for bundle in std::fs::read_dir(port_dir.join("mixins"))
+        .into_iter()
+        .flatten()
+        .flatten()
+    {
+        let Ok(text) = std::fs::read_to_string(bundle.path().join("runtime.rs")) else {
+            continue;
+        };
+        // Inside a `match` on the held item: its depth of braces, until it closes.
+        let mut in_match: Option<i32> = None;
+        for line in text.lines() {
+            let code = line.split("//").next().unwrap_or("");
+            let held = code.contains("held");
+            if held && (code.contains("== u.block") || code.contains("!= u.block")) {
+                own = true;
+            }
+            if held && code.contains("match ") && in_match.is_none() {
+                in_match = Some(0);
+            }
+            if held || in_match.is_some() {
+                for (i, part) in code.split('"').enumerate() {
+                    let id = part;
+                    let looks = i % 2 == 1
+                        && id.split_once(':').is_some_and(|(ns, path)| {
+                            !ns.is_empty()
+                                && !path.is_empty()
+                                && ns.chars().all(|c| {
+                                    c.is_ascii_lowercase()
+                                        || c.is_ascii_digit()
+                                        || c == '_'
+                                        || c == '-'
+                                        || c == '.'
+                                })
+                                && path.chars().all(|c| {
+                                    c.is_ascii_lowercase()
+                                        || c.is_ascii_digit()
+                                        || c == '_'
+                                        || c == '/'
+                                })
+                        });
+                    if looks && id != "minecraft:air" && !items.iter().any(|x| x == id) {
+                        items.push(id.to_string());
+                    }
+                }
+            }
+            if let Some(depth) = in_match.as_mut() {
+                *depth += code.matches('{').count() as i32 - code.matches('}').count() as i32;
+                if *depth <= 0 && code.contains('}') {
+                    in_match = None;
+                }
+            }
+        }
+    }
+    (items, own)
+}
+
 /// The content mod's blocks (sorted ids), and those whose Java acts on a right click.
 pub fn mod_blocks(port_dir: &Path) -> (Vec<String>, Vec<String>) {
     let mut blocks = Vec::new();
@@ -498,7 +580,7 @@ fn horizon_ctl(version: Option<&str>) -> Result<PathBuf> {
 }
 
 /// The Horizon launcher's data folder, where its versions are.
-fn launcher_data() -> Result<PathBuf> {
+pub(crate) fn launcher_data() -> Result<PathBuf> {
     if let Some(dir) = std::env::var_os("HORIZON_LAUNCHER_DATA") {
         return Ok(PathBuf::from(dir));
     }
@@ -680,6 +762,47 @@ mod tests {
         let (all, acting) = mod_blocks(&dir);
         assert_eq!(all, ["shutters:iron_gate", "shutters:oak_shutter"]);
         assert_eq!(acting, ["shutters:oak_shutter"]);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn holds_what_the_ported_code_asks_for() {
+        let dir = std::env::temp_dir().join(format!("porter-held-{}", std::process::id()));
+        let mixins = dir.join("mixins/bridges");
+        std::fs::create_dir_all(&mixins).unwrap();
+        std::fs::write(
+            mixins.join("runtime.rs"),
+            r#"fn bridge_use(u: &BlockUse, world: &mut dyn World) -> bool {
+    // Java: `if (held == Items.STICK)`, "minecraft:stick" in a comment isn't asked for.
+    if u.held == "minecraft:redstone_torch" && !powered {
+        world.play_sound("minecraft:block.wood.place", u.pos, 1.0, 1.0);
+    }
+    match u.held.as_str() {
+        "bridges:pliers" => {
+            world.set_block(u.pos, "minecraft:air", &[]);
+        }
+        "minecraft:shears" | "minecraft:air" => {}
+        _ => {}
+    }
+    if u.held == u.block {
+        return true;
+    }
+    world.set_block(u.pos, "minecraft:stone", &[]);
+    false
+}
+"#,
+        )
+        .unwrap();
+        let (items, own) = held_wanted(&dir);
+        assert_eq!(
+            items,
+            [
+                "minecraft:redstone_torch",
+                "bridges:pliers",
+                "minecraft:shears"
+            ]
+        );
+        assert!(own);
         std::fs::remove_dir_all(dir).ok();
     }
 
