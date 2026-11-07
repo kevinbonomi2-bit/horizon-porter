@@ -719,6 +719,8 @@ impl Game {
     /// A right click on the block at `pos`: on its side toward the player, else on
     /// its top (a low block, a bridge's deck, shows no side from eye height).
     fn click(&self, pos: [i32; 3]) -> Value {
+        // A menu the last click left open (a cabinet's) would take this one.
+        self.run(&["close"], 30);
         // The click must land on this block: a neighbour in the way takes it
         // otherwise, and the reply says which block it met.
         let hit = |reply: &Value| {
@@ -790,7 +792,11 @@ impl Game {
     fn opened_menu(&self, reply: &Value) -> bool {
         let open = reply["screen"]
             .as_str()
-            .is_some_and(|s| !matches!(s, "playing" | "" | "none"));
+            .is_some_and(|s| !matches!(s, "playing" | "" | "none"))
+            // The click that opened it reported before the screen came up.
+            || self.run(&["state"], 30)["screen"]
+                .as_str()
+                .is_some_and(|s| !matches!(s, "playing" | "" | "none"));
         if open {
             self.run(&["close"], 30);
         }

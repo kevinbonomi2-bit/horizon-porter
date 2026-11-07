@@ -767,7 +767,16 @@ fn package_native(dir: &Path, out_dir: &Path) -> Result<PathBuf> {
                     .unwrap_or(&path)
                     .to_string_lossy()
                     .replace('\\', "/");
-                files.insert(format!("mixins/{id}/{rel}"), fs::read(&path)?);
+                let mut bytes = fs::read(&path)?;
+                // runtime.rs is a crate of its own when translate tests it, and a
+                // module of the game's (`crate::game::ported_demo`) once built: its
+                // `crate::` paths are the module's.
+                if let Some(module) = module_of(&manifest, &rel)
+                    && let Ok(text) = String::from_utf8(bytes.clone())
+                {
+                    bytes = module_paths(&text, &module).into_bytes();
+                }
+                files.insert(format!("mixins/{id}/{rel}"), bytes);
             }
         }
     }
@@ -780,6 +789,40 @@ fn package_native(dir: &Path, out_dir: &Path) -> Result<PathBuf> {
     let out = out_dir.join(format!("{id}-{version}.hnmod"));
     write_zip(&out, &files)?;
     Ok(out)
+}
+
+/// The module `rel` (a file of the bundle) becomes in the game, by its manifest's
+/// `[[module]]`: `ported_demo` for `runtime.rs`.
+fn module_of(manifest: &toml::Table, rel: &str) -> Option<String> {
+    manifest
+        .get("module")?
+        .as_array()?
+        .iter()
+        .find(|m| m.get("source").and_then(|v| v.as_str()) == Some(rel))?
+        .get("name")?
+        .as_str()
+        .map(str::to_string)
+}
+
+/// `text` with its `crate::x` paths made `crate::game::<module>::x`, as they are
+/// once it is that module of the game's.
+pub(crate) fn module_paths(text: &str, module: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(i) = rest.find("crate::") {
+        let before = rest[..i].chars().next_back();
+        let after = &rest[i + 7..];
+        out.push_str(&rest[..i + 7]);
+        let word = before.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$');
+        if !word && !after.starts_with("game::") {
+            out.push_str("game::");
+            out.push_str(module);
+            out.push_str("::");
+        }
+        rest = after;
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Writes `files` into a zip at `out`, sorted, with fixed times and modes, so the
@@ -3283,6 +3326,21 @@ mod tests {
         assert_eq!(facing(46.0), "west");
         assert_eq!(facing(359.0), "south");
         assert!(PLAYER_TYPE.contains("let quarter = (f64::from(self.yaw) / 90.0).round() as i64;"));
+    }
+
+    #[test]
+    fn runtime_paths_become_the_modules() {
+        let text = "use crate::helpers::x;
+let a = crate::game::other::y;
+let b = $crate::z;
+fn f() { crate::tables::T }";
+        assert_eq!(
+            module_paths(text, "ported_demo"),
+            "use crate::game::ported_demo::helpers::x;
+let a = crate::game::other::y;
+let b = $crate::z;
+fn f() { crate::game::ported_demo::tables::T }"
+        );
     }
 
     #[test]
