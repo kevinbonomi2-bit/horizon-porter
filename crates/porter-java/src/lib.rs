@@ -235,6 +235,12 @@ fn network_and_config(root: &Path, scan: &mut ModScan) {
             opened_by,
         });
     }
+    // Block entities that open a vanilla menu over their slots (a cabinet's chest menu).
+    for (name, text) in &sources {
+        if let Some((menu, slots)) = machines::vanilla_menu(text) {
+            scan.vanilla_menus.push((name.clone(), menu, slots));
+        }
+    }
     // Block classes' own state definitions and defaults.
     for (name, text) in &sources {
         if let Some((fields, defaults)) = machines::state_definition(text) {
@@ -424,6 +430,7 @@ fn assemble(
         creative_tabs: Vec::new(),
         placements: Vec::new(),
         state_definitions: Vec::new(),
+        vanilla_menus: Vec::new(),
         storages: Vec::new(),
         block_shapes: Vec::new(),
         mobs: Vec::new(),

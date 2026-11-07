@@ -1,5 +1,7 @@
 package net.grind;
 
+import net.grind.machine.CabinetBlock;
+import net.grind.machine.CabinetBlockEntity;
 import net.grind.machine.CrusherBlock;
 import net.grind.machine.CrusherBlockEntity;
 import net.grind.machine.CrusherMenu;
@@ -33,6 +35,10 @@ public class Grind {
         () -> new CrusherBlock(BlockBehaviour.Properties.ofFullCopy(Blocks.STONE).strength(3.5f)));
     public static final Supplier<BlockEntityType<CrusherBlockEntity>> CRUSHER_BE =
         BLOCK_ENTITIES.register("crusher", () -> BlockEntityType.Builder.of(CrusherBlockEntity::new, CRUSHER.get()).build(null));
+    public static final DeferredBlock<CabinetBlock> CABINET = BLOCKS.register("cabinet",
+        () -> new CabinetBlock(BlockBehaviour.Properties.ofFullCopy(Blocks.BARREL)));
+    public static final Supplier<BlockEntityType<CabinetBlockEntity>> CABINET_BE =
+        BLOCK_ENTITIES.register("cabinet", () -> BlockEntityType.Builder.of(CabinetBlockEntity::new, CABINET.get()).build(null));
     public static final Supplier<MenuType<CrusherMenu>> CRUSHER_MENU =
         MENUS.register("crusher", () -> IMenuTypeExtension.create(CrusherMenu::new));
     public static final Supplier<RecipeType<CrushingRecipe>> CRUSHING =

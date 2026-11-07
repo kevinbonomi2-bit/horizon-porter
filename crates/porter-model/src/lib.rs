@@ -236,6 +236,11 @@ pub struct ModScan {
     /// `registerDefaultState` sets as (field, value): `("PART", "top")`).
     #[serde(default)]
     pub state_definitions: Vec<StateDefinition>,
+    /// Block entity classes whose `createMenu` opens a vanilla menu over their own
+    /// slots (`ChestMenu.threeRows(id, inventory, this)`): (class, the menu type
+    /// `minecraft:generic_9x3`, its slot count).
+    #[serde(default)]
+    pub vanilla_menus: Vec<(String, String, usize)>,
     /// How block classes turn their `facing` when placed (`getStateForPlacement`):
     /// (class, quarter turns clockwise from the way the player looks), so
     /// `context.getHorizontalDirection().getOpposite()` is 2 (toward the player).

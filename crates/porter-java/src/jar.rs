@@ -194,6 +194,7 @@ pub(crate) fn scan(path: &Path) -> Result<ModScan> {
         creative_tabs: Vec::new(),
         placements: Vec::new(),
         state_definitions: Vec::new(),
+        vanilla_menus: Vec::new(),
         storages: Vec::new(),
         block_shapes: Vec::new(),
         mobs: Vec::new(),

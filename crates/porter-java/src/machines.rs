@@ -405,7 +405,11 @@ pub(crate) fn state_definition(source: &str) -> Option<StateFields> {
             let [field, value] = parts.as_slice() else {
                 continue;
             };
-            let (Some(field), Some(value)) = (constant(field), state_value(value)) else {
+            let value = state_value(value).or_else(|| returned_constant(source, value));
+            // `this.getServingsProperty()`: the field a method of its own returns.
+            let field = constant(field)
+                .or_else(|| returned_expression(source, field).and_then(|f| constant(&f)));
+            let (Some(field), Some(value)) = (field, value) else {
                 continue;
             };
             if !defaults.iter().any(|(f, _): &(String, String)| *f == field) {
@@ -414,6 +418,84 @@ pub(crate) fn state_definition(source: &str) -> Option<StateFields> {
         }
     }
     (!fields.is_empty() || !defaults.is_empty()).then_some((fields, defaults))
+}
+
+/// The vanilla menu a block entity's `createMenu` opens over its own slots, with
+/// that menu's slot count: `ChestMenu.threeRows(..)` is `minecraft:generic_9x3`
+/// (27), `new HopperMenu(..)` `minecraft:hopper` (5), `new DispenserMenu(..)`
+/// `minecraft:generic_3x3` (9), `new ChestMenu(MenuType.GENERIC_9x2, ..)` its type.
+pub(crate) fn vanilla_menu(source: &str) -> Option<(String, usize)> {
+    let at = source.find("createMenu(")?;
+    // Its body: up to the next method, which is enough for these one-liners.
+    let body = &source[at..];
+    let body = &body[..body
+        .find(
+            "
+    }",
+        )
+        .unwrap_or(body.len())
+        .min(2000)];
+    const ROWS: [(&str, usize); 6] = [
+        ("oneRow", 1),
+        ("twoRows", 2),
+        ("threeRows", 3),
+        ("fourRows", 4),
+        ("fiveRows", 5),
+        ("sixRows", 6),
+    ];
+    for (call, rows) in ROWS {
+        if body.contains(&format!("ChestMenu.{call}(")) {
+            return Some((format!("minecraft:generic_9x{rows}"), rows * 9));
+        }
+    }
+    for rows in 1..=6 {
+        if body.contains(&format!("MenuType.GENERIC_9x{rows}")) {
+            return Some((format!("minecraft:generic_9x{rows}"), rows * 9));
+        }
+    }
+    if body.contains("new HopperMenu(") {
+        return Some(("minecraft:hopper".into(), 5));
+    }
+    if body.contains("new DispenserMenu(") || body.contains("MenuType.GENERIC_3x3") {
+        return Some(("minecraft:generic_3x3".into(), 9));
+    }
+    None
+}
+
+/// The constant a method of the class returns, for a value written as a call to
+/// it: `Integer.valueOf(this.getMaxServings())` and `public int getMaxServings() {
+/// return 4; }` give `4`.
+fn returned_constant(source: &str, text: &str) -> Option<String> {
+    let value = returned_expression(source, text)?;
+    state_value(&value)
+        .filter(|v| v.chars().all(|c| c.is_ascii_digit()) || v == "true" || v == "false")
+}
+
+/// What a method of the class returns, for an expression that calls it with no
+/// arguments (`this.getMaxServings()`, `Integer.valueOf(getMaxServings())`): the
+/// expression of its one `return`.
+fn returned_expression(source: &str, text: &str) -> Option<String> {
+    let t = text.trim();
+    let t = t
+        .strip_prefix("Integer.valueOf(")
+        .and_then(|r| r.strip_suffix(')'))
+        .unwrap_or(t)
+        .trim();
+    let t = t.strip_prefix("this.").unwrap_or(t);
+    let name = t.strip_suffix("()")?;
+    if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return None;
+    }
+    let at = source.find(&format!(" {name}() {{"))?;
+    let body = &source[at..];
+    let body = &body[body.find('{')? + 1..body.find('}')?];
+    Some(
+        body.trim()
+            .strip_prefix("return ")?
+            .strip_suffix(';')?
+            .trim()
+            .to_string(),
+    )
 }
 
 /// A state value as Java writes it, as a blockstate names it: `true`,
@@ -614,6 +696,38 @@ mod tests {
             ]
         );
         assert!(state_definition("class Plain {}").is_none());
+        // A feast starts whole: its default is what a method of its own returns.
+        let feast = "public FeastBlock(Properties properties) {
+            super(properties);
+            this.registerDefaultState((BlockState)((BlockState)this.stateDefinition.any()).setValue(this.getServingsProperty(), Integer.valueOf(this.getMaxServings())));
+        }
+        public IntegerProperty getServingsProperty() {
+            return SERVINGS;
+        }
+        public int getMaxServings() {
+            return 4;
+        }";
+        let (_, defaults) = state_definition(feast).unwrap();
+        assert_eq!(defaults, [("SERVINGS".to_string(), "4".to_string())]);
+    }
+
+    #[test]
+    fn reads_a_vanilla_menu() {
+        let cabinet = "protected AbstractContainerMenu createMenu(int id, Inventory player) {
+        return ChestMenu.threeRows(id, player, this);
+    }";
+        assert_eq!(
+            vanilla_menu(cabinet),
+            Some(("minecraft:generic_9x3".into(), 27))
+        );
+        let hopper = "public AbstractContainerMenu createMenu(int id, Inventory inv) {
+        return new HopperMenu(id, inv, this);
+    }";
+        assert_eq!(vanilla_menu(hopper), Some(("minecraft:hopper".into(), 5)));
+        let own = "public AbstractContainerMenu createMenu(int id, Inventory inv, Player p) {
+        return new CrusherMenu(id, inv, this);
+    }";
+        assert_eq!(vanilla_menu(own), None);
     }
 
     #[test]

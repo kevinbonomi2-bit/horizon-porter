@@ -280,13 +280,59 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
             wired.insert("standalone_models", BTreeSet::new());
         }
     }
+    // Block entities that open a vanilla menu over their own slots (a cabinet's
+    // chest menu): their blocks, the menu, its slots. A machine's own menu wins.
+    let vanilla_containers: Vec<(String, String, usize)> = block_entities
+        .iter()
+        .filter(|be| !machines.iter().any(|m| m.entity == be.id))
+        .filter_map(|be| {
+            let mut class = be.class.clone()?;
+            for _ in 0..8 {
+                if let Some((_, menu, slots)) =
+                    scan.vanilla_menus.iter().find(|(c, _, _)| *c == class)
+                {
+                    return Some((be, menu.clone(), *slots));
+                }
+                class = scan
+                    .classes
+                    .iter()
+                    .find(|c| c.name == class)?
+                    .superclass
+                    .clone()?;
+            }
+            None
+        })
+        .flat_map(|(be, menu, slots)| {
+            be.blocks
+                .iter()
+                .map(move |b| (b.clone(), menu.clone(), slots))
+        })
+        .collect();
+    if !vanilla_containers.is_empty() && !content.is_empty() {
+        let classes: BTreeSet<String> = block_entities
+            .iter()
+            .filter(|be| {
+                vanilla_containers
+                    .iter()
+                    .any(|(b, _, _)| be.blocks.contains(b))
+            })
+            .filter_map(|be| be.class.clone())
+            .collect();
+        wired
+            .entry("block_entity_container")
+            .or_default()
+            .extend(classes);
+    }
     if !machines.is_empty() && !content.is_empty() {
         let menus: BTreeSet<String> = machines.iter().map(|m| m.menu_class.clone()).collect();
         let screens: BTreeSet<String> = machines
             .iter()
             .filter_map(|m| m.screen_class.clone())
             .collect();
-        wired.insert("block_entity_container", menus);
+        wired
+            .entry("block_entity_container")
+            .or_default()
+            .extend(menus);
         wired.insert("screen", screens.clone());
         wired.insert("screen_draw", screens);
     }
@@ -384,6 +430,7 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
         overlays: &overlays,
         behaviours: &behaviours,
         behaviour_blocks: &behaviour_blocks,
+        vanilla_containers: &vanilla_containers,
         statics: &java_statics,
         ledger: horizon.map(|src| (src.to_path_buf(), unmapped_ports(scan, src))),
     };
@@ -760,12 +807,43 @@ struct Ctx<'a> {
     /// Its blocks that act in code, and every block (with its id).
     behaviours: &'a [Behaviour],
     behaviour_blocks: &'a [(String, porter_content::Block)],
+    /// Blocks whose block entity opens a vanilla menu over its slots: (block, menu
+    /// type, slots).
+    vanilla_containers: &'a [(String, String, usize)],
     /// The Java statics the mod's code shares.
     statics: &'a [crate::statics::Module],
     /// The Horizon checkout read, and the functions that port each unmapped
     /// Mixin's target (`FarmBlock.turnToDirt`).
     ledger: Option<(PathBuf, BTreeMap<String, Vec<ledger::Port>>)>,
 }
+
+/// The container helper's part for a machine: its slots, with hoppers putting in
+/// from above and the sides and taking results from below, and its own menu.
+const MACHINE_CONTAINER: &str = r#"    let Some(machine) = m::MACHINES.iter().find(|x| x.block == block) else {
+        return;
+    };
+    let inputs: Vec<usize> = (0..machine.slots).filter(|s| !machine.results.contains(s)).collect();
+    let outputs: Vec<usize> = if machine.results.is_empty() {
+        (0..machine.slots).collect()
+    } else {
+        machine.results.to_vec()
+    };
+    // As a furnace: hoppers put in from above and the sides, and take from below.
+    *container = Some(horizon_client::containers::ModContainer {
+        slots: machine.slots,
+        faces: [
+            outputs.clone(),
+            inputs.clone(),
+            inputs.clone(),
+            inputs.clone(),
+            inputs.clone(),
+            inputs.clone(),
+        ],
+        inputs,
+        outputs,
+        menu: Some(machine.menu.into()),
+    });
+"#;
 
 impl Ctx<'_> {
     fn uses(&self, hook: &str) -> bool {
@@ -1020,6 +1098,13 @@ pub const DESCRIPTION: &str = "{description}";
                 self.machines,
                 self.recipe_types,
             ));
+            r.push_str(
+                "\n/// Blocks whose block entity opens a vanilla menu over its own slots (Java's\n/// `createMenu` returning `ChestMenu.threeRows(..)`): (block, menu type, slots).\npub const VANILLA_CONTAINERS: &[(&str, &str, usize)] = &[\n",
+            );
+            for (block, menu, slots) in self.vanilla_containers {
+                let _ = writeln!(r, "    ({block:?}, {menu:?}, {slots}),");
+            }
+            r.push_str("];\n");
         }
         if self.uses("standalone_models") {
             r.push_str("\n/// Models baked on their own, for renderers to draw as parts (`draw.model`).\npub const STANDALONE_MODELS: &[&str] = &[\n");
@@ -1030,7 +1115,11 @@ pub const DESCRIPTION: &str = "{description}";
         }
         r.push_str(&netconf::net_runtime(self.messages));
         r.push_str(&screens::runtime(self.screens, self.overlays));
-        r.push_str(&blocks::runtime(self.behaviours, self.behaviour_blocks));
+        r.push_str(&blocks::runtime(
+            self.behaviours,
+            self.behaviour_blocks,
+            !self.block_entities.is_empty(),
+        ));
 
         r.push_str(
             r#"
@@ -1584,38 +1673,32 @@ fn {id}_block_entity_tick(
             "block_entity_container" => (
                 "block_entity_container.rs",
                 format!(
-                    r#"// {name}'s machines have item slots, and open their menu when used.
+                    r#"// {name}'s machines, and its blocks that open a vanilla menu (a chest's), have
+// item slots, and open their menu when used.
 fn {id}_block_entity_container(block: &str, container: &mut Option<horizon_client::containers::ModContainer>) {{
     use crate::game::{m} as m;
     if container.is_some() {{
         return;
     }}
-    let Some(machine) = m::MACHINES.iter().find(|x| x.block == block) else {{
+    // A chest-like block: every slot reached from every side, as a chest's.
+    if let Some((_, menu, slots)) = m::VANILLA_CONTAINERS.iter().find(|(b, _, _)| *b == block) {{
+        let all: Vec<usize> = (0..*slots).collect();
+        *container = Some(horizon_client::containers::ModContainer {{
+            slots: *slots,
+            faces: std::array::from_fn(|_| all.clone()),
+            inputs: all.clone(),
+            outputs: all,
+            menu: Some((*menu).into()),
+        }});
         return;
-    }};
-    let inputs: Vec<usize> = (0..machine.slots).filter(|s| !machine.results.contains(s)).collect();
-    let outputs: Vec<usize> = if machine.results.is_empty() {{
-        (0..machine.slots).collect()
-    }} else {{
-        machine.results.to_vec()
-    }};
-    // As a furnace: hoppers put in from above and the sides, and take from below.
-    *container = Some(horizon_client::containers::ModContainer {{
-        slots: machine.slots,
-        faces: [
-            outputs.clone(),
-            inputs.clone(),
-            inputs.clone(),
-            inputs.clone(),
-            inputs.clone(),
-            inputs.clone(),
-        ],
-        inputs,
-        outputs,
-        menu: Some(machine.menu.into()),
-    }});
-}}
-"#
+    }}
+{machine}}}
+"#,
+                    machine = if self.machines.is_empty() {
+                        String::new()
+                    } else {
+                        MACHINE_CONTAINER.to_string()
+                    },
                 ),
             ),
             "screen" => (
@@ -1988,7 +2071,8 @@ fn {id}_net_from_server(game: &mut crate::game::Game<'_>, channel: &str, data: &
             | "use_item"
                 if !self.behaviours.is_empty() =>
             {
-                blocks::helper(hook, id, m, name).expect("a block hook's bindings")
+                blocks::helper(hook, id, m, name, !self.block_entities.is_empty())
+                    .expect("a block hook's bindings")
             }
             other => unreachable!("no helper for hook {other}"),
         }
