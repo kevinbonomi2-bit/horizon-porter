@@ -114,18 +114,29 @@ pub fn play_check(
     let (px, mut py, pz) = (at(0), at(1), at(2));
 
     // Horizon refuses every content mod when one is wrong: nothing to place then.
-    let log = game.run(&["logs"], 30).to_string();
-    if let Some(i) = log.find("content mods not loaded") {
-        let line: String = log[i..]
-            .chars()
-            .take_while(|c| *c != '\\' && *c != '"')
+    let namespaces: Vec<String> = {
+        let mut ns: Vec<String> = blocks
+            .iter()
+            .filter_map(|b| b.split_once(':').map(|(n, _)| n.to_string()))
             .collect();
-        report
-            .faults
-            .push(format!("Horizon didn't load the content mods: {line}"));
+        ns.dedup();
+        ns
+    };
+    let started = read_log(&game.home);
+    if let Some(line) = started
+        .iter()
+        .find(|l| l.contains("content mods not loaded"))
+    {
+        report.faults.push(format!(
+            "Horizon didn't load the content mods: {}",
+            after(line, "content mods not loaded")
+        ));
         game.finish(options.keep);
         return Ok(report);
     }
+    // What the game couldn't draw of the mod's: a blockstate it didn't read leaves
+    // its block invisible; a missing model or texture draws Minecraft's checkers.
+    log_assets(&started, &namespaces, &mut report);
 
     // Pads on the surface where the player stands, two blocks apart, in rows.
     for dy in 0..40 {
@@ -258,20 +269,78 @@ pub fn play_check(
             report.responded += 1;
         }
     }
-    let log = game.run(&["logs"], 30).to_string();
-    for word in ["panicked", "ERROR"] {
-        if let Some(i) = log.find(word) {
-            let start = log[..i].rfind("\\n").map_or(0, |s| s + 2);
-            let line: String = log[start..]
-                .chars()
-                .take_while(|c| *c != '\\')
-                .take(200)
-                .collect();
-            report.faults.push(format!("the game's log: {line}"));
-        }
+    for line in read_log(&game.home)
+        .iter()
+        .filter(|l| l.contains("panicked") || l.contains("/ERROR]"))
+        .take(5)
+    {
+        report.faults.push(format!(
+            "the game's log: {}",
+            line.chars().take(200).collect::<String>()
+        ));
     }
     game.finish(options.keep);
     Ok(report)
+}
+
+/// The lines of the instance's game log (`logs/latest.log`).
+fn read_log(home: &Path) -> Vec<String> {
+    std::fs::read_to_string(home.join("logs").join("latest.log"))
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_string)
+        .collect()
+}
+
+/// What follows `marker` in `line`, past its `: `.
+fn after<'a>(line: &'a str, marker: &str) -> &'a str {
+    line.find(marker)
+        .map_or(line, |i| &line[i + marker.len()..])
+        .trim_start_matches(':')
+        .trim()
+}
+
+/// The game's warnings about the mod's assets, as faults (a block it can't draw)
+/// and notes (a model or texture it draws as Minecraft's missing one).
+fn log_assets(log: &[String], namespaces: &[String], report: &mut PlayReport) {
+    let ours = |text: &str| namespaces.iter().any(|ns| text.contains(&format!("{ns}:")));
+    let mut models = Vec::new();
+    let mut textures = Vec::new();
+    for line in log.iter().filter(|l| ours(l)) {
+        if let Some(rest) = line.split("blockstate definition of ").nth(1) {
+            let (block, why) = rest.split_once(" not loaded").unwrap_or((rest, ""));
+            let why = why.trim_start_matches(':').trim();
+            let why = if why.is_empty() {
+                String::new()
+            } else {
+                format!(" ({why})")
+            };
+            report.faults.push(format!(
+                "{block}: draws nothing, its blockstate file didn't load{why}"
+            ));
+        } else if let Some(rest) = line.split("missing block model ").nth(1) {
+            models.push(rest.split(':').take(2).collect::<Vec<_>>().join(":"));
+        } else if let Some(rest) = line.split("missing texture for ").nth(1) {
+            textures.push(rest.split(':').take(2).collect::<Vec<_>>().join(":"));
+        }
+    }
+    for (what, list) in [("model", models), ("texture", textures)] {
+        if list.is_empty() {
+            continue;
+        }
+        let shown: Vec<&str> = list.iter().take(5).map(String::as_str).collect();
+        report.notes.push(format!(
+            "{} missing {what}{}, drawn as the missing {what}: {}{}",
+            list.len(),
+            if list.len() == 1 { "" } else { "s" },
+            shown.join(", "),
+            if list.len() > shown.len() {
+                ", ..."
+            } else {
+                ""
+            }
+        ));
+    }
 }
 
 /// Whether a block state as the game prints it (`mod:door[facing=north]`) is `block`'s.
@@ -484,6 +553,39 @@ mod tests {
         assert_eq!(all, ["shutters:iron_gate", "shutters:oak_shutter"]);
         assert_eq!(acting, ["shutters:oak_shutter"]);
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn reads_what_the_game_couldnt_draw() {
+        let log: Vec<String> = [
+            "[20:27:48] [load-render/WARN]: Horizon: blockstate definition of mcwwindows:poplar_log_parapet not loaded: unknown multipart property",
+            "[20:27:48] [load-render/WARN]: Horizon: missing block model mcwdoors:block/waffle/cherry_waffle_door_top: The system cannot find the file specified. (os error 2)",
+            "[20:27:48] [load-render/WARN]: Horizon: using the missing texture for biomesoplenty:block/bush: The system cannot find the file specified.",
+            "[20:27:48] [load-render/WARN]: Horizon: missing block model othermod:block/thing: nope",
+        ]
+        .map(String::from)
+        .to_vec();
+        let mut r = PlayReport::default();
+        log_assets(&log, &["mcwwindows".into(), "mcwdoors".into()], &mut r);
+        assert_eq!(
+            r.faults,
+            [
+                "mcwwindows:poplar_log_parapet: draws nothing, its blockstate file didn't load (unknown multipart property)"
+            ]
+        );
+        assert_eq!(
+            r.notes,
+            [
+                "1 missing model, drawn as the missing model: mcwdoors:block/waffle/cherry_waffle_door_top"
+            ]
+        );
+        assert_eq!(
+            after(
+                "x: content mods not loaded: data/a.json: bad",
+                "content mods not loaded"
+            ),
+            "data/a.json: bad"
+        );
     }
 
     #[test]

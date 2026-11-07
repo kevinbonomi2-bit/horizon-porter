@@ -274,8 +274,12 @@ horizon-porter check my-mod-horizon --instance "My modpack"
 after a build: it opens a creative test world (`porter-check`, never one of yours), on a
 control socket of its own (a game you have open is left alone), places each of the
 mod's blocks and reads it back, right-clicks each block whose Java acts on a click, and
-reads the game's log. Faults (a block the game refuses, content Horizon didn't load, a
-game that stops) fail it; notes (a click that changed nothing) are for you to look at.
+reads the game's log. Faults (a block the game refuses or can't draw, content Horizon
+didn't load, a game that stops) fail it; notes (a click that changed nothing, a model or
+texture drawn as Minecraft's missing one) are for you to look at.
+
+It uses no AI and costs nothing: it runs the game you already have, on your computer,
+for a few minutes (a few seconds a block).
 
 Does a port work before its logic is translated? Its content does: blocks, items,
 models, textures, recipes, loot and tags load and play as they are. What the Java code
