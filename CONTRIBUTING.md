@@ -21,6 +21,7 @@ misses, a Java API it does not map yet.
 ## Building and testing
 
 You need Rust 1.90 or later. On Windows, the Visual Studio C++ Build Tools; on Linux,
+`libdbus-1-dev` and `pkg-config` (the saved API key is read from the system keyring), and
 WebKitGTK for the desktop app (see the README).
 
 ```

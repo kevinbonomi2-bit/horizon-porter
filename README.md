@@ -311,7 +311,8 @@ cargo test
 
 The desktop app (`app/`, built with [Tauri](https://tauri.app)) builds with
 `cargo build -p horizon-porter-app`. On Linux it needs WebKitGTK:
-`sudo apt install libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev`.
+`sudo apt install libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev pkg-config`
+(the command line alone needs only the last two).
 Installers come from `npx @tauri-apps/cli@2 build` in `app/`.
 
 ## Layout

@@ -33,6 +33,13 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: cargo fmt --all --check
 
+      # The saved API key is read through the system keyring: D-Bus on Linux.
+      - name: Install system libraries
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev pkg-config
+
       # The desktop app has its own job: it needs system libraries on Linux.
       - name: Lint
         run: cargo clippy --workspace --exclude horizon-porter-app --all-targets --locked -- -D warnings
