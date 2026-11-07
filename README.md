@@ -46,7 +46,8 @@ Get the installer for your system from the
 [latest release](https://github.com/kevinbonomi2-bit/horizon-porter/releases/latest):
 `Horizon.Porter_<version>_x64-setup.exe` (Windows), `Horizon.Porter_<version>_<chip>.app.zip`
 (macOS: `aarch64` for Apple Silicon, `x86_64` for Intel) or
-`Horizon.Porter_<version>_amd64.deb` (Linux, needs WebKitGTK 4.1). The builds are not
+`Horizon.Porter_<version>_amd64.deb` (Linux, needs WebKitGTK 4.1; if its window stays blank
+white, start it with `WEBKIT_DISABLE_COMPOSITING_MODE=1`, and tell us your desktop and graphics card). The builds are not
 signed yet: Windows may show a SmartScreen warning (More info, then Run anyway), and
 on macOS run `xattr -dr com.apple.quarantine "Horizon Porter.app"` once after unzipping.
 
