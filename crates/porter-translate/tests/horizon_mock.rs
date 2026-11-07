@@ -283,6 +283,17 @@ pub mod crafting {
     }
 }
 
+// pose.rs and motion.rs: a player's pose.
+pub mod pose {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum Pose { Standing, Crouching }
+}
+pub mod motion {
+    pub struct PlayerMotion {
+        pub pose: crate::pose::Pose,
+    }
+}
+
 // mod_api.rs: a mod block's screen.
 // first_person.rs: the two hands.
 pub mod first_person {
@@ -356,6 +367,9 @@ pub mod game {
         res: std::sync::Arc<Resources>,
         #[allow(dead_code)]
         held: Option<crate::items::ItemStack>,
+        // The acting player's motion (game.rs), its pose swapped in for a hook.
+        #[allow(dead_code)]
+        player: Option<crate::motion::PlayerMotion>,
     }
     // game.rs: the stack in the hand that acts, private to game and its children.
     #[allow(dead_code)]

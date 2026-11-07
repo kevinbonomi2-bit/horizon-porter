@@ -515,6 +515,11 @@ fn {id}_right_click_block({params}) {
         held_count,
         facing,
         creative,
+        // The acting player's pose, swapped in for the hook.
+        sneaking: game
+        .player
+        .as_ref()
+        .is_some_and(|p| matches!(p.pose, crate::pose::Pose::Crouching)),
     };
     // The world as the block's code sees it, `facing` as Java names it.
 {world}    if m::use_block(&used, &mut Here { game, creative, source: 4 }) {
@@ -886,6 +891,10 @@ fn {id}_use_item_on({params}) {
             hit,
         }),
         creative,
+        sneaking: game
+        .player
+        .as_ref()
+        .is_some_and(|p| matches!(p.pose, crate::pose::Pose::Crouching)),
     };
 {world}    if m::use_item_on(&used, &mut Here { game, creative, source: 7 }) {
         *claimed = true;
@@ -913,6 +922,10 @@ fn {id}_use_item({params}) {
         damage: stack.damage,
         on: None,
         creative,
+        sneaking: game
+        .player
+        .as_ref()
+        .is_some_and(|p| matches!(p.pose, crate::pose::Pose::Crouching)),
     };
 {world}    if m::use_item(&used, &mut Here { game, creative, source: 7 }) {
         *claimed = true;
@@ -1172,8 +1185,7 @@ pub trait World: Blocks {
     }
 }
 
-/// A right click on one of the mod's blocks (`useItemOn`'s arguments). Horizon
-/// doesn't say whether the player sneaks (`player.isCrouching()`).
+/// A right click on one of the mod's blocks (`useItemOn`'s arguments).
 pub struct BlockUse {
     pub block: String,
     pub pos: [i32; 3],
@@ -1190,6 +1202,8 @@ pub struct BlockUse {
     pub facing: String,
     /// Whether the player is in creative (`player.getAbilities().instabuild`).
     pub creative: bool,
+    /// Whether the player sneaks (`player.isShiftKeyDown()`, `isCrouching()`).
+    pub sneaking: bool,
 }
 
 /// The way a player at `yaw` looks, flat (Java's `Direction.fromYRot`): `north`,
@@ -1200,7 +1214,7 @@ pub fn yaw_direction(yaw: f32) -> &'static str {
 }
 
 /// A right click with one of the mod's items (`Item.use`, or `Item.useOn` with
-/// its `UseOnContext`). Horizon doesn't say whether the player sneaks.
+/// its `UseOnContext`).
 pub struct ItemUse {
     /// The item: `mymod:wrench`.
     pub item: String,
@@ -1211,6 +1225,8 @@ pub struct ItemUse {
     pub on: Option<UseOn>,
     /// Whether the player is in creative (`player.getAbilities().instabuild`).
     pub creative: bool,
+    /// Whether the player sneaks (`player.isShiftKeyDown()`).
+    pub sneaking: bool,
 }
 
 /// The block an item is used on (`UseOnContext`).
