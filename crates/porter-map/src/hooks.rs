@@ -347,6 +347,23 @@ pub fn method_hooks(class: &str, method: &str) -> Vec<(&'static HorizonHook, Mat
             out.push((h, Match::Cited));
         }
     }
+    // An override in a subclass (`Player.hurtServer`) is the method a hook cites on
+    // the vanilla class it overrides (`LivingEntity.hurtServer`).
+    if out.is_empty() {
+        let mut class = doc_class(class);
+        while let Some((_, sup)) = VANILLA_SUPERS.iter().find(|(c, _)| *c == class) {
+            let key = format!("{sup}.{method}");
+            for h in &catalog().hooks {
+                if h.cites.contains(&key) && seen.insert(h.name.as_str()) {
+                    out.push((h, Match::Cited));
+                }
+            }
+            if !out.is_empty() {
+                break;
+            }
+            class = sup.to_string();
+        }
+    }
     if let Some((_, names)) = MIXIN_TARGETS.iter().find(|(k, _)| *k == key) {
         for name in *names {
             if let Some(h) = hook(name)
@@ -370,6 +387,24 @@ pub fn method_hooks(class: &str, method: &str) -> Vec<(&'static HorizonHook, Mat
     }
     out
 }
+
+/// Vanilla's class hierarchy where mixins most often target an override:
+/// (class, the class it extends).
+const VANILLA_SUPERS: &[(&str, &str)] = &[
+    ("ServerPlayer", "Player"),
+    ("LocalPlayer", "AbstractClientPlayer"),
+    ("AbstractClientPlayer", "Player"),
+    ("Player", "LivingEntity"),
+    ("ArmorStand", "LivingEntity"),
+    ("Monster", "PathfinderMob"),
+    ("Animal", "AgeableMob"),
+    ("AgeableMob", "PathfinderMob"),
+    ("PathfinderMob", "Mob"),
+    ("Mob", "LivingEntity"),
+    ("LivingEntity", "Entity"),
+    ("ServerLevel", "Level"),
+    ("ClientLevel", "Level"),
+];
 
 /// The hooks for a loader event class the mod uses, from the events Horizon's
 /// hook docs name: `net.neoforged.neoforge.event.entity.living.LivingEvent.LivingJumpEvent`

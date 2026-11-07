@@ -158,13 +158,39 @@ pub fn find(scan: &ModScan, ns: &str) -> Vec<BlockEntity> {
         // blocks are the constants named after them; else the block of the same name.
         let mut its_blocks: Vec<String> = blocks
             .iter()
-            .filter(|b| has_word(&reg.args, &b.to_ascii_uppercase()))
+            .filter(|b| {
+                // `CRANK`, or `OAK_HORTICULTURIST_TABLE_BLOCK` (Villagers Plus).
+                let upper = b.to_ascii_uppercase();
+                has_word(&reg.args, &upper) || has_word(&reg.args, &format!("{upper}_BLOCK"))
+            })
             .map(|b| format!("{ns}:{b}"))
             .collect();
         if its_blocks.is_empty() && blocks.contains(&name) {
             its_blocks.push(format!("{ns}:{name}"));
         }
-        let class = reg.creates.as_deref().and_then(|simple| {
+        // `new BlockEntityType(HorticulturistTableBlockEntity::new, ..)` creates the
+        // type: the block entity is the class whose constructor it takes.
+        let creates = match reg.creates.as_deref() {
+            Some(c)
+                if c.ends_with("BlockEntityType")
+                    || c == "Builder"
+                    || c.ends_with("TypeBuilder") =>
+            {
+                reg.args.split("::new").next().and_then(|before| {
+                    let name: String = before
+                        .chars()
+                        .rev()
+                        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                        .collect::<Vec<_>>()
+                        .into_iter()
+                        .rev()
+                        .collect();
+                    (!name.is_empty() && reg.args.contains("::new")).then_some(name)
+                })
+            }
+            other => other.map(str::to_string),
+        };
+        let class = creates.as_deref().and_then(|simple| {
             let mut found = scan
                 .classes
                 .iter()
