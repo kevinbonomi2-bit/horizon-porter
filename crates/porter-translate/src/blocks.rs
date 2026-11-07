@@ -630,6 +630,10 @@ const ITEM_WORLD: &str = r#"    struct Here<'g, 'a> {
         fn give(&mut self, item: &str, count: u32) -> u32 {
             self.game.native_give_items(item, count)
         }
+        fn set_held(&mut self, item: &str, count: u32) {
+            *self.game.held_mut() = (count > 0 && item != "minecraft:air")
+                .then(|| horizon_client::items::ItemStack::new(item, count));
+        }
         fn particles(&mut self, kind: &str, at: [f64; 3], spread: [f64; 3], speed: f64, count: i32) {
             let options = if kind.contains(':') && !kind.starts_with("minecraft:") {
                 Some(ParticleOptions::named(kind))
@@ -1147,6 +1151,11 @@ pub trait World: Blocks {
     fn give(&mut self, item: &str, count: u32) -> u32 {
         let _ = (item, count);
         0
+    }
+    /// Puts `count` of `item` in the hand that clicked (`player.setItemInHand(hand,
+    /// stack)`); `minecraft:air` or 0 empties it.
+    fn set_held(&mut self, item: &str, count: u32) {
+        let _ = (item, count);
     }
     /// Whether `item` is in item tag `tag` (`stack.is(ItemTags.FLOWERS)`, a mod's
     /// `TagKey<Item>`: `villagersplus:small_plantable_items`).
