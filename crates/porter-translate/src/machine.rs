@@ -283,7 +283,30 @@ pub struct Machine<'a> {
     pub neighbour_writes: Vec<(Side, String, Saved)>,
     /// Whether to send clients its state again.
     pub sync: bool,
+    /// Particles and sounds to play after the tick: see `particles` and `sound`.
+    pub effects: Vec<Effect>,
     recipes: &'a dyn Fn(&str) -> Vec<Recipe>,
+}
+
+/// A particle burst or a sound a tick plays, near its block.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Effect {
+    /// `serverLevel.sendParticles(type, x, y, z, count, dx, dy, dz, speed)`: a
+    /// vanilla type (`minecraft:smoke`) or one of the mod's own (`farmersdelight:steam`).
+    Particles {
+        kind: String,
+        at: [f64; 3],
+        spread: [f64; 3],
+        speed: f64,
+        count: i32,
+    },
+    /// `level.playSound(null, x, y, z, sound, SoundSource.BLOCKS, volume, pitch)`.
+    Sound {
+        sound: String,
+        at: [f64; 3],
+        volume: f32,
+        pitch: f32,
+    },
 }
 
 /// A block beside a block entity: its block, and its block entity's id and saved
@@ -360,6 +383,7 @@ pub struct MachineParts {
     pub transfers: Vec<Transfer>,
     pub neighbour_writes: Vec<(Side, String, Saved)>,
     pub sync: bool,
+    pub effects: Vec<Effect>,
 }
 
 /// A fluid tank: its fluid (`minecraft:water`), how much in millibuckets, and its
@@ -417,8 +441,34 @@ impl<'a> Machine<'a> {
             neighbours: (0..6).map(|_| None).collect(),
             neighbour_writes: Vec::new(),
             sync: false,
+            effects: Vec::new(),
             recipes,
         }
+    }
+
+    /// Sends particles to the players near `at` (world coordinates) after the tick
+    /// (`serverLevel.sendParticles`). Effects Java plays on the client
+    /// (`animateTick`: a pot's steam, a skillet's smoke) go here too: Horizon has no
+    /// client hook for them, and the server sends them to every player near.
+    pub fn particles(&mut self, kind: &str, at: [f64; 3], spread: [f64; 3], speed: f64, count: i32) {
+        self.effects.push(Effect::Particles {
+            kind: kind.to_string(),
+            at,
+            spread,
+            speed,
+            count,
+        });
+    }
+
+    /// Plays `sound` at `at` for the players near it after the tick (`level.playSound`,
+    /// a skillet's sizzle).
+    pub fn sound(&mut self, sound: &str, at: [f64; 3], volume: f32, pitch: f32) {
+        self.effects.push(Effect::Sound {
+            sound: sound.to_string(),
+            at,
+            volume,
+            pitch,
+        });
     }
 
     /// The block on `side` (`level.getBlockEntity(pos.relative(side))`): none when
@@ -464,6 +514,7 @@ impl<'a> Machine<'a> {
             transfers: self.transfers,
             neighbour_writes: self.neighbour_writes,
             sync: self.sync,
+            effects: self.effects,
         }
     }
 

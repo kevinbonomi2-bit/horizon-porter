@@ -630,6 +630,16 @@ const ITEM_WORLD: &str = r#"    struct Here<'g, 'a> {
         fn give(&mut self, item: &str, count: u32) -> u32 {
             self.game.native_give_items(item, count)
         }
+        fn particles(&mut self, kind: &str, at: [f64; 3], spread: [f64; 3], speed: f64, count: i32) {
+            let options = if kind.contains(':') && !kind.starts_with("minecraft:") {
+                Some(ParticleOptions::named(kind))
+            } else {
+                ParticleType::from_name(kind).map(ParticleOptions::simple)
+            };
+            if let Some(options) = options {
+                let _ = self.game.native_send_particles(&options, None, at, spread, speed, count);
+            }
+        }
         fn item_is(&mut self, item: &str, tag: &str) -> bool {
             // A `#tag` ingredient, as a recipe names one, lists the tag's items.
             let tag = String::from('#') + tag.trim_start_matches('#');
@@ -1143,6 +1153,13 @@ pub trait World: Blocks {
     fn item_is(&mut self, item: &str, tag: &str) -> bool {
         let _ = (item, tag);
         false
+    }
+    /// Sends particles to the players near `at` (world coordinates,
+    /// `serverLevel.sendParticles`): a vanilla type (`minecraft:smoke`) or one of the
+    /// mod's own (`farmersdelight:steam`). Client-side effects (`level.addParticle`)
+    /// go here too: everyone near sees them.
+    fn particles(&mut self, kind: &str, at: [f64; 3], spread: [f64; 3], speed: f64, count: i32) {
+        let _ = (kind, at, spread, speed, count);
     }
 }
 

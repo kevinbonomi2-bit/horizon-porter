@@ -489,6 +489,19 @@ pub mod game {
             pub replace_clicked: bool,
         }
 
+        // Particle types and options (horizon-client-core's particle_type.rs, the
+        // renderer's particles.rs), which native_hooks.rs has in scope.
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        pub enum ParticleType { Smoke, Flame }
+        impl ParticleType {
+            pub fn from_name(name: &str) -> Option<Self> { let _ = name; None }
+        }
+        pub struct ParticleOptions;
+        impl ParticleOptions {
+            pub fn simple(ty: ParticleType) -> Self { let _ = ty; ParticleOptions }
+            pub fn named(name: impl Into<String>) -> Self { let _ = name.into(); ParticleOptions }
+        }
+
         // native_hooks.rs: `BlockState.setValue` on a registry's state.
         #[allow(dead_code)]
         fn with_property(registry: &crate::horizon_world::registry::BlockRegistry, state: BlockStateId, key: &str, value: &str) -> Option<BlockStateId> { None }
@@ -558,6 +571,7 @@ __LEVEL_HOOKS__
             pub fn native_net_send_to_server(&mut self, channel: &str, data: &[u8]) -> Result<(), String> { Ok(()) }
             pub fn native_held(&self) -> Option<(String, u32, bool)> { None }
             pub fn native_give_items(&mut self, item: &str, count: u32) -> u32 { 0 }
+            pub fn native_send_particles(&mut self, options: &ParticleOptions, state: Option<BlockStateId>, at: [f64; 3], spread: [f64; 3], speed: f64, count: i32) -> bool { false }
             pub fn native_set_block(&mut self, dimension: &str, pos: [i32; 3], state: BlockStateId, flags: i32) -> bool { false }
             pub fn native_edit_blocks(&mut self, dimension: &str, edit: &super::native_world_edit::NativeBlockEdit) -> Result<u64, String> { Ok(0) }
             pub fn native_acting_player(&self) -> Option<crate::mod_api::NativeServerPlayer> { None }

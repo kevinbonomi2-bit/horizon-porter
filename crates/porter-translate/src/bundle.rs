@@ -1707,6 +1707,25 @@ fn {id}_block_entity_tick(
     if done.sync {{
         game.native_block_entity_sync(pos);
     }}
+    // The tick's particles and sounds.
+    for effect in std::mem::take(&mut done.effects) {{
+        match effect {{
+            m::Effect::Particles {{ kind, at, spread, speed, count }} => {{
+                let options = if kind.contains(':') && !kind.starts_with("minecraft:") {{
+                    Some(ParticleOptions::named(kind))
+                }} else {{
+                    ParticleType::from_name(&kind).map(ParticleOptions::simple)
+                }};
+                if let Some(options) = options {{
+                    let _ = game.native_send_particles(&options, None, at, spread, speed, count);
+                }}
+            }}
+            m::Effect::Sound {{ sound, at, volume, pitch }} => {{
+                // SoundSource.BLOCKS
+                let _ = game.native_level_play_sound(&sound, at, 4, volume, pitch);
+            }}
+        }}
+    }}
     // Only a change touches the entity: each write marks it for saving and sending.
     if let Some(values) = changed {{
         for (key, value) in values {{
