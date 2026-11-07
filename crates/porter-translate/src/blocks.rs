@@ -273,7 +273,7 @@ pub fn runtime(behaviours: &[Behaviour], blocks: &[(String, porter_content::Bloc
             Kind::ItemUseOn => (
                 "item_acts_on_block",
                 "use_item_on",
-                "u: &ItemUse, world: &mut dyn ItemWorld",
+                "u: &ItemUse, world: &mut dyn World",
                 "u, world",
                 "false",
                 "bool",
@@ -282,7 +282,7 @@ pub fn runtime(behaviours: &[Behaviour], blocks: &[(String, porter_content::Bloc
             Kind::ItemUse => (
                 "item_acts_in_air",
                 "use_item",
-                "u: &ItemUse, world: &mut dyn ItemWorld",
+                "u: &ItemUse, world: &mut dyn World",
                 "u, world",
                 "false",
                 "bool",
@@ -464,7 +464,8 @@ fn {id}_right_click_block({params}) {
         .native_held()
         .map_or_else(|| "minecraft:air".to_string(), |(item, _, _)| item);
     // Where the click landed: the player's look from their eyes into the block's boxes.
-    let hit = match game.native_acting_player() {
+    let player = game.native_acting_player();
+    let hit = match &player {
         Some(p) => {
             let eye = [p.position[0], p.position[1] + 1.62, p.position[2]];
             let (yaw, pitch) = (f64::from(p.yaw).to_radians(), f64::from(p.pitch).to_radians());
@@ -473,97 +474,32 @@ fn {id}_right_click_block({params}) {
         }
         None => m::ray_hit([0.0; 3], [0.0; 3], pos, face, &[]),
     };
-    // The world as the block's code sees it, `facing` as Java names it.
-    struct Here<'g, 'a> {
-        game: &'g mut crate::game::Game<'a>,
-    }
-    impl m::Blocks for Here<'_, '_> {
-        fn block(&self, pos: [i32; 3]) -> String {
-            self.game.native_block(pos)
-        }
-        fn property(&self, pos: [i32; 3], key: &str) -> Option<String> {
-            let value = self.game.native_block_property(pos, key)?;
-            Some(if key == "facing" {
-                m::java_facing(&self.game.native_block(pos), &value)
-            } else {
-                value
-            })
-        }
-    }
-    impl m::World for Here<'_, '_> {
-        fn set_block_flags(
-            &mut self,
-            pos: [i32; 3],
-            block: &str,
-            properties: &[(&str, &str)],
-            flags: i32,
-        ) -> bool {
-            // `block.defaultBlockState().setValue(..)`, from the registry Horizon's
-            // own `native_set_block` reads (no helper names a block's states yet).
-            let state = {
-                let registry = &self.game.pack.assets.registry;
-                let Some(mut state) = registry.default_state(block) else {
-                    return false;
-                };
-                for (k, v) in properties {
-                    let v = if *k == "facing" {
-                        m::stored_facing(block, v)
-                    } else {
-                        v.to_string()
-                    };
-                    if let Some(next) = with_property(registry, state, k, &v) {
-                        state = next;
-                    }
-                }
-                state
-            };
-            let dimension = self.game.native_dimension();
-            // Level.setBlock(pos, state, flags)
-            self.game.native_set_block(dimension, pos, state, flags)
-        }
-        fn random(&mut self) -> f32 {
-            let dimension = self.game.native_dimension();
-            self.game
-                .native_level_random(dimension)
-                .map_or(0.5, horizon_core::random::RandomSource::next_float)
-        }
-        fn set_property_flags(&mut self, pos: [i32; 3], key: &str, value: &str, flags: i32) -> bool {
-            let value = if key == "facing" {
-                m::stored_facing(&self.game.native_block(pos), value)
-            } else {
-                value.to_string()
-            };
-            // Level.setBlock(pos, state.setValue(..), flags)
-            self.game.native_set_block_property_with(pos, key, &value, flags)
-        }
-        fn play_sound(&mut self, sound: &str, pos: [i32; 3], volume: f32, pitch: f32) {
-            let at = [
-                f64::from(pos[0]) + 0.5,
-                f64::from(pos[1]) + 0.5,
-                f64::from(pos[2]) + 0.5,
-            ];
-            // SoundSource.BLOCKS
-            let _ = self.game.native_level_play_sound(sound, at, 4, volume, pitch);
-        }
-    }
+    let facing = m::yaw_direction(player.as_ref().map_or(0.0, |p| p.yaw)).to_string();
+    let creative = player.is_some_and(|p| p.game_mode == 1);
     let used = m::BlockUse {
         block,
         pos,
         face,
         hit,
         held,
+        facing,
+        creative,
     };
-    if m::use_block(&used, &mut Here { game }) {
+    // The world as the block's code sees it, `facing` as Java names it.
+{world}    if m::use_block(&used, &mut Here { game, creative, source: 4 }) {
         *canceled = true;
     }
 }
 "#;
 
-/// The world and the acting player, as an item's code sees them: the `World` a
-/// block's click gets, and the stack in hand. Shared by the two item helpers.
+/// The world and the acting player, as a block's click or an item's use sees them:
+/// blocks, sounds, the level's random and the stack in hand. Shared by the three
+/// use helpers.
 const ITEM_WORLD: &str = r#"    struct Here<'g, 'a> {
         game: &'g mut crate::game::Game<'a>,
         creative: bool,
+        // Its sounds' SoundSource: BLOCKS (4) for a block's click, PLAYERS (7) an item's.
+        source: usize,
     }
     impl m::Blocks for Here<'_, '_> {
         fn block(&self, pos: [i32; 3]) -> String {
@@ -626,11 +562,8 @@ const ITEM_WORLD: &str = r#"    struct Here<'g, 'a> {
                 f64::from(pos[1]) + 0.5,
                 f64::from(pos[2]) + 0.5,
             ];
-            // SoundSource.PLAYERS
-            let _ = self.game.native_level_play_sound(sound, at, 7, volume, pitch);
+            let _ = self.game.native_level_play_sound(sound, at, self.source, volume, pitch);
         }
-    }
-    impl m::ItemWorld for Here<'_, '_> {
         fn shrink_held(&mut self, n: u32) {
             // The hand's own slot (game.rs `held_mut`): the acting player's, swapped in.
             let slot = self.game.held_mut();
@@ -704,7 +637,7 @@ fn {id}_use_item_on({params}) {
         }),
         creative,
     };
-{world}    if m::use_item_on(&used, &mut Here { game, creative }) {
+{world}    if m::use_item_on(&used, &mut Here { game, creative, source: 7 }) {
         *claimed = true;
     }
 }
@@ -731,7 +664,7 @@ fn {id}_use_item({params}) {
         on: None,
         creative,
     };
-{world}    if m::use_item(&used, &mut Here { game, creative }) {
+{world}    if m::use_item(&used, &mut Here { game, creative, source: 7 }) {
         *claimed = true;
     }
 }
@@ -951,6 +884,24 @@ pub trait World: Blocks {
         properties: &[(&str, &str)],
         flags: i32,
     ) -> bool;
+    /// `stack.shrink(n)` on the stack in the hand that clicked: it empties at 0.
+    /// Java's own code checks `instabuild` itself (`if
+    /// (!player.getAbilities().instabuild)`), so this doesn't.
+    fn shrink_held(&mut self, n: u32) {
+        let _ = n;
+    }
+    /// `stack.hurtAndBreak(n, player, slot)`: wears the stack in hand by `n`, never
+    /// in creative; true when that broke it.
+    fn hurt_held(&mut self, n: u32) -> bool {
+        let _ = n;
+        false
+    }
+    /// `player.getInventory().add(new ItemStack(item, count))`: how many fit
+    /// (nothing is dropped).
+    fn give(&mut self, item: &str, count: u32) -> u32 {
+        let _ = (item, count);
+        0
+    }
 }
 
 /// A right click on one of the mod's blocks (`useItemOn`'s arguments). Horizon
@@ -964,6 +915,18 @@ pub struct BlockUse {
     pub hit: [f64; 3],
     /// The item in the player's main hand, `minecraft:air` when empty.
     pub held: String,
+    /// The way the player looks, flat (`player.getDirection()`): `north`, `east`,
+    /// `south` or `west`.
+    pub facing: String,
+    /// Whether the player is in creative (`player.getAbilities().instabuild`).
+    pub creative: bool,
+}
+
+/// The way a player at `yaw` looks, flat (Java's `Direction.fromYRot`): `north`,
+/// `east`, `south` or `west`.
+pub fn yaw_direction(yaw: f32) -> &'static str {
+    let i = ((f64::from(yaw) / 90.0 + 0.5).floor() as i64).rem_euclid(4);
+    ["south", "west", "north", "east"][i as usize]
 }
 
 /// A right click with one of the mod's items (`Item.use`, or `Item.useOn` with
@@ -991,18 +954,6 @@ pub struct UseOn {
     pub hit: [f64; 3],
 }
 
-/// The world and the player as an item's code reads and changes them.
-pub trait ItemWorld: World {
-    /// `stack.shrink(n)` on the stack in hand: it empties at 0. Java's own code checks
-    /// `instabuild` itself (`if (!player.getAbilities().instabuild)`), so this doesn't.
-    fn shrink_held(&mut self, n: u32);
-    /// `stack.hurtAndBreak(n, player, slot)`: wears the stack in hand by `n`, never
-    /// in creative; true when that broke it.
-    fn hurt_held(&mut self, n: u32) -> bool;
-    /// `player.getInventory().add(new ItemStack(item, count))`: how many fit
-    /// (nothing is dropped).
-    fn give(&mut self, item: &str, count: u32) -> u32;
-}
 
 /// Where a look from `eye` along `look` first meets `boxes` (block-local, of the
 /// block at `pos`): Java's `BlockHitResult.getLocation()`. Without boxes, the
@@ -1062,8 +1013,7 @@ impl Placement {
     /// The way the placer looks, flat (`getHorizontalDirection`, Java's
     /// `Direction.fromYRot`): `north`, `east`, `south` or `west`.
     pub fn horizontal_direction(&self) -> &'static str {
-        let i = ((f64::from(self.yaw) / 90.0 + 0.5).floor() as i64).rem_euclid(4);
-        ["south", "west", "north", "east"][i as usize]
+        yaw_direction(self.yaw)
     }
 }
 

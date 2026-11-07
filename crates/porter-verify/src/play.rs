@@ -265,7 +265,7 @@ pub fn play_check(
             ],
             30,
         );
-        let before = game.state(*pos);
+        let before = game.around(*pos);
         let clicked = game.click(*pos);
         std::thread::sleep(Duration::from_secs(1));
         if !game.alive() {
@@ -274,12 +274,12 @@ pub fn play_check(
                 .push(format!("{block}: the game stopped after a right click"));
             return Ok(report);
         }
-        let mut after = game.state(*pos);
+        let mut after = game.around(*pos);
         if before == after && succeeded(&clicked) {
             // The click may have met another block first: once more, from above.
             game.interact(*pos, "up");
             std::thread::sleep(Duration::from_secs(1));
-            after = game.state(*pos);
+            after = game.around(*pos);
         }
         if before == after && succeeded(&clicked) {
             // Then with each tool in hand, back to the empty hand after.
@@ -287,7 +287,7 @@ pub fn play_check(
                 game.select(tool);
                 game.click(*pos);
                 std::thread::sleep(Duration::from_secs(1));
-                after = game.state(*pos);
+                after = game.around(*pos);
                 if before != after {
                     break;
                 }
@@ -297,7 +297,7 @@ pub fn play_check(
                 game.select(block);
                 game.click(*pos);
                 std::thread::sleep(Duration::from_secs(1));
-                after = game.state(*pos);
+                after = game.around(*pos);
                 game.run(&["command", &format!("clear @s {block}")], 30);
             }
             game.select("9");
@@ -657,6 +657,35 @@ impl Game {
             .as_str()
             .unwrap_or_default()
             .to_string()
+    }
+
+    /// What a click may change: the block's state, and the blocks of the box around
+    /// it, one below to two above (a click that adds a block above, as a bridge
+    /// pier's own item does, or beside it, as a stair's does).
+    fn around(&self, pos: [i32; 3]) -> String {
+        let [x, y, z] = pos;
+        let mut counts = self.run(
+            &[
+                "blocks",
+                &(x - 1).to_string(),
+                &(y - 1).to_string(),
+                &(z - 1).to_string(),
+                &(x + 1).to_string(),
+                &(y + 2).to_string(),
+                &(z + 1).to_string(),
+            ],
+            30,
+        );
+        // Only what is there: no timings or acknowledgements.
+        if let Some(o) = counts.as_object_mut() {
+            o.retain(|k, _| {
+                !matches!(
+                    k.as_str(),
+                    "ok" | "ms" | "elapsed" | "tick" | "time" | "took"
+                )
+            });
+        }
+        format!("{} {counts}", self.state(pos))
     }
 
     fn set(&self, x: i32, y: i32, z: i32, block: &str) -> Value {
