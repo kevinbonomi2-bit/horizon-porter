@@ -242,7 +242,8 @@ pub fn play_check(
     tools.truncate(8);
     if !clicks.is_empty() {
         for tool in &tools {
-            game.run(&["give", tool], 30);
+            // A full stack: a click may use one up, in creative too (a flower planted).
+            game.run(&["give", tool, "64"], 30);
         }
         game.select("9");
     }

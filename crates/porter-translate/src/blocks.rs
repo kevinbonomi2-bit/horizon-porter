@@ -523,7 +523,11 @@ fn {id}_right_click_block({params}) {
         .is_some_and(|p| matches!(p.pose, crate::pose::Pose::Crouching)),
     };
     // The world as the block's code sees it, `facing` as Java names it.
-{world}    if m::use_block(&used, &mut Here { game, creative, source: 4 }) {
+{world}    let mut here = Here { game, creative, source: 4, changed: false };
+    // A click that opens the block's menu goes on to its template, which opens it: one
+    // the code took without changing anything (Java's `openMenu`, ported as taking the
+    // click) still does.
+    if m::use_block(&used, &mut here) && (here.changed || !m::opens_menu(&here.game.native_block(pos))) {
         *canceled = true;
     }
 }
@@ -537,6 +541,8 @@ const ITEM_WORLD: &str = r#"{tags}    struct Here<'g, 'a> {
         creative: bool,
         // Its sounds' SoundSource: BLOCKS (4) for a block's click, PLAYERS (7) an item's.
         source: usize,
+        // Whether the code changed anything (a block, a block entity, the hand).
+        changed: bool,
     }
     impl m::Blocks for Here<'_, '_> {
         fn block(&self, pos: [i32; 3]) -> String {
@@ -559,6 +565,7 @@ const ITEM_WORLD: &str = r#"{tags}    struct Here<'g, 'a> {
             properties: &[(&str, &str)],
             flags: i32,
         ) -> bool {
+            self.changed = true;
             let state = {
                 let registry = &self.game.pack.assets.registry;
                 let Some(mut state) = registry.default_state(block) else {
@@ -586,6 +593,7 @@ const ITEM_WORLD: &str = r#"{tags}    struct Here<'g, 'a> {
                 .map_or(0.5, horizon_core::random::RandomSource::next_float)
         }
         fn set_property_flags(&mut self, pos: [i32; 3], key: &str, value: &str, flags: i32) -> bool {
+            self.changed = true;
             let value = if key == "facing" {
                 m::stored_facing(&self.game.native_block(pos), value)
             } else {
@@ -602,6 +610,7 @@ const ITEM_WORLD: &str = r#"{tags}    struct Here<'g, 'a> {
             let _ = self.game.native_level_play_sound(sound, at, self.source, volume, pitch);
         }
         fn shrink_held(&mut self, n: u32) {
+            self.changed = true;
             // The hand's own slot (game.rs `held_mut`): the acting player's, swapped in.
             let slot = self.game.held_mut();
             if let Some(stack) = slot.as_mut() {
@@ -612,6 +621,7 @@ const ITEM_WORLD: &str = r#"{tags}    struct Here<'g, 'a> {
             }
         }
         fn hurt_held(&mut self, n: u32) -> bool {
+            self.changed = true;
             if self.creative {
                 return false;
             }
@@ -634,9 +644,11 @@ const ITEM_WORLD: &str = r#"{tags}    struct Here<'g, 'a> {
             false
         }
         fn give(&mut self, item: &str, count: u32) -> u32 {
+            self.changed = true;
             self.game.native_give_items(item, count)
         }
         fn set_held(&mut self, item: &str, count: u32) {
+            self.changed = true;
             *self.game.held_mut() = (count > 0 && item != "minecraft:air")
                 .then(|| horizon_client::items::ItemStack::new(item, count));
         }
@@ -727,6 +739,7 @@ const ENTITY_WORLD: &str = r#"    impl m::BlockEntities for Here<'_, '_> {
             })
         }
         fn save_entity(&mut self, pos: [i32; 3], values: &[(&str, m::Saved)]) -> bool {
+            self.changed = true;
             use horizon_world::nbt::{JavaString, Tag};
             let saved = self
                 .game
@@ -759,6 +772,7 @@ const ENTITY_WORLD: &str = r#"    impl m::BlockEntities for Here<'_, '_> {
                 .flatten()
         }
         fn set_entity_item(&mut self, pos: [i32; 3], slot: usize, item: Option<(&str, u32)>) -> bool {
+            self.changed = true;
             let set = self
                 .game
                 .native_with_mod_block_entity(pos, |e| {
@@ -949,7 +963,7 @@ fn {id}_use_item_on({params}) {
         .as_ref()
         .is_some_and(|p| matches!(p.pose, crate::pose::Pose::Crouching)),
     };
-{world}    if m::use_item_on(&used, &mut Here { game, creative, source: 7 }) {
+{world}    if m::use_item_on(&used, &mut Here { game, creative, source: 7, changed: false }) {
         *claimed = true;
     }
 }
@@ -980,7 +994,7 @@ fn {id}_use_item({params}) {
         .as_ref()
         .is_some_and(|p| matches!(p.pose, crate::pose::Pose::Crouching)),
     };
-{world}    if m::use_item(&used, &mut Here { game, creative, source: 7 }) {
+{world}    if m::use_item(&used, &mut Here { game, creative, source: 7, changed: false }) {
         *claimed = true;
     }
 }

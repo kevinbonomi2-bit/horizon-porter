@@ -1255,6 +1255,27 @@ pub const DESCRIPTION: &str = "{description}";
             self.behaviour_blocks,
             !self.block_entities.is_empty(),
         ));
+        if !self.behaviours.is_empty() {
+            // Which blocks open a menu when used: a machine's, a chest-like one's.
+            let mut checks = Vec::new();
+            if !self.machines.is_empty() {
+                checks.push("MACHINES.iter().any(|m| m.block == block)");
+            }
+            if !self.block_entities.is_empty() {
+                checks.push(
+                    "VANILLA_CONTAINERS.iter().any(|(b, menu, _)| *b == block && !menu.is_empty())",
+                );
+            }
+            let _ = write!(
+                r,
+                "\n/// Whether `block` opens a menu when used (a machine's, a chest-like one's).\npub fn opens_menu(block: &str) -> bool {{\n    {}\n}}\n",
+                if checks.is_empty() {
+                    "let _ = block;\n    false".to_string()
+                } else {
+                    checks.join("\n        || ")
+                }
+            );
+        }
 
         r.push_str(
             r#"
