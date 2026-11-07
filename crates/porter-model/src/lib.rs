@@ -241,6 +241,13 @@ pub struct ModScan {
     /// `minecraft:generic_9x3`, its slot count).
     #[serde(default)]
     pub vanilla_menus: Vec<(String, String, usize)>,
+    /// The mod's tool materials (`new ToolMaterial(..)` constants), which its tools'
+    /// stats come from.
+    #[serde(default)]
+    pub tool_materials: Vec<ToolMaterialInfo>,
+    /// The mod's armor materials (`new ArmorMaterial(..)` constants).
+    #[serde(default)]
+    pub armor_materials: Vec<ArmorMaterialInfo>,
     /// How block classes turn their `facing` when placed (`getStateForPlacement`):
     /// (class, quarter turns clockwise from the way the player looks), so
     /// `context.getHorizontalDirection().getOpposite()` is 2 (toward the player).
@@ -581,6 +588,43 @@ pub struct CreativeTabInfo {
 /// `createBlockStateDefinition` adds, the (field, value) pairs its
 /// `registerDefaultState` sets).
 pub type StateDefinition = (String, Vec<String>, Vec<(String, String)>);
+
+/// A tool material (`new ToolMaterial(incorrectBlocksForDrops, durability, speed,
+/// attackDamageBonus, enchantmentValue, repairItems)`), by the constant that holds it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ToolMaterialInfo {
+    /// The constant: `ModToolMaterials.NETHERITE_DIAMOND`.
+    pub name: String,
+    /// Block tag of what it can't harvest: `minecraft:incorrect_for_netherite_tool`;
+    /// without a namespace, the mod's own.
+    pub incorrect: Option<String>,
+    pub durability: u32,
+    pub speed: f32,
+    pub damage_bonus: f32,
+    pub enchantment: u32,
+    /// Item tag that repairs it, as `incorrect`.
+    pub repair: Option<String>,
+}
+
+/// An armor material (`new ArmorMaterial(durability, defense, enchantmentValue,
+/// equipSound, toughness, knockbackResistance, repairIngredient, assetId)`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ArmorMaterialInfo {
+    /// The constant: `ModArmorMaterials.NETHERITE_DIAMOND`.
+    pub name: String,
+    pub durability: u32,
+    /// Defense by piece: (`helmet`, 5).
+    pub defense: Vec<(String, i32)>,
+    pub enchantment: u32,
+    /// The equip sound's id, when it is a vanilla one: `minecraft:item.armor.equip_netherite`.
+    pub sound: Option<String>,
+    pub toughness: f32,
+    pub knockback: f32,
+    pub repair: Option<String>,
+    /// The equipment asset its pieces draw with: `advancednetherite:netherite_diamond`;
+    /// without a namespace, the mod's own.
+    pub asset: Option<String>,
+}
 
 /// One registry entry the mod adds, as found in its code.
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -665,7 +665,19 @@ fn register_fields_at(field: Node, src: &str, enclosing: &str, out: &mut Vec<Reg
         .child_by_field_name("type")
         .map(text)
         .unwrap_or_default();
-    if !ty.contains("DeferredRegister") {
+    // `DeferredRegister.Items ITEMS`, or with the nested class imported, `Items ITEMS
+    // = DeferredRegister.createItems(..)` (its initializer says so).
+    let declares = |field: Node| {
+        named_children(field)
+            .into_iter()
+            .filter(|c| c.kind() == "variable_declarator")
+            .any(|d| {
+                d.child_by_field_name("value")
+                    .map(text)
+                    .is_some_and(|v| v.contains("DeferredRegister."))
+            })
+    };
+    if !ty.contains("DeferredRegister") && !declares(field) {
         return;
     }
     for declarator in named_children(field)

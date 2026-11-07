@@ -6,6 +6,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
+mod equipment;
+
 use porter_model::{ModScan, Registration};
 
 /// The data folders a content mod may carry (playhorizon.dev/docs/content-mods).
@@ -709,7 +711,15 @@ pub fn generate_with(
         if blocks.contains(item_name) || !seen.insert(item_name.to_string()) {
             continue;
         }
-        let json = item_json(&reg.args);
+        let mut json = item_json(&reg.args);
+        // A tool, weapon or armor piece: its material's stats.
+        if let Some((template, components)) = equipment::equipment(scan, ns, &reg.args) {
+            json["template"] = template.into();
+            json["components"] = components;
+        } else if reg.args.contains("fireResistant()") {
+            // `Item.Properties.fireResistant()`: it doesn't burn in lava or fire.
+            json["components"] = serde_json::json!({ "minecraft:damage_resistant": { "types": "#minecraft:is_fire" } });
+        }
         content.files.insert(
             format!("data/{ns}/horizon/item/{item_name}.json"),
             pretty(&json),

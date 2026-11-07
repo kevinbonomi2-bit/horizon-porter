@@ -6,6 +6,7 @@
 
 mod classfile;
 pub mod decompile;
+mod items;
 mod jar;
 mod machines;
 mod metadata;
@@ -182,6 +183,8 @@ fn network_and_config(root: &Path, scan: &mut ModScan) {
                 .map(|t| (c.name.clone(), t))
         })
         .collect();
+    // Items registered through constants, and the tool and armor materials.
+    items::resolve(&sources, scan);
     let enums = |name: &str| {
         sources
             .iter()
@@ -289,6 +292,8 @@ fn network_and_config(root: &Path, scan: &mut ModScan) {
             scan.effects.push((name.clone(), category, color));
         }
     }
+    // Mining speeds a config multiplies (Advanced Netherite's breaking speed multipliers).
+    items::speed_multipliers(&sources, scan);
 }
 
 /// The mod's container menus and screens, read from their source files.
@@ -431,6 +436,8 @@ fn assemble(
         placements: Vec::new(),
         state_definitions: Vec::new(),
         vanilla_menus: Vec::new(),
+        tool_materials: Vec::new(),
+        armor_materials: Vec::new(),
         storages: Vec::new(),
         block_shapes: Vec::new(),
         mobs: Vec::new(),
