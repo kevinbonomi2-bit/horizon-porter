@@ -156,8 +156,14 @@ Blocks and items whose **Java acts in code** get a function each in `runtime.rs`
 port into, called from Horizon's hooks: a block placed its own way
 (`getStateForPlacement`), used with a right click (`useItemOn`, `useWithoutItem`) or
 reshaped by its neighbours (`updateShape`); an item used on a block (`useOn`) or in the
-air (`use`), which can change blocks and use up or wear the stack in hand. Until one is
-ported, its template's own behaviour stands.
+air (`use`), which can change blocks and use up or wear the stack in hand. A click's
+code knows which way the player faces and whether they're in creative, and reaches the
+block's block entity: its saved values and its item slots. Until one is ported, its
+template's own behaviour stands.
+
+A block entity that opens a **vanilla menu** over its own slots (a cabinet's
+`ChestMenu.threeRows`, a hopper's or a dispenser's) is declared to Horizon as a container
+of that size, so it opens the chest's screen and hoppers reach it.
 
 Each **block entity** becomes a state struct in `runtime.rs`, saved with its block
 under the keys `saveAdditional` writes, plus a `tick_<name>` stub for its Java tick.
