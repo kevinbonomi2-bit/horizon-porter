@@ -315,7 +315,10 @@ fn machine_guis(root: &Path, scan: &mut ModScan) {
                     | "ItemCombinerMenu"
                     | "RecipeBookMenu<?>"
             );
-        let is_screen = simple.ends_with("ContainerScreen") || simple == "HandledScreen";
+        let is_screen = simple.ends_with("ContainerScreen")
+            || simple == "HandledScreen"
+            || simple.ends_with("RecipeBookScreen")
+            || simple == "AbstractFurnaceScreen";
         if !is_menu && !is_screen {
             continue;
         }

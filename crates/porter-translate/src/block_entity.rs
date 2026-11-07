@@ -584,12 +584,23 @@ pub const BLOCK_ENTITIES: &[(&str, &str, bool)] = &[
 /// Whether its tick gets a `Machine`: it has slots, tanks, energy, a renderer to
 /// send its state to, or neighbours it looks at.
 pub fn takes_machine(be: &BlockEntity) -> bool {
-    !be.tanks.is_empty() || be.energy.is_some() || be.renderer.is_some() || be.neighbours
+    !be.tanks.is_empty()
+        || be.energy.is_some()
+        || be.renderer.is_some()
+        || be.neighbours
+        || be.items > 0
 }
 
 /// "its 2 fluid tanks (4000 mB each) and its energy (10000 FE)", or nothing.
 pub fn storage_text(be: &BlockEntity) -> String {
     let mut parts = Vec::new();
+    if be.items > 0 {
+        parts.push(if be.items == 1 {
+            "its item slot (`machine.slots[0]`, the stack its handler holds)".to_string()
+        } else {
+            format!("its {} item slots (`machine.slots`)", be.items)
+        });
+    }
     if !be.tanks.is_empty() {
         let caps: Vec<String> = be.tanks.iter().map(|c| format!("{c} mB")).collect();
         parts.push(if be.tanks.len() == 1 {

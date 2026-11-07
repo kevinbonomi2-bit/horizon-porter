@@ -286,6 +286,8 @@ pub struct Machine<'a> {
     /// Particles and sounds to play after the tick: see `particles` and `sound`.
     pub effects: Vec<Effect>,
     recipes: &'a dyn Fn(&str) -> Vec<Recipe>,
+    /// Tag membership: (`block` or `item`, tag, id).
+    pub tags: Option<&'a dyn Fn(&str, &str, &str) -> bool>,
 }
 
 /// A particle burst or a sound a tick plays, near its block.
@@ -443,7 +445,19 @@ impl<'a> Machine<'a> {
             sync: false,
             effects: Vec::new(),
             recipes,
+            tags: None,
         }
+    }
+
+    /// Whether `block` (a neighbour's, `machine.neighbour(Side::Down)`) is in block
+    /// tag `tag` (`state.is(BlockTags.CAMPFIRES)`, a mod's `farmersdelight:heat_sources`).
+    pub fn block_is(&self, block: &str, tag: &str) -> bool {
+        self.tags.is_some_and(|t| t("block", tag, block))
+    }
+
+    /// Whether `item` is in item tag `tag` (`stack.is(ItemTags.FLOWERS)`).
+    pub fn item_is(&self, item: &str, tag: &str) -> bool {
+        self.tags.is_some_and(|t| t("item", tag, item))
     }
 
     /// Sends particles to the players near `at` (world coordinates) after the tick

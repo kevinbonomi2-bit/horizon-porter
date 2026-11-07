@@ -1614,7 +1614,9 @@ fn {id}_block_entity_tick(
         .map(|s| s.as_ref().map(|s| m::Stack::new(&s.item, s.count)))
         .collect();
     let data = entity.data.clone();
+{tag_fn}    let tags = |kind: &str, tag: &str, id: &str| in_tag(&*game, kind, tag, id);
     let mut machine = m::Machine::new(slots.clone(), data.clone(), &recipes);
+    machine.tags = Some(&tags);
     machine.neighbours = neighbours;
     machine.block = block_here;
     // Its tanks and energy, as Horizon keeps them: `fluids` (a list of
@@ -1820,6 +1822,7 @@ fn {id}_block_entity_tick(
     }}
 }}
 "##,
+                    tag_fn = crate::blocks::TAG_FN,
                     from_tag = block_entity::FROM_TAG,
                     to_tag = block_entity::TO_TAG,
                 ),

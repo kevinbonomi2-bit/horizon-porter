@@ -453,6 +453,7 @@ pub fn helper(
     };
     let body = body
         .replace("{world}", ITEM_WORLD)
+        .replace("{tags}", TAG_FN)
         .replace(
             "{entities}",
             &if entities {
@@ -531,7 +532,7 @@ fn {id}_right_click_block({params}) {
 /// The world and the acting player, as a block's click or an item's use sees them:
 /// blocks, sounds, the level's random and the stack in hand. Shared by the three
 /// use helpers.
-const ITEM_WORLD: &str = r#"    struct Here<'g, 'a> {
+const ITEM_WORLD: &str = r#"{tags}    struct Here<'g, 'a> {
         game: &'g mut crate::game::Game<'a>,
         creative: bool,
         // Its sounds' SoundSource: BLOCKS (4) for a block's click, PLAYERS (7) an item's.
@@ -649,7 +650,14 @@ const ITEM_WORLD: &str = r#"    struct Here<'g, 'a> {
                 let _ = self.game.native_level_send_particles(&options, None, at, spread, speed, count);
             }
         }
+        fn block_is(&mut self, pos: [i32; 3], tag: &str) -> bool {
+            let block = self.game.native_block(pos);
+            in_tag(&*self.game, "block", tag, &block)
+        }
         fn item_is(&mut self, item: &str, tag: &str) -> bool {
+            if in_tag(&*self.game, "item", tag, item) {
+                return true;
+            }
             // A `#tag` ingredient, as a recipe names one, lists the tag's items.
             let tag = String::from('#') + tag.trim_start_matches('#');
             self.game
@@ -658,6 +666,51 @@ const ITEM_WORLD: &str = r#"    struct Here<'g, 'a> {
         }
     }
 {entities}"#;
+
+/// Tag membership from the game's data, which the hook helpers paste in.
+pub(crate) const TAG_FN: &str = r#"    // Whether `id` is in tag `tag` of `kind` (`block`, `item`), as the game's data
+    // says (`data/<ns>/tags/<kind>/<path>.json`, nested `#tags` followed); each
+    // tag read once.
+    fn in_tag(game: &crate::game::Game<'_>, kind: &str, tag: &str, id: &str) -> bool {
+        use std::collections::HashMap;
+        thread_local! {
+            static TAGS: std::cell::RefCell<HashMap<String, Vec<String>>> = Default::default();
+        }
+        fn members(game: &crate::game::Game<'_>, kind: &str, tag: &str, depth: u8, out: &mut Vec<String>) {
+            if depth > 8 {
+                return;
+            }
+            let tag = tag.trim_start_matches('#');
+            let (ns, path) = tag.split_once(':').unwrap_or(("minecraft", tag));
+            let Some(bytes) = game.native_data(&format!("data/{}/tags/{}/{}.json", ns, kind, path)) else {
+                return;
+            };
+            let Ok(json) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+                return;
+            };
+            for v in json.get("values").and_then(|v| v.as_array()).into_iter().flatten() {
+                let entry = v.as_str().or_else(|| v.get("id").and_then(|i| i.as_str())).unwrap_or("");
+                if entry.starts_with('#') {
+                    members(game, kind, entry, depth + 1, out);
+                } else if entry.contains(':') {
+                    out.push(entry.to_string());
+                } else if !entry.is_empty() {
+                    out.push(format!("minecraft:{}", entry));
+                }
+            }
+        }
+        let key = format!("{}/{}", kind, tag.trim_start_matches('#'));
+        TAGS.with(|t| {
+            let mut t = t.borrow_mut();
+            let list = t.entry(key).or_insert_with(|| {
+                let mut v = Vec::new();
+                members(game, kind, tag, 0, &mut v);
+                v
+            });
+            list.iter().any(|x| x == id)
+        })
+    }
+"#;
 
 /// The block entities' part of the shared world, for a mod that has them.
 const ENTITY_WORLD: &str = r#"    impl m::BlockEntities for Here<'_, '_> {
@@ -1169,6 +1222,12 @@ pub trait World: Blocks {
     /// stack)`); `minecraft:air` or 0 empties it.
     fn set_held(&mut self, item: &str, count: u32) {
         let _ = (item, count);
+    }
+    /// Whether the block at `pos` is in block tag `tag` (`state.is(BlockTags.CAMPFIRES)`,
+    /// a mod's `TagKey<Block>`: `farmersdelight:heat_sources`).
+    fn block_is(&mut self, pos: [i32; 3], tag: &str) -> bool {
+        let _ = (pos, tag);
+        false
     }
     /// Whether `item` is in item tag `tag` (`stack.is(ItemTags.FLOWERS)`, a mod's
     /// `TagKey<Item>`: `villagersplus:small_plantable_items`).

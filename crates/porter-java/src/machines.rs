@@ -16,6 +16,48 @@ pub fn menu(class: &str, source: &str) -> MenuInfo {
         ..Default::default()
     };
     let mut inventory: Option<[i32; 2]> = None;
+    // The player's inventory, by the constructor's `Inventory` parameter's name.
+    let player_names = inventory_params(source);
+    let is_player = |container: &str| {
+        let c = container.trim().trim_start_matches("this.");
+        if player_names.is_empty() {
+            is_player_inventory(c)
+        } else {
+            player_names
+                .iter()
+                .any(|p| c == p || c.starts_with(&format!("{p}.")))
+                || c.contains("player.getInventory()")
+        }
+    };
+    // Slots placed by loops and locals (`inputStartX + column * borderSlotSize`),
+    // evaluated as the constructor runs.
+    let evaluated = evaluate_slots(source);
+    if !evaluated.is_empty() {
+        for (ty, container, index, x, y) in evaluated {
+            if is_player(&container) {
+                inventory = Some(match inventory {
+                    Some([ix, iy]) if iy <= y => [ix.min(x), iy],
+                    _ => [x, y],
+                });
+                continue;
+            }
+            info.slots.push(MenuSlot {
+                index,
+                x,
+                y,
+                result: is_result(&ty, source),
+            });
+        }
+        info.inventory = inventory;
+        if !calls(source, "addDataSlots").is_empty() {
+            info.data_slots = calls(source, "SimpleContainerData")
+                .iter()
+                .filter_map(|a| int(a))
+                .next()
+                .unwrap_or(0) as usize;
+        }
+        return info;
+    }
     for args in calls(source, "addSlot") {
         let Some(new) = args.trim().strip_prefix("new ") else {
             continue;
@@ -76,16 +118,21 @@ pub fn menu(class: &str, source: &str) -> MenuInfo {
 
 /// The screen a class's source declares.
 pub fn screen(class: &str, source: &str) -> ScreenInfo {
-    let menu = ["AbstractContainerScreen<", "HandledScreen<"]
-        .iter()
-        .find_map(|p| {
-            let at = source.find(p)? + p.len();
-            let name: String = source[at..]
-                .chars()
-                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '.')
-                .collect();
-            (!name.is_empty()).then(|| name.rsplit('.').next().unwrap_or(&name).to_string())
-        });
+    let menu = [
+        "AbstractContainerScreen<",
+        "HandledScreen<",
+        "AbstractRecipeBookScreen<",
+        "AbstractFurnaceScreen<",
+    ]
+    .iter()
+    .find_map(|p| {
+        let at = source.find(p)? + p.len();
+        let name: String = source[at..]
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '.')
+            .collect();
+        (!name.is_empty()).then(|| name.rsplit('.').next().unwrap_or(&name).to_string())
+    });
     let assigned = |names: &[&str]| {
         names.iter().find_map(|name| {
             let mut from = 0;
@@ -122,6 +169,282 @@ pub fn screen(class: &str, source: &str) -> ScreenInfo {
 }
 
 /// Whether a slot's container argument is the player's inventory.
+/// The names of a menu's `Inventory` parameters (`Inventory playerInventory`).
+fn inventory_params(source: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut from = 0;
+    while let Some(i) = source[from..].find("Inventory ").map(|i| from + i) {
+        from = i + 10;
+        let before = source[..i].chars().next_back();
+        if before.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.') {
+            continue;
+        }
+        let name: String = source[from..]
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect();
+        let after = source[from + name.len()..].trim_start();
+        if !name.is_empty()
+            && (after.starts_with(',') || after.starts_with(')'))
+            && !out.contains(&name)
+        {
+            out.push(name);
+        }
+    }
+    out
+}
+
+/// Each `addSlot(new T(container, .., index, x, y))` of `source` as its code runs:
+/// `int` locals and constants kept, `for (int v = a; v < b; v++)` loops unrolled,
+/// the index and position evaluated. (slot type, container, index, x, y).
+fn evaluate_slots(source: &str) -> Vec<(String, String, Option<i32>, i32, i32)> {
+    let mut env: std::collections::HashMap<String, i64> = Default::default();
+    // `static final int SLOT_SIZE = 18;` and the like, anywhere in the file.
+    for stmt in source.split(';') {
+        if let Some((lhs, rhs)) = stmt.split_once('=')
+            && lhs.contains(" int ")
+            && let Some(name) = lhs.split_whitespace().last()
+            && let Some(v) = eval(rhs, &env)
+        {
+            env.insert(name.to_string(), v);
+        }
+    }
+    let mut out = Vec::new();
+    run(source, &mut env, &mut out, 0);
+    out
+}
+
+fn run(
+    text: &str,
+    env: &mut std::collections::HashMap<String, i64>,
+    out: &mut Vec<(String, String, Option<i32>, i32, i32)>,
+    depth: usize,
+) {
+    if depth > 6 {
+        return;
+    }
+    let mut i = 0;
+    while i < text.len() {
+        let rest = &text[i..];
+        let next_for = rest.find("for (");
+        let next_slot = rest.find("addSlot(");
+        let next_int = rest.find("int ");
+        let first = [next_for, next_slot, next_int].into_iter().flatten().min();
+        let Some(at) = first else {
+            break;
+        };
+        let here = &rest[at..];
+        let word_before = rest[..at]
+            .chars()
+            .next_back()
+            .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_');
+        if Some(at) == next_for && !word_before {
+            // `for (int v = a; v < b; v++) { body }` (or a one-statement body).
+            let Some(head) = balanced(&here[4..]) else {
+                i += at + 4;
+                continue;
+            };
+            let after = &here[4 + head.len() + 2..];
+            let parts: Vec<&str> = head.split(';').collect();
+            let skip = after.len() - after.trim_start().len();
+            let len = statement_len(&after[skip..]);
+            let body_len = skip + len;
+            let body: &str = {
+                let t = &after[skip..skip + len];
+                if t.starts_with('{') {
+                    balanced_braces(t).unwrap_or("")
+                } else {
+                    t
+                }
+            };
+            if let [init, cond, _] = parts.as_slice()
+                && let Some((var, start)) = init
+                    .trim()
+                    .strip_prefix("int ")
+                    .and_then(|r| r.split_once('='))
+                && let Some(start) = eval(start, env)
+            {
+                let var = var.trim().to_string();
+                let cond = cond.trim();
+                let (limit, inclusive) = if let Some((_, l)) = cond.split_once("<=") {
+                    (eval(l, env), true)
+                } else if let Some((_, l)) = cond.split_once('<') {
+                    (eval(l, env), false)
+                } else {
+                    (None, false)
+                };
+                if let Some(limit) = limit {
+                    let end = if inclusive { limit + 1 } else { limit };
+                    for v in start..end.min(start + 64) {
+                        env.insert(var.clone(), v);
+                        run(body, env, out, depth + 1);
+                    }
+                    env.remove(&var);
+                }
+            }
+            i += at + 4 + head.len() + 2 + body_len;
+            continue;
+        }
+        if Some(at) == next_slot && !word_before {
+            if let Some(args) = balanced(&here[7..])
+                && let Some(new) = args.trim().strip_prefix("new ")
+                && let Some(open) = new.find('(')
+                && let Some(inner) = balanced(&new[open..])
+            {
+                let ty = new[..open].trim().to_string();
+                let parts = split_top(inner);
+                let n = parts.len();
+                if n >= 4
+                    && let (Some(x), Some(y)) = (eval(&parts[n - 2], env), eval(&parts[n - 1], env))
+                {
+                    let index = eval(&parts[n - 3], env).map(|v| v as i32);
+                    // The container is the argument before the index (a result slot takes the
+                    // player first).
+                    out.push((ty, parts[n - 4].clone(), index, x as i32, y as i32));
+                }
+                i += at + 7 + args.len() + 2;
+                continue;
+            }
+            i += at + 8;
+            continue;
+        }
+        if Some(at) == next_int && !word_before {
+            // `int startX = 8;`
+            let stmt = &here[4..here.find(';').unwrap_or(here.len())];
+            if let Some((name, value)) = stmt.split_once('=')
+                && let Some(v) = eval(value, env)
+            {
+                env.insert(name.trim().to_string(), v);
+            }
+            i += at + 4;
+            continue;
+        }
+        i += at + 1;
+    }
+}
+
+/// How long the statement `text` starts with is: a block, a `for` with its body,
+/// or up to its `;`.
+fn statement_len(text: &str) -> usize {
+    if text.starts_with('{') {
+        return balanced_braces(text).map_or(text.len(), |b| b.len() + 2);
+    }
+    if let Some(rest) = text.strip_prefix("for ")
+        && let Some(head) = balanced(rest.trim_start())
+    {
+        let head_end = 4 + (rest.len() - rest.trim_start().len()) + head.len() + 2;
+        let after = &text[head_end..];
+        let skip = after.len() - after.trim_start().len();
+        return head_end + skip + statement_len(&after[skip..]);
+    }
+    text.find(';').map_or(text.len(), |e| e + 1)
+}
+
+/// An int expression: literals, names in `env`, `+ - * /`, parentheses.
+fn eval(text: &str, env: &std::collections::HashMap<String, i64>) -> Option<i64> {
+    let t = text.trim();
+    let tokens: Vec<String> = {
+        let mut v = Vec::new();
+        let mut cur = String::new();
+        for c in t.chars() {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '.' {
+                cur.push(c);
+            } else {
+                if !cur.is_empty() {
+                    v.push(std::mem::take(&mut cur));
+                }
+                if !c.is_whitespace() {
+                    v.push(c.to_string());
+                }
+            }
+        }
+        if !cur.is_empty() {
+            v.push(cur);
+        }
+        v
+    };
+    let mut pos = 0;
+    let v = expr(&tokens, &mut pos, env)?;
+    (pos == tokens.len()).then_some(v)
+}
+
+fn expr(
+    t: &[String],
+    pos: &mut usize,
+    env: &std::collections::HashMap<String, i64>,
+) -> Option<i64> {
+    let mut v = term(t, pos, env)?;
+    while let Some(op) = t.get(*pos).map(String::as_str) {
+        match op {
+            "+" => {
+                *pos += 1;
+                v += term(t, pos, env)?;
+            }
+            "-" => {
+                *pos += 1;
+                v -= term(t, pos, env)?;
+            }
+            _ => break,
+        }
+    }
+    Some(v)
+}
+
+fn term(
+    t: &[String],
+    pos: &mut usize,
+    env: &std::collections::HashMap<String, i64>,
+) -> Option<i64> {
+    let mut v = atom(t, pos, env)?;
+    while let Some(op) = t.get(*pos).map(String::as_str) {
+        match op {
+            "*" => {
+                *pos += 1;
+                v *= atom(t, pos, env)?;
+            }
+            "/" => {
+                *pos += 1;
+                let d = atom(t, pos, env)?;
+                v = v.checked_div(d)?;
+            }
+            _ => break,
+        }
+    }
+    Some(v)
+}
+
+fn atom(
+    t: &[String],
+    pos: &mut usize,
+    env: &std::collections::HashMap<String, i64>,
+) -> Option<i64> {
+    let tok = t.get(*pos)?.as_str();
+    *pos += 1;
+    match tok {
+        "(" => {
+            // A cast `(int)`, else a parenthesized expression.
+            if t.get(*pos).map(String::as_str) == Some("int")
+                && t.get(*pos + 1).map(String::as_str) == Some(")")
+            {
+                *pos += 2;
+                return atom(t, pos, env);
+            }
+            let v = expr(t, pos, env)?;
+            (t.get(*pos).map(String::as_str) == Some(")")).then(|| *pos += 1)?;
+            Some(v)
+        }
+        "-" => Some(-atom(t, pos, env)?),
+        _ => {
+            if let Ok(v) = tok.trim_end_matches(['L', 'l']).parse::<i64>() {
+                return Some(v);
+            }
+            let name = tok.strip_prefix("this.").unwrap_or(tok);
+            let name = name.rsplit('.').next().unwrap_or(name);
+            env.get(name).copied()
+        }
+    }
+}
+
 fn is_player_inventory(arg: &str) -> bool {
     let a = arg.to_ascii_lowercase();
     (a.contains("inv") && !a.contains("handler") && !a.contains("items")) || a.contains("player")
@@ -861,6 +1184,54 @@ mod tests {
         assert_eq!(m.inventory, Some([8, 84]));
         assert_eq!(m.data_slots, 2);
         assert!(!m.approximate);
+    }
+
+    #[test]
+    fn reads_slots_placed_by_locals_and_loops() {
+        // Farmer's Delight's cooking pot: its own handler is `this.inventory`, the
+        // player's is the `Inventory` parameter.
+        let pot = "public CookingPotMenu(int windowId, Inventory playerInventory, CookingPotBlockEntity blockEntity, ContainerData data) {
+      this.inventory = blockEntity.getInventory();
+      int startX = 8;
+      int startY = 18;
+      int inputStartX = 30;
+      int inputStartY = 17;
+      int borderSlotSize = 18;
+
+      for (int row = 0; row < 2; row++) {
+         for (int column = 0; column < 3; column++) {
+            this.addSlot(new ItemHandlerSlot(this.inventory, row * 3 + column, inputStartX + column * borderSlotSize, inputStartY + row * borderSlotSize));
+         }
+      }
+
+      this.addSlot(new CookingPotMealSlot(this.inventory, 6, 124, 26));
+      this.addSlot(new CookingPotResultSlot(playerInventory.player, blockEntity, this.inventory, 8, 124, 55));
+      int startPlayerInvY = startY * 4 + 12;
+
+      for (int row = 0; row < 3; row++) {
+         for (int column = 0; column < 9; column++) {
+            this.addSlot(new Slot(playerInventory, 9 + row * 9 + column, startX + column * borderSlotSize, startPlayerInvY + row * borderSlotSize));
+         }
+      }
+   }";
+        let m = menu("a.CookingPotMenu", pot);
+        let at: Vec<(Option<i32>, i32, i32)> =
+            m.slots.iter().map(|s| (s.index, s.x, s.y)).collect();
+        assert_eq!(
+            at,
+            [
+                (Some(0), 30, 17),
+                (Some(1), 48, 17),
+                (Some(2), 66, 17),
+                (Some(3), 30, 35),
+                (Some(4), 48, 35),
+                (Some(5), 66, 35),
+                (Some(6), 124, 26),
+                (Some(8), 124, 55),
+            ]
+        );
+        assert!(m.slots[7].result);
+        assert_eq!(m.inventory, Some([8, 84]));
     }
 
     #[test]
