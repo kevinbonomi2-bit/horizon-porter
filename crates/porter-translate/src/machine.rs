@@ -210,6 +210,33 @@ pub fn recipe_types(scan: &ModScan, ns: &str) -> Vec<String> {
 /// `Machine`. Every mod with block entities has them: `tick_block_entity` takes a
 /// `Machine` (empty for a block entity without slots).
 pub const MACHINE_TYPES: &str = r#"
+/// The level around a machine whose screen is open, as its Java screen reads it on
+/// the client (`menu.blockEntity.getLevel()`): its block's position, the blocks
+/// around it, tags. A pot's heat icon shows whether the block below heats it.
+pub struct ScreenAt<'a> {
+    /// The machine's position, when the client can tell (the block under the
+    /// crosshair, whose menu is open).
+    pub pos: Option<[i32; 3]>,
+    pub block: &'a dyn Fn([i32; 3]) -> String,
+    pub tags: &'a dyn Fn(&str, &str, &str) -> bool,
+}
+
+impl ScreenAt<'_> {
+    /// The block at `pos`: `minecraft:campfire`.
+    pub fn block(&self, pos: [i32; 3]) -> String {
+        (self.block)(pos)
+    }
+    /// The block under the machine (`pos.below()`), when its position is known.
+    pub fn below(&self) -> Option<String> {
+        let [x, y, z] = self.pos?;
+        Some((self.block)([x, y - 1, z]))
+    }
+    /// Whether `block` is in block tag `tag` (`state.is(ModTags.HEAT_SOURCES)`).
+    pub fn block_is(&self, block: &str, tag: &str) -> bool {
+        (self.tags)("block", tag, block)
+    }
+}
+
 /// An item stack in a machine's slot: `minecraft:cobblestone` × 3.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Stack {
@@ -755,11 +782,11 @@ pub const MACHINES: &[MachineMenu] = &[
         };
         let _ = write!(
             r,
-            "\n/// What `{menu}`'s screen draws under its slots and items, from the menu's data\n/// slots (`data`, empty until the server sends them; read them with `get`), as\n/// `renderBg` does: progress arrows, flames, gauges.\n///\n/// TODO: port `renderBg` of `{java}`.\npub fn {snake}(data: &[i32]) -> Vec<Sprite> {{\n{background}}}\n",
+            "\n/// What `{menu}`'s screen draws under its slots and items, from the menu's data\n/// slots (`data`, empty until the server sends them; read them with `get`), as\n/// `renderBg` does: progress arrows, flames, gauges. What the Java reads of the level\n/// (a pot's heat from the block below) comes from `at`.\n///\n/// TODO: port `renderBg` of `{java}`.\npub fn {snake}(data: &[i32], at: &ScreenAt<'_>) -> Vec<Sprite> {{\n    let _ = at;\n{background}}}\n",
             menu = m.menu_type,
         );
     }
-    r.push_str("\n/// What block `block`'s screen draws.\npub fn screen_sprites(block: &str, data: &[i32]) -> Vec<Sprite> {\n    match block {\n");
+    r.push_str("\n/// What block `block`'s screen draws.\npub fn screen_sprites(block: &str, data: &[i32], at: &ScreenAt<'_>) -> Vec<Sprite> {\n    match block {\n");
     for m in machines {
         let blocks = m
             .blocks
@@ -768,11 +795,11 @@ pub const MACHINES: &[MachineMenu] = &[
             .collect::<Vec<_>>()
             .join(" | ");
         if !blocks.is_empty() {
-            let _ = writeln!(r, "        {blocks} => {}(data),", draw_name(m));
+            let _ = writeln!(r, "        {blocks} => {}(data, at),", draw_name(m));
         }
     }
     r.push_str(
-        "        _ => {\n            let _ = data;\n            Vec::new()\n        }\n    }\n}\n",
+        "        _ => {\n            let _ = (data, at);\n            Vec::new()\n        }\n    }\n}\n",
     );
     r
 }

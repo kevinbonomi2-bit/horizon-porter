@@ -204,7 +204,9 @@ fn ports_a_machine() {
         "pub fn tick_crusher(pos: [i32; 3], state: &mut Crusher, machine: &mut Machine<'_>)"
     ));
     assert!(runtime.contains(r#"pub const RECIPE_TYPES: &[&str] = &["grind:crushing"];"#));
-    assert!(runtime.contains("pub fn draw_crusher(data: &[i32]) -> Vec<Sprite>"));
+    assert!(
+        runtime.contains("pub fn draw_crusher(data: &[i32], at: &ScreenAt<'_>) -> Vec<Sprite>")
+    );
     assert!(b.hooks >= 85);
     assert!(b.files["PORTING.md"].contains("## Machines"));
 }

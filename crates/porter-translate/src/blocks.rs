@@ -883,6 +883,21 @@ const ENTITY_WORLD: &str = r#"    impl m::BlockEntities for Here<'_, '_> {
             }
             // An ingredient as recipe files write it: an item, a `#tag`, `{"item": ..}`,
             // `{"tag": ..}`, or a list of them.
+            // A tool by what it does (`{"type": "item_ability", "action": "axe_strip"}`,
+            // NeoForge's `ItemAbility` ingredient): the tag of the tools that do it.
+            fn ability_tag(action: &str) -> Option<&'static str> {
+                let kind = action.split('_').next()?;
+                Some(match kind {
+                    "axe" => "minecraft:axes",
+                    "pickaxe" => "minecraft:pickaxes",
+                    "shovel" => "minecraft:shovels",
+                    "hoe" => "minecraft:hoes",
+                    "sword" => "minecraft:swords",
+                    "shears" => "c:tools/shears",
+                    "brush" => "c:tools/brush",
+                    _ => return None,
+                })
+            }
             fn names(v: &serde_json::Value) -> Option<serde_json::Value> {
                 use serde_json::Value;
                 let one = |v: &Value| match v {
@@ -891,7 +906,13 @@ const ENTITY_WORLD: &str = r#"    impl m::BlockEntities for Here<'_, '_> {
                         .get("item")
                         .and_then(Value::as_str)
                         .map(str::to_string)
-                        .or_else(|| o.get("tag").and_then(Value::as_str).map(|t| String::from('#') + t)),
+                        .or_else(|| o.get("tag").and_then(Value::as_str).map(|t| String::from('#') + t))
+                        .or_else(|| {
+                            o.get("action")
+                                .and_then(Value::as_str)
+                                .and_then(ability_tag)
+                                .map(|t| String::from('#') + t)
+                        }),
                     _ => None,
                 };
                 match v {
@@ -912,6 +933,13 @@ const ENTITY_WORLD: &str = r#"    impl m::BlockEntities for Here<'_, '_> {
                     for key in ["ingredients", "inputs"] {
                         if let Some(serde_json::Value::Array(list)) = json.get(key) {
                             ingredients.extend(list.iter().filter_map(names).map(&items));
+                        }
+                    }
+                    // The tool or catalyst it takes besides (a cutting board's knife), as the
+                    // last ingredient: `recipe.accepts(1, &tool)`.
+                    for key in ["tool", "catalyst"] {
+                        if let Some(v) = json.get(key).and_then(names) {
+                            ingredients.push(items(v));
                         }
                     }
                     // `"result": "id"`, `{"id": ..}`, `{"item": ..}`, or a list of them

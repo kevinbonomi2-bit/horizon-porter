@@ -1576,6 +1576,21 @@ fn {id}_block_entity_tick(
     }};
     // An ingredient as Horizon reads one: an item, a `#tag`, or a list of them.
     // Older recipe files write `{{"item": ...}}` or `{{"tag": ...}}`.
+    // A tool by what it does (`{{"type": "item_ability", "action": "axe_strip"}}`,
+    // NeoForge's `ItemAbility` ingredient): the tag of the tools that do it.
+    fn ability_tag(action: &str) -> Option<&'static str> {{
+        let kind = action.split('_').next()?;
+        Some(match kind {{
+            "axe" => "#minecraft:axes",
+            "pickaxe" => "#minecraft:pickaxes",
+            "shovel" => "#minecraft:shovels",
+            "hoe" => "#minecraft:hoes",
+            "sword" => "#minecraft:swords",
+            "shears" => "#c:tools/shears",
+            "brush" => "#c:tools/brush",
+            _ => return None,
+        }})
+    }}
     fn names(v: &serde_json::Value) -> Option<serde_json::Value> {{
         use serde_json::Value;
         let one = |v: &Value| match v {{
@@ -1584,7 +1599,8 @@ fn {id}_block_entity_tick(
                 .get("item")
                 .and_then(Value::as_str)
                 .map(str::to_string)
-                .or_else(|| o.get("tag").and_then(Value::as_str).map(|t| format!("#{{t}}"))),
+                .or_else(|| o.get("tag").and_then(Value::as_str).map(|t| format!("#{{t}}")))
+                .or_else(|| o.get("action").and_then(Value::as_str).and_then(ability_tag).map(str::to_string)),
             _ => None,
         }};
         match v {{
@@ -1632,6 +1648,12 @@ fn {id}_block_entity_tick(
                 for key in ["ingredients", "inputs"] {{
                     if let Some(serde_json::Value::Array(list)) = json.get(key) {{
                         ingredients.extend(list.iter().map(|v| items(v)));
+                    }}
+                }}
+                // The tool or catalyst it takes besides, as the last ingredient.
+                for key in ["tool", "catalyst"] {{
+                    if let Some(v) = json.get(key) {{
+                        ingredients.push(items(v));
                     }}
                 }}
                 let result = json.get("result").and_then(|v| {{
@@ -1995,12 +2017,25 @@ fn {id}_screen_draw(
     origin: [f32; 2],
 ) {{
     use crate::game::{m} as m;
-    for sprite in m::screen_sprites(block, data) {{
+{tag_fn}    // The machine's place: the block under the crosshair, whose menu is open.
+    let pos = game
+        .native_raycast(6.0)
+        .filter(|hit| hit.block == block)
+        .map(|hit| [hit.block_x, hit.block_y, hit.block_z]);
+    let read = |p: [i32; 3]| game.native_block(p);
+    let tags = |kind: &str, tag: &str, id: &str| in_tag(game, kind, tag, id);
+    let at = m::ScreenAt {{
+        pos,
+        block: &read,
+        tags: &tags,
+    }};
+    for sprite in m::screen_sprites(block, data, &at) {{
         let [x, y, w, h] = sprite.dst;
         game.native_sprite(batch, sprite.name, sprite.src, [origin[0] + x, origin[1] + y, w, h]);
     }}
 }}
-"#
+"#,
+                    tag_fn = crate::blocks::TAG_FN
                 ),
             ),
             "frame" => (

@@ -853,6 +853,7 @@ pub fn generate_with(
     }
 
     creative_tabs(scan, ns, name, &mut content);
+    convention_tags(&mut content);
 
     // Assets alone (a client mod's lang file, its HUD textures) make no content mod:
     // there must be blocks, items or data for the game to load.
@@ -2289,6 +2290,68 @@ fn extends(scan: &ModScan, class: Option<&str>, simple: &str) -> bool {
             .and_then(|c| c.superclass.clone());
     }
     false
+}
+
+/// The loader's common `c:` tags (`#c:crops/carrot`) the mod's data names but doesn't
+/// ship, from Fabric API's (`data/convention-tags.json`, `tools/convention_tags.py`):
+/// on Java the loader provides them, and a recipe naming one matches nothing without it.
+fn convention_tags(content: &mut Content) {
+    static TAGS: std::sync::OnceLock<BTreeMap<String, Vec<String>>> = std::sync::OnceLock::new();
+    let table = TAGS.get_or_init(|| {
+        serde_json::from_str(include_str!("../data/convention-tags.json")).unwrap_or_default()
+    });
+    // Every `#c:..` the mod's data files name.
+    let mut wanted: Vec<String> = Vec::new();
+    for (path, file) in &content.copies {
+        if !path.starts_with("data/") || !path.ends_with(".json") {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(file) else {
+            continue;
+        };
+        for part in text.split('"').skip(1).step_by(2) {
+            if let Some(tag) = part.strip_prefix("#c:")
+                && !wanted.iter().any(|w| w == tag)
+            {
+                wanted.push(tag.to_string());
+            }
+        }
+    }
+    let shipped = |kind: &str, tag: &str, content: &Content| {
+        let path = format!("data/c/tags/{kind}/{tag}.json");
+        content.copies.contains_key(&path) || content.files.contains_key(&path)
+    };
+    while let Some(tag) = wanted.pop() {
+        for kind in ["item", "block"] {
+            let Some(values) = table.get(&format!("{kind}:c:{tag}")) else {
+                continue;
+            };
+            if shipped(kind, &tag, content) {
+                continue;
+            }
+            // Its own `#c:` entries come too; any the table lacks are left out.
+            let values: Vec<String> = values
+                .iter()
+                .filter(|v| {
+                    v.strip_prefix("#c:")
+                        .is_none_or(|inner| table.contains_key(&format!("{kind}:c:{inner}")))
+                })
+                .cloned()
+                .collect();
+            for v in &values {
+                if let Some(inner) = v.strip_prefix("#c:")
+                    && !shipped(kind, inner, content)
+                    && !wanted.iter().any(|w| w == inner)
+                {
+                    wanted.push(inner.to_string());
+                }
+            }
+            content.files.insert(
+                format!("data/c/tags/{kind}/{tag}.json"),
+                pretty(&serde_json::json!({ "values": values })),
+            );
+        }
+    }
 }
 
 fn name_template(name: &str) -> Option<&'static str> {
