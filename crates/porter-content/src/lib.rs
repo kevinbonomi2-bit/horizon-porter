@@ -399,9 +399,20 @@ pub fn generate_with(
         // `fir_sign`), not the template's oak one.
         let wall =
             if template.ends_with("_hanging_sign") && !template.ends_with("_wall_hanging_sign") {
+                // `fir_hanging_sign` → `fir_wall_hanging_sign`; Farmer's Delight's
+                // `hanging_canvas_sign` → `wall_hanging_canvas_sign`.
                 block_name
                     .strip_suffix("_hanging_sign")
                     .map(|w| format!("{w}_wall_hanging_sign"))
+                    .or_else(|| {
+                        if block_name.starts_with("hanging_") {
+                            Some(format!("wall_{block_name}"))
+                        } else {
+                            block_name
+                                .contains("_hanging_")
+                                .then(|| block_name.replacen("_hanging_", "_wall_hanging_", 1))
+                        }
+                    })
             } else if template.ends_with("_sign") && !template.ends_with("_wall_sign") {
                 block_name
                     .strip_suffix("_sign")
@@ -810,6 +821,22 @@ pub fn generate_with(
             };
             json["template"] = "minecraft:pig_spawn_egg".into();
             json["components"] = serde_json::json!({ "minecraft:entity_data": { "id": id } });
+        } else if reg.args.contains("drinkItem(")
+            || reg.args.contains("DEFAULT_DRINK")
+            || reg.args.contains("ItemUseAnimation.DRINK")
+        {
+            // A drink (`Consumables.DEFAULT_DRINK`): drunk, not eaten, from a bottle it
+            // gives back; the honey bottle's own effect (curing poison) left out.
+            json["template"] = "minecraft:honey_bottle".into();
+            json["components"] = serde_json::json!({
+                "minecraft:consumable": {
+                    "animation": "drink",
+                    "sound": "minecraft:entity.generic.drink",
+                    "consume_seconds": 1.6,
+                    "has_consume_particles": false,
+                    "on_consume_effects": [],
+                }
+            });
         } else if reg.args.contains("fireResistant()") {
             // `Item.Properties.fireResistant()`: it doesn't burn in lava or fire.
             json["components"] = serde_json::json!({ "minecraft:damage_resistant": { "types": "#minecraft:is_fire" } });
@@ -1891,6 +1918,27 @@ fn template_for_states(
             .is_some_and(|v| v.iter().all(|x| allowed.contains(&x.as_str())))
     };
     let has = |prop: &str| states.contains_key(prop);
+    // A sign, by its name and states (Farmer's Delight's `hanging_canvas_sign`): it
+    // takes text, as a sign's template does.
+    if name.ends_with("sign") {
+        let template = if name.contains("wall_hanging") {
+            "minecraft:oak_wall_hanging_sign"
+        } else if name.contains("hanging") {
+            "minecraft:oak_hanging_sign"
+        } else if name.contains("wall") {
+            "minecraft:oak_wall_sign"
+        } else if has("rotation") {
+            "minecraft:oak_sign"
+        } else {
+            ""
+        };
+        if !template.is_empty() {
+            return Some((
+                template,
+                format!("its name (`{name}`) and states are a sign's"),
+            ));
+        }
+    }
     // Stone or wood, by its name: the sounds, tools and burning follow.
     let stony = [
         "stone",

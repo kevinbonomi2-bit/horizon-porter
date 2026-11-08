@@ -88,6 +88,9 @@ pub struct Behaviour {
     pub blocks: Vec<String>,
     /// Its function's name in runtime.rs: `shutter_use`.
     pub function: String,
+    /// How each of its blocks is registered, where they differ by what they pass
+    /// the class (a feast's serving item): (block, the registration's arguments).
+    pub registered: Vec<(String, String)>,
 }
 
 /// The classes of `blocks` and `items` (the content mod's) whose Java, or a
@@ -145,12 +148,33 @@ pub fn find(
                 function = format!("{base}_{n}");
                 n += 1;
             }
+            // Each block's registration, for a class whose blocks differ by what they
+            // pass it (`new FeastBlock(props, ModItems.ROAST_CHICKEN, true)`).
+            let registered: Vec<(String, String)> = blocks
+                .iter()
+                .filter_map(|id| {
+                    let name = id.split_once(':').map_or(id.as_str(), |(_, n)| n);
+                    let reg = scan
+                        .registrations
+                        .iter()
+                        .find(|r| r.id.as_deref() == Some(name))?;
+                    let args: String = reg.args.split_whitespace().collect::<Vec<_>>().join(" ");
+                    Some((id.clone(), args.chars().take(200).collect()))
+                })
+                .collect();
+            let distinct: BTreeSet<&str> = registered.iter().map(|(_, a)| a.as_str()).collect();
+            let registered = if blocks.len() > 1 && distinct.len() > 1 {
+                registered.into_iter().take(16).collect()
+            } else {
+                Vec::new()
+            };
             Behaviour {
                 kind,
                 class,
                 methods,
                 blocks,
                 function,
+                registered,
             }
         })
         .collect()
@@ -370,9 +394,22 @@ pub fn runtime(
                     "what its items do used in the air: change blocks and the stack in hand\n/// through `world`, and return true where Java's `InteractionResult` is `SUCCESS` or\n/// `CONSUME`, false for `PASS`"
                 }
             };
+            // Its blocks' registrations, where they pass the class different things:
+            // the function tells them apart by `block`.
+            let registered = if b.registered.is_empty() {
+                String::new()
+            } else {
+                let mut t = String::from(
+                    "\n///\n/// Its blocks pass the class different things; tell them apart by the block:",
+                );
+                for (id, args) in &b.registered {
+                    let _ = write!(t, "\n/// - `{id}`: `{args}`");
+                }
+                t
+            };
             let _ = write!(
                 r,
-                "\n/// `{simple}`'s {methods}: {what}.\n///\n/// TODO: port from {class} ({methods}).\nfn {f}({sig}) -> {ret} {{\n    let _ = {discard};\n    {none}\n}}\n",
+                "\n/// `{simple}`'s {methods}: {what}.{registered}\n///\n/// TODO: port from {class} ({methods}).\nfn {f}({sig}) -> {ret} {{\n    let _ = {discard};\n    {none}\n}}\n",
                 class = b.class,
                 f = b.function,
                 discard = if call.contains(',') {
