@@ -2444,10 +2444,10 @@ fn {id}_net_from_server(game: &mut crate::game::Game<'_>, channel: &str, data: &
 fn {id}_menu_quick_move(
     game: &mut crate::game::Game<'_>,
     pos: [i32; 3],
-    entity: &mut horizon_client::containers::ModBlockEntity,
+    entity: &mut ModBlockEntity,
     container_slots: usize,
     slot: usize,
-    stack: &mut horizon_client::items::ItemStack,
+    stack: &mut ItemStack,
     handled: &mut bool,
 ) {{
     use crate::game::{m} as m;

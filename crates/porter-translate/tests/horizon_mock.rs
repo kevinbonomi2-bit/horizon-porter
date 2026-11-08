@@ -942,6 +942,42 @@ fn splice(hooks_list: &[(&str, &str)], manifest: &toml::Table, mixins: &Path) ->
                 .iter()
                 .map(|b| b["value"].as_str().unwrap())
                 .collect();
+            // horizon-mixins' E_INVALID_BINDING: the helper's parameters are the
+            // bindings' names and types, in their order, as written.
+            let declared: Vec<String> = inj["bindings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|b| format!("{}: {}", b["name"].as_str().unwrap(), b["ty"].as_str().unwrap()))
+                .collect();
+            let after = source.split(&format!("fn {fn_name}(")).nth(1).unwrap();
+            let mut depth = 0;
+            let end = after
+                .char_indices()
+                .find(|(_, c)| {
+                    match c {
+                        '(' | '<' | '[' => depth += 1,
+                        ')' | '>' | ']' if depth > 0 => depth -= 1,
+                        ')' => return true,
+                        _ => {}
+                    }
+                    false
+                })
+                .map_or(after.len(), |(i, _)| i);
+            let squash = |t: &str| t.split_whitespace().collect::<Vec<_>>().join(" ");
+            let params: Vec<String> = after[..end]
+                .split(',')
+                .map(squash)
+                .filter(|p| !p.is_empty())
+                .collect();
+            // Split on commas inside types too (`[i32; 3]` has none, tuples might):
+            // compare the joined text.
+            assert_eq!(
+                squash(&params.join(", ")).replace(" ,", ","),
+                squash(&declared.join(", ")),
+                "{}: helper parameters must match its bindings",
+                helper.display()
+            );
             // Pasted in, as horizon-mixins does (include! cannot add items here).
             let _ = writeln!(
                 hooks,
