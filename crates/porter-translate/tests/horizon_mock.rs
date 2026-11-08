@@ -585,6 +585,7 @@ __LEVEL_HOOKS__
             pub fn native_net_send_to_server(&mut self, channel: &str, data: &[u8]) -> Result<(), String> { Ok(()) }
             pub fn native_held(&self) -> Option<(String, u32, bool)> { None }
             pub fn native_give_items(&mut self, item: &str, count: u32) -> u32 { 0 }
+            pub fn native_summon(&mut self, dimension: &str, kind: &str, pos: [f64; 3], nbt: Compound) -> Option<u32> { None }
             pub fn native_data(&self, path: &str) -> Option<Vec<u8>> { None }
             pub fn native_level_send_particles(&mut self, options: &ParticleOptions, state: Option<BlockStateId>, at: [f64; 3], spread: [f64; 3], speed: f64, count: i32) -> bool { false }
             pub fn native_set_block(&mut self, dimension: &str, pos: [i32; 3], state: BlockStateId, flags: i32) -> bool { false }

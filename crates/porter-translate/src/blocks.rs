@@ -647,6 +647,25 @@ const ITEM_WORLD: &str = r#"{tags}    struct Here<'g, 'a> {
             self.changed = true;
             self.game.native_give_items(item, count)
         }
+        fn drop(&mut self, item: &str, count: u32, at: [f64; 3], motion: [f64; 3]) {
+            use horizon_world::nbt::{Compound, JavaString, Tag};
+            if count == 0 || item == "minecraft:air" {
+                return;
+            }
+            self.changed = true;
+            // `/summon minecraft:item x y z {Item: {id, count}, Motion: [..]}`.
+            let mut stack = Compound::new();
+            stack.insert(JavaString::from("id"), Tag::String(JavaString::from(item)));
+            stack.insert(JavaString::from("count"), Tag::Int(count.min(99) as i32));
+            let mut nbt = Compound::new();
+            nbt.insert(JavaString::from("Item"), Tag::Compound(stack));
+            nbt.insert(
+                JavaString::from("Motion"),
+                Tag::List(motion.iter().map(|v| Tag::Double(v.to_bits())).collect()),
+            );
+            let dimension = self.game.native_dimension();
+            let _ = self.game.native_summon(dimension, "minecraft:item", at, nbt);
+        }
         fn set_held(&mut self, item: &str, count: u32) {
             self.changed = true;
             *self.game.held_mut() = (count > 0 && item != "minecraft:air")
@@ -776,6 +795,11 @@ const ENTITY_WORLD: &str = r#"    impl m::BlockEntities for Here<'_, '_> {
             let set = self
                 .game
                 .native_with_mod_block_entity(pos, |e| {
+                    // Horizon sizes a block entity's slots when it ticks or opens a menu: one
+                    // that does neither (a cutting board) gets them here.
+                    if slot < 256 && e.items.len() <= slot {
+                        e.items.resize_with(slot + 1, || None);
+                    }
                     let Some(cell) = e.items.get_mut(slot) else {
                         return false;
                     };
@@ -1231,6 +1255,13 @@ pub trait World: Blocks {
     fn give(&mut self, item: &str, count: u32) -> u32 {
         let _ = (item, count);
         0
+    }
+    /// Drops `count` of `item` into the world at `at` (world coordinates), moving at
+    /// `motion` blocks a tick (`level.addFreshEntity(new ItemEntity(..))`,
+    /// `Block.popResource`, `Containers.dropItemStack`): what a cutting board's cut or
+    /// a broken feast leaves.
+    fn drop(&mut self, item: &str, count: u32, at: [f64; 3], motion: [f64; 3]) {
+        let _ = (item, count, at, motion);
     }
     /// Puts `count` of `item` in the hand that clicked (`player.setItemInHand(hand,
     /// stack)`); `minecraft:air` or 0 empties it.

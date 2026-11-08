@@ -290,6 +290,9 @@ pub struct Machine<'a> {
     pub tags: Option<&'a dyn Fn(&str, &str, &str) -> bool>,
     /// The random's state: `machine.random()` draws from it.
     pub seed: u64,
+    /// Its block's `facing` (`getBlockState().getValue(FACING)`), when it has one:
+    /// `north`.
+    pub facing: Option<String>,
 }
 
 /// A particle burst or a sound a tick plays, near its block.
@@ -303,6 +306,14 @@ pub enum Effect {
         spread: [f64; 3],
         speed: f64,
         count: i32,
+    },
+    /// An item dropped into the world (`level.addFreshEntity(new ItemEntity(..))`,
+    /// `Containers.dropItemStack`): a skillet's cooked food, a stove's.
+    Drop {
+        item: String,
+        count: u32,
+        at: [f64; 3],
+        motion: [f64; 3],
     },
     /// `level.playSound(null, x, y, z, sound, SoundSource.BLOCKS, volume, pitch)`.
     Sound {
@@ -449,6 +460,7 @@ impl<'a> Machine<'a> {
             recipes,
             tags: None,
             seed: 0x9E37_79B9_7F4A_7C15,
+            facing: None,
         }
     }
 
@@ -486,6 +498,18 @@ impl<'a> Machine<'a> {
             spread,
             speed,
             count,
+        });
+    }
+
+    /// Drops `count` of `item` into the world at `at` (world coordinates), moving at
+    /// `motion` blocks a tick, after the tick: what a skillet ejects when its food is
+    /// cooked (`ItemEntity`, `Containers.dropItemStack`).
+    pub fn drop(&mut self, item: &str, count: u32, at: [f64; 3], motion: [f64; 3]) {
+        self.effects.push(Effect::Drop {
+            item: item.to_string(),
+            count,
+            at,
+            motion,
         });
     }
 

@@ -1574,6 +1574,26 @@ fn {id}_block_entity_tick(
         }}
     }}
     let recipes = |kind: &str| -> Vec<m::Recipe> {{
+        // Cooking types (a skillet's campfire recipes): vanilla's and the mod's own, from
+        // the table the porter wrote; Horizon's lookup serves the mods' own types.
+        if m::COOKING.iter().any(|(k, ..)| *k == kind) {{
+            return m::COOKING
+                .iter()
+                .filter(|(k, ..)| *k == kind)
+                .map(|(_, input, result, count, ticks)| {{
+                    let items = names(&serde_json::Value::String((*input).into()))
+                        .and_then(|n| game.native_recipe_ingredient(&n))
+                        .map(|i| i.order)
+                        .unwrap_or_default();
+                    m::Recipe {{
+                        id: format!("{{kind}}/{{result}}"),
+                        ingredients: vec![items],
+                        result: Some(m::Stack::new(result, *count)),
+                        values: vec![("cookingtime".into(), ticks.to_string())],
+                    }}
+                }})
+                .collect();
+        }}
         game.native_recipes_of_type(kind)
             .iter()
             .map(|r| {{
@@ -1655,6 +1675,8 @@ fn {id}_block_entity_tick(
     }}
     machine.neighbours = neighbours;
     machine.block = block_here;
+    // Its `facing`, as the block stores it.
+    machine.facing = game.native_block_property(pos, "facing");
     // Its tanks and energy, as Horizon keeps them: `fluids` (a list of
     // `{{Fluid, Amount}}`) and the int `energy`.
     let storage = m::STORAGE.iter().find(|(id, _, _)| *id == entity.id);
@@ -1800,6 +1822,20 @@ fn {id}_block_entity_tick(
                 if let Some(options) = options {{
                     let _ = game.native_level_send_particles(&options, None, at, spread, speed, count);
                 }}
+            }}
+            m::Effect::Drop {{ item, count, at, motion }} => {{
+                use horizon_world::nbt::{{Compound, Tag}};
+                let mut stack = Compound::new();
+                stack.insert(JavaString::from("id"), Tag::String(JavaString::from(item.as_str())));
+                stack.insert(JavaString::from("count"), Tag::Int(count.min(99) as i32));
+                let mut nbt = Compound::new();
+                nbt.insert(JavaString::from("Item"), Tag::Compound(stack));
+                nbt.insert(
+                    JavaString::from("Motion"),
+                    Tag::List(motion.iter().map(|v| Tag::Double(v.to_bits())).collect()),
+                );
+                let dimension = game.native_dimension();
+                let _ = game.native_summon(dimension, "minecraft:item", at, nbt);
             }}
             m::Effect::Sound {{ sound, at, volume, pitch }} => {{
                 // SoundSource.BLOCKS
