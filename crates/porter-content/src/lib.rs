@@ -342,6 +342,28 @@ pub fn generate_with(
             }
             None
         });
+        // Random ticks: its class (or a mod superclass) has a `randomTick` the port
+        // runs from `native_random_tick`, which Horizon calls only for blocks that
+        // tick randomly; a template that doesn't (dirt under compost) would never.
+        let ticks_randomly = class.as_deref().is_some_and(|c| {
+            let mut name = c.to_string();
+            for _ in 0..8 {
+                let Some(k) = scan.classes.iter().find(|k| k.name == name) else {
+                    return false;
+                };
+                if k.method_names.iter().any(|m| m == "randomTick") {
+                    return true;
+                }
+                match &k.superclass {
+                    Some(sup) => name = sup.clone(),
+                    None => return false,
+                }
+            }
+            false
+        });
+        if ticks_randomly {
+            properties.insert("random_ticks".into(), true.into());
+        }
         let mut connecting = None;
         if let Some(s) = shape {
             if let Some(thickness) = s.pipe_thickness {
@@ -2657,6 +2679,10 @@ fn block_properties(args: &str) -> serde_json::Map<String, serde_json::Value> {
     }
     if args.contains(".requiresCorrectToolForDrops()") {
         p.insert("requires_tool".into(), true.into());
+    }
+    // It ticks randomly whatever its template does (a crop, a spreading soil).
+    if args.contains(".randomTicks()") {
+        p.insert("random_ticks".into(), true.into());
     }
     // Its neighbours' faces are drawn and light passes it (a shaft, glass, a pipe).
     if args.contains(".noOcclusion()") {

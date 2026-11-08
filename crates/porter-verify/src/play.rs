@@ -778,8 +778,9 @@ impl Game {
     /// A right click on the block at `pos`: on its side toward the player, else on
     /// its top (a low block, a bridge's deck, shows no side from eye height).
     fn click(&self, pos: [i32; 3]) -> Value {
-        // A menu the last click left open (a cabinet's) would take this one.
-        self.run(&["close"], 30);
+        // A menu or screen the last click left open (a cabinet's, a sign's editor)
+        // would take this one.
+        self.close_screen();
         // The click must land on this block: a neighbour in the way takes it
         // otherwise, and the reply says which block it met.
         let hit = |reply: &Value| {
@@ -857,9 +858,28 @@ impl Game {
                 .as_str()
                 .is_some_and(|s| !matches!(s, "playing" | "" | "none"));
         if open {
-            self.run(&["close"], 30);
+            self.close_screen();
         }
         open
+    }
+
+    /// Closes whatever screen is open: a menu with `close`, a sign's editor (which
+    /// `close` leaves) with Escape or its Done button.
+    fn close_screen(&self) {
+        let playing = |g: &Self| {
+            g.run(&["state"], 30)["screen"]
+                .as_str()
+                .is_none_or(|s| matches!(s, "playing" | "" | "none"))
+        };
+        self.run(&["close"], 30);
+        if playing(self) {
+            return;
+        }
+        self.run(&["key", "esc"], 30);
+        if playing(self) {
+            return;
+        }
+        self.run(&["click-button", "Done"], 30);
     }
 
     fn interact(&self, [x, y, z]: [i32; 3], face: &str) -> Value {

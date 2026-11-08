@@ -7,6 +7,16 @@ already supports, so the porter alone can close it.
 
 ## Tier 1: Horizon has the hook, the porter doesn't wire it
 
+**Done 2026-11-08** (commits 841e17f..): every row but `neighborChanged` is wired, with a
+stub to translate, and blocks with `randomTick` or `.randomTicks()` tick randomly. In the
+150-mod census the ports now name `randomTick`, `canSurvive`, `setPlacedBy` and
+`playerWillDestroy` in every mod that has them, tooltips in 13 of 15, comparators in 6
+of 10, and `quickMoveStack` in 7 of 16: the rest are menus with no block (backpacks,
+anvils, Curios), which aren't machines. Two hooks can't take ported code (requests
+#13 and #14 in the Horizon request): `stepOn`/`entityInside` (static) and slot rules
+(in `horizon-client-lib`). Checked in game: Farmer's Delight's compost advances on
+random ticks, and the pot's shift-click moves its input to the player.
+
 The Java method is common, Horizon has a hook point for it, and the porter drops it
 today. Each one is the same kind of work as `useItemOn` → `right_click_block`: find
 the method, write a stub in runtime.rs, wire the hook, give the translation a `World`.
