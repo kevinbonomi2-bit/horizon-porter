@@ -16,6 +16,9 @@ const DATA_KINDS: &[&str] = &["recipe", "loot_table", "tags", "structure", "worl
 const SKIPPED_ASSETS: &[&str] = &["shaders"];
 /// Namespaces a content mod can't list as its own.
 const SHARED_NAMESPACES: &[&str] = &["minecraft", "c", "horizon"];
+/// Asset kinds that make a namespace the mod's own: it names, models or draws
+/// blocks and items there.
+const OWN_ASSETS: &[&str] = &["lang", "blockstates", "items", "models"];
 
 /// A block the content mod adds.
 #[derive(Debug, Clone, PartialEq)]
@@ -113,6 +116,24 @@ pub fn generate_with(
         namespaces.insert(ns.to_string());
     }
 
+    // The mod's own namespaces: its id's, and any it gives blocks, items or names
+    // to. The rest are other mods' (Xaero's map icons, Create's tags, EMI's
+    // recipe trees): Java merges them into those mods, Horizon gives each
+    // namespace to one content mod, so two mods carrying the same compat files
+    // keep each other from loading. They do nothing without that mod anyway.
+    let mut own: BTreeSet<String> = BTreeSet::from([ns.to_string(), id.to_string()]);
+    for res in &scan.resources.roots {
+        for (rel, _) in walk(&root.join(res)) {
+            let parts: Vec<&str> = rel.split('/').collect();
+            if let ["assets", n, category, ..] = parts.as_slice() {
+                if OWN_ASSETS.contains(category) {
+                    own.insert(n.to_string());
+                }
+            }
+        }
+    }
+    let mut foreign = BTreeSet::new();
+
     // The Java mod's own resources, from every resource root.
     for res in &scan.resources.roots {
         let base = root.join(res);
@@ -121,6 +142,10 @@ pub fn generate_with(
             let [kind, ns, category, ..] = parts.as_slice() else {
                 continue;
             };
+            if !SHARED_NAMESPACES.contains(ns) && !own.contains(*ns) {
+                foreign.insert(ns.to_string());
+                continue;
+            }
             let keep = match *kind {
                 // Vanilla's atlases take added sources; other vanilla assets stay vanilla's.
                 "assets" if *ns == "minecraft" => *category == "atlases",
@@ -175,6 +200,11 @@ pub fn generate_with(
             }
             content.copies.entry(rel).or_insert(src);
         }
+    }
+    for n in &foreign {
+        content.skipped.push(format!(
+            "assets/{n}, data/{n}: another mod's ({n}) compat files, left out: they work only with that mod, and a second mod carrying them would keep this one from loading"
+        ));
     }
 
     // A block file for each block registration, an item file for each item that is
