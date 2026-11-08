@@ -51,6 +51,23 @@ pub(crate) fn resolve(sources: &[(String, String)], scan: &mut ModScan) {
             reg.args = format!("{}\n/* super */ {sup}", reg.args);
         }
     }
+    // Foods and consumables: the components their constants build.
+    for (_, src) in sources {
+        for (field, init) in typed_fields(src, "FoodProperties") {
+            if let Some(json) = food(src, &init) {
+                let owner = enclosing_class(src, &field);
+                scan.foods
+                    .push((format!("{owner}.{field}"), json.to_string()));
+            }
+        }
+        for (field, init) in typed_fields(src, "Consumable") {
+            if let Some(json) = consumable(src, &init) {
+                let owner = enclosing_class(src, &field);
+                scan.consumables
+                    .push((format!("{owner}.{field}"), json.to_string()));
+            }
+        }
+    }
     for (class, src) in sources {
         let owner = class.rsplit(['.', '$']).next().unwrap_or(class);
         for (field, init) in typed_fields(src, "ToolMaterial") {
@@ -121,6 +138,135 @@ pub(crate) fn speed_multipliers(sources: &[(String, String)], scan: &mut ModScan
             }
         }
     }
+}
+
+/// The innermost class declared before the field `field`'s declaration in `src`
+/// (`ConsumableValues` for a constant of a nested class).
+fn enclosing_class(src: &str, field: &str) -> String {
+    let at = src.find(&format!(" {field} =")).unwrap_or(src.len());
+    let before = &src[..at];
+    // The last `class X` whose body is still open at the field.
+    let mut best = String::new();
+    let mut from = 0;
+    while let Some(i) = before[from..].find("class ").map(|i| from + i) {
+        from = i + 6;
+        let name: String = before[from..]
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect();
+        let Some(open) = before[from..].find('{').map(|o| from + o) else {
+            continue;
+        };
+        let body = &before[open..];
+        let depth = body.matches('{').count() as i64 - body.matches('}').count() as i64;
+        if depth > 0 && !name.is_empty() {
+            best = name;
+        }
+    }
+    best
+}
+
+/// A number, or a constant of `src` that holds one (`BRIEF_DURATION = 600`).
+fn number_in(src: &str, text: &str) -> Option<f64> {
+    let t = text.trim().trim_end_matches(['f', 'F', 'd', 'D', 'L']);
+    if let Ok(v) = t.parse() {
+        return Some(v);
+    }
+    let name = t.rsplit('.').next()?;
+    let init = field_init(src, name)?;
+    let i = init.trim().trim_end_matches(['f', 'F', 'd', 'D', 'L']);
+    i.parse().ok()
+}
+
+/// `new FoodProperties.Builder().nutrition(12).saturationModifier(0.8F).alwaysEdible().build()`
+/// as the `minecraft:food` component (saturation is nutrition × modifier × 2).
+fn food(src: &str, init: &str) -> Option<serde_json::Value> {
+    if !init.contains("nutrition(") && !init.contains("alwaysEdible") {
+        return None;
+    }
+    let arg = |call: &str| calls(init, call).first().and_then(|a| number_in(src, a));
+    let nutrition = arg("nutrition").unwrap_or(0.0);
+    let modifier = arg("saturationModifier").unwrap_or(0.0);
+    Some(serde_json::json!({
+        "nutrition": nutrition as i64,
+        "saturation": nutrition * modifier * 2.0,
+        "can_always_eat": init.contains("alwaysEdible()"),
+    }))
+}
+
+/// `Consumables.defaultDrink().onConsume(new ApplyStatusEffectsConsumeEffect(..)).build()`
+/// as the `minecraft:consumable` component: vanilla's effect kinds only; one of the
+/// mod's own (a heal) is left out.
+fn consumable(src: &str, init: &str) -> Option<serde_json::Value> {
+    let drink = init.contains("defaultDrink()");
+    if !drink && !init.contains("defaultFood()") && !init.contains("Consumable.builder()") {
+        return None;
+    }
+    let mut c = serde_json::json!({
+        "consume_seconds": 1.6,
+        "animation": if drink { "drink" } else { "eat" },
+        "sound": if drink { "minecraft:entity.generic.drink" } else { "minecraft:entity.generic.eat" },
+        "has_consume_particles": !drink,
+        "on_consume_effects": [],
+    });
+    if let Some(s) = calls(init, "consumeSeconds")
+        .first()
+        .and_then(|a| number_in(src, a))
+    {
+        c["consume_seconds"] = s.into();
+    }
+    let effect_id = |text: &str| -> Option<String> {
+        let t = text.trim();
+        let (class, name) = t.rsplit_once('.')?;
+        let id = name.to_ascii_lowercase();
+        Some(if class.ends_with("MobEffects") {
+            format!("minecraft:{id}")
+        } else {
+            id
+        })
+    };
+    let mut effects = Vec::new();
+    for on in calls(init, "onConsume") {
+        let on = on.trim();
+        if let Some(args) = call_args(on, "new ApplyStatusEffectsConsumeEffect") {
+            let mut list = Vec::new();
+            for inst in calls(&args.join(","), "new MobEffectInstance") {
+                let parts = split_args(&inst);
+                let Some(id) = parts.first().and_then(|p| effect_id(p)) else {
+                    continue;
+                };
+                let duration = parts.get(1).and_then(|p| number_in(src, p)).unwrap_or(0.0);
+                let amplifier = parts.get(2).and_then(|p| number_in(src, p)).unwrap_or(0.0);
+                list.push(serde_json::json!({
+                    "id": id,
+                    "duration": duration as i64,
+                    "amplifier": amplifier as i64,
+                }));
+            }
+            // A probability after the instance (`new ApplyStatusEffectsConsumeEffect(instance, 1.0F)`).
+            let probability = args
+                .last()
+                .filter(|a| !a.contains("MobEffectInstance"))
+                .and_then(|a| number_in(src, a))
+                .unwrap_or(1.0);
+            if !list.is_empty() {
+                effects.push(serde_json::json!({
+                    "type": "minecraft:apply_effects",
+                    "effects": list,
+                    "probability": probability,
+                }));
+            }
+        } else if let Some(args) = call_args(on, "new RemoveStatusEffectsConsumeEffect") {
+            if let Some(id) = args.first().and_then(|a| effect_id(a)) {
+                effects
+                    .push(serde_json::json!({ "type": "minecraft:remove_effects", "effects": id }));
+            }
+        } else if on.starts_with("new ClearAllStatusEffectsConsumeEffect") {
+            effects.push(serde_json::json!({ "type": "minecraft:clear_all_effects" }));
+        }
+    }
+    c["on_consume_effects"] = serde_json::Value::Array(effects);
+    Some(c)
 }
 
 fn is_ident(s: &str) -> bool {

@@ -837,6 +837,61 @@ pub fn generate_with(
                     "on_consume_effects": [],
                 }
             });
+        }
+        // Its food and how it is eaten or drunk, from the mod's constants
+        // (`FoodValues.BEEF_STEW`, `FoodValues.ConsumableValues.APPLE_CIDER`): the
+        // template's own replaced.
+        let named = |name: &str| {
+            reg.args.match_indices(name).any(|(i, _)| {
+                let after = reg.args[i + name.len()..].chars().next();
+                let before = reg.args[..i].chars().next_back();
+                !after.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
+                    && !before.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
+            })
+        };
+        let food = scan.foods.iter().find(|(n, _)| named(n));
+        let consumable = scan.consumables.iter().find(|(n, _)| named(n));
+        if food.is_some() || consumable.is_some() {
+            let mut components = json["components"].as_object().cloned().unwrap_or_default();
+            if let Some(f) =
+                food.and_then(|(_, j)| serde_json::from_str::<serde_json::Value>(j).ok())
+            {
+                components.insert("minecraft:food".into(), f);
+            }
+            if let Some(c) =
+                consumable.and_then(|(_, j)| serde_json::from_str::<serde_json::Value>(j).ok())
+            {
+                // The effect ids of the mod's own effects get its namespace.
+                let mut c = c;
+                if let Some(list) = c["on_consume_effects"].as_array_mut() {
+                    for e in list {
+                        if let Some(effects) = e["effects"].as_array_mut() {
+                            for x in effects {
+                                if let Some(id) = x["id"].as_str().filter(|i| !i.contains(':')) {
+                                    x["id"] = format!("{ns}:{id}").into();
+                                }
+                            }
+                        }
+                    }
+                }
+                components.insert("minecraft:consumable".into(), c);
+            }
+            json["components"] = serde_json::Value::Object(components);
+        }
+        // A bowl food (`bowlFoodItem(..)`, `usingConvertsTo(Items.BOWL)`): the bowl comes
+        // back, and it stacks to 16.
+        if reg.args.contains("bowlFoodItem(") || reg.args.contains("usingConvertsTo(Items.BOWL)") {
+            let mut components = json["components"].as_object().cloned().unwrap_or_default();
+            components.insert(
+                "minecraft:use_remainder".into(),
+                serde_json::json!({ "id": "minecraft:bowl" }),
+            );
+            json["components"] = serde_json::Value::Object(components);
+            if json.get("max_stack_size").is_none() {
+                json["max_stack_size"] = 16.into();
+            }
+        }
+        if json.get("components").is_some() {
         } else if reg.args.contains("fireResistant()") {
             // `Item.Properties.fireResistant()`: it doesn't burn in lava or fire.
             json["components"] = serde_json::json!({ "minecraft:damage_resistant": { "types": "#minecraft:is_fire" } });

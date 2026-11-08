@@ -197,6 +197,8 @@ pub(crate) fn scan(path: &Path) -> Result<ModScan> {
         vanilla_menus: Vec::new(),
         full_interaction: Vec::new(),
         tool_materials: Vec::new(),
+        foods: Vec::new(),
+        consumables: Vec::new(),
         armor_materials: Vec::new(),
         storages: Vec::new(),
         block_shapes: Vec::new(),

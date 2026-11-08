@@ -249,6 +249,14 @@ pub struct ModScan {
     /// stats come from.
     #[serde(default)]
     pub tool_materials: Vec<ToolMaterialInfo>,
+    /// The mod's food constants (`new FoodProperties.Builder().nutrition(4)..`), as
+    /// (`FoodValues.BEEF_STEW`, the `minecraft:food` component as JSON).
+    #[serde(default)]
+    pub foods: Vec<(String, String)>,
+    /// The mod's consumable constants (`Consumables.defaultDrink().onConsume(..)`), as
+    /// (`ConsumableValues.APPLE_CIDER`, the `minecraft:consumable` component as JSON).
+    #[serde(default)]
+    pub consumables: Vec<(String, String)>,
     /// The mod's armor materials (`new ArmorMaterial(..)` constants).
     #[serde(default)]
     pub armor_materials: Vec<ArmorMaterialInfo>,
