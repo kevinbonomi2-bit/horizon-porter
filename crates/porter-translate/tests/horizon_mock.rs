@@ -109,6 +109,22 @@ const HOOKS: &[(&str, &str)] = &[
         "native_use_item",
         "&mut self, stack: &ItemStack, claimed: &mut bool",
     ),
+    (
+        "native_place_block",
+        "&mut self, stack: &ItemStack, pos: [i32; 3], state: BlockStateId",
+    ),
+    (
+        "native_destroy_block",
+        "&mut self, pos: [i32; 3], state: BlockStateId, canceled: &mut bool",
+    ),
+    (
+        "native_menu_quick_move",
+        "&mut self, pos: [i32; 3], entity: &mut ModBlockEntity, container_slots: usize, slot: usize, stack: &mut ItemStack, handled: &mut bool",
+    ),
+    (
+        "native_tooltip",
+        "&self, stack: &ItemStack, lines: &mut Vec<(Text, u32)>",
+    ),
 ];
 
 /// The hooks on `GameLevel` (a server level), as in native_hooks.rs.
@@ -120,6 +136,26 @@ const LEVEL_HOOKS: &[(&str, &str)] = &[
     (
         "native_update_shape",
         "&self, ticks: &mut Ticks, dimension: LevelDimension, pos: BlockPos, state: BlockStateId, direction: Direction, neighbour_pos: BlockPos, neighbour: BlockStateId, new: &mut Option<BlockStateId>",
+    ),
+    (
+        "native_random_tick",
+        "&mut self, ticks: &mut Ticks, dimension: LevelDimension, pos: BlockPos, state: BlockStateId, handled: &mut bool",
+    ),
+    (
+        "native_tick_block",
+        "&mut self, ticks: &mut Ticks, dimension: LevelDimension, pos: BlockPos, state: BlockStateId, handled: &mut bool",
+    ),
+    (
+        "native_can_survive",
+        "&self, dimension: LevelDimension, pos: BlockPos, state: BlockStateId, survives: &mut Option<bool>",
+    ),
+    (
+        "native_has_analog_output",
+        "&self, state: BlockStateId, output: &mut bool",
+    ),
+    (
+        "native_analog_output",
+        "&self, dimension: LevelDimension, pos: BlockPos, state: BlockStateId, face: Direction, output: &mut i32",
     ),
 ];
 
@@ -477,6 +513,12 @@ pub mod game {
         #[allow(unused_imports)]
         use crate::horizon_core;
         use crate::horizon_core::geometry::Direction;
+        // horizon-client-core's text: a tooltip line.
+        pub struct Text;
+        impl Text {
+            pub fn literal(s: impl Into<String>) -> Self { let _ = s.into(); Text }
+            pub fn translate(key: &str, args: &[Text]) -> Self { let _ = (key, args); Text }
+        }
         pub struct NativeContainerSlot {
             pub slot: usize,
             pub stack: Option<ItemStack>,
@@ -540,6 +582,11 @@ pub mod game {
         impl GameLevel<'_> {
             pub fn native_state_block(&self, state: BlockStateId) -> Option<&str> { None }
             pub fn native_state_with_property(&self, state: BlockStateId, key: &str, value: &str) -> Option<BlockStateId> { None }
+            pub fn native_set_block_property(&mut self, ticks: &mut Ticks, pos: [i32; 3], key: &str, value: &str, flags: i32) -> bool { false }
+            pub fn native_play_sound(&mut self, sound: &str, at: [f64; 3], source: usize, volume: f32, pitch: f32) -> bool { false }
+            pub fn native_send_particles(&mut self, options: &ParticleOptions, state: Option<BlockStateId>, at: [f64; 3], spread: [f64; 3], speed: f64, count: i32) -> bool { false }
+            pub fn native_schedule_block_tick(&self, ticks: &mut Ticks, pos: [i32; 3], block: &str, delay: i32) -> bool { false }
+            pub fn native_level_random(&mut self) -> Option<&mut crate::horizon_core::random::LegacyRandom> { None }
         }
 
         impl GameLevel<'_> {
@@ -727,9 +774,12 @@ fn machine_helpers_compile_against_horizon_api() {
         "screen_mouse_button_pressed_pre",
         "screen_key_pressed_pre",
         "screen_mouse_scrolled_pre",
+        "menu_quick_move",
     ] {
         assert!(b.wired.contains_key(hook), "{hook}");
     }
+    // The crusher's menu decides its shift-clicks.
+    assert!(b.files[&format!("mixins/{}/runtime.rs", b.id)].contains("TODO: port `quickMoveStack` of net.grind.machine.CrusherMenu."));
     // The cabinet opens a chest's menu over its own slots.
     let runtime = &b.files[&format!("mixins/{}/runtime.rs", b.id)];
     assert!(
@@ -769,6 +819,14 @@ fn block_behaviour_helpers_compile_against_horizon_api() {
         "update_shape",
         "use_item_on",
         "use_item",
+        "random_tick",
+        "tick_block",
+        "can_survive",
+        "has_analog_output",
+        "analog_output",
+        "place_block",
+        "destroy_block",
+        "item_tooltip",
     ] {
         assert!(b.wired.contains_key(hook), "{hook}: {:?}", b.wired.keys());
     }
@@ -778,6 +836,18 @@ fn block_behaviour_helpers_compile_against_horizon_api() {
     assert!(runtime.contains("TODO: port from net.shutters.Shutter (`getStateForPlacement`)"));
     assert!(runtime.contains("TODO: port from net.shutters.Shutter (`useWithoutItem`)"));
     assert!(runtime.contains("TODO: port from net.shutters.Gate (`updateShape`)"));
+    // Its ticks, survival, comparator signal, placing, breaking and tooltip.
+    for what in [
+        "(`randomTick`)",
+        "(`tick`)",
+        "(`canSurvive`)",
+        "(`getAnalogOutputSignal`)",
+        "(`setPlacedBy`)",
+        "(`playerWillDestroy`)",
+        "(`appendHoverText`)",
+    ] {
+        assert!(runtime.contains(&format!("TODO: port from net.shutters.Shutter {what}")), "{what}");
+    }
     // The wrench turns what it is used on; the whistle blows in the air.
     assert!(
         runtime.contains("TODO: port from net.shutters.Wrench (`useOn`)"),

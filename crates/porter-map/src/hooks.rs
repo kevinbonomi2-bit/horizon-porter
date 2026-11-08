@@ -84,8 +84,15 @@ pub fn catalog() -> &'static Catalog {
     })
 }
 
-/// The hook named `name` (`hud`), if Horizon has it.
+/// The hook named `name` (`hud`), if Horizon has it. A second use of a hook the
+/// porter wires for its own reasons goes by another name (`item_tooltip`: the
+/// tooltip lines a mod's items' `appendHoverText` adds, beside the `tooltip` its
+/// tooltip events map to) and is the same hook.
 pub fn hook(name: &str) -> Option<&'static HorizonHook> {
+    let name = match name {
+        "item_tooltip" => "tooltip",
+        other => other,
+    };
     catalog().hooks.iter().find(|h| h.name == name)
 }
 

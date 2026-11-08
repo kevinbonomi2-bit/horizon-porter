@@ -372,6 +372,11 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
             .extend(menus);
         wired.insert("screen", screens.clone());
         wired.insert("screen_draw", screens);
+        // Shift-clicks the menu's Java decides (`quickMoveStack`).
+        let movers: BTreeSet<String> = machines.iter().filter_map(|m| m.quick_move.clone()).collect();
+        if !movers.is_empty() {
+            wired.insert("menu_quick_move", movers);
+        }
     }
     // Network messages: decoded where they arrive, handled in runtime.rs.
     let messages = netconf::messages(&scan.payloads, &id);
@@ -2431,11 +2436,82 @@ fn {id}_net_from_server(game: &mut crate::game::Game<'_>, channel: &str, data: &
                     config = self.ensure_config("&*game"),
                 ),
             ),
+            "menu_quick_move" => (
+                "menu_quick_move.rs",
+                format!(
+                    r#"// A shift-click in one of {name}'s machine menus: runtime.rs's `quick_move` runs the
+// menu's `quickMoveStack`; taken, the game's own routing is skipped.
+fn {id}_menu_quick_move(
+    game: &mut crate::game::Game<'_>,
+    pos: [i32; 3],
+    entity: &mut horizon_client::containers::ModBlockEntity,
+    container_slots: usize,
+    slot: usize,
+    stack: &mut horizon_client::items::ItemStack,
+    handled: &mut bool,
+) {{
+    use crate::game::{m} as m;
+    if *handled || !game.native_on(m::ID) {{
+        return;
+    }}
+    let block = game.native_block(pos);
+    let Some(menu) = m::MACHINES.iter().find(|x| x.block == block).map(|x| x.menu) else {{
+        return;
+    }};
+    if !m::moves_on_shift_click(menu) {{
+        return;
+    }}
+    let before: Vec<Option<m::Stack>> = (0..container_slots)
+        .map(|i| entity.items.get(i).and_then(Option::as_ref).map(|s| m::Stack::new(&s.item, s.count)))
+        .collect();
+    // Stack sizes, read before `give` borrows the game.
+    let mut sizes: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+    for s in before.iter().flatten().map(|s| s.item.clone()).chain(std::iter::once(stack.item.to_string())) {{
+        let n = game.items().get(&s).map_or(64, |i| i.max_stack);
+        sizes.insert(s, n);
+    }}
+    let max_stack = |item: &str| sizes.get(item).copied().unwrap_or(64);
+    let mut give = |item: &str, count: u32| game.native_give_items(item, count);
+    let q = m::QuickMove {{ slot, container_slots }};
+    let mut moving = m::Stack::new(&stack.item, stack.count);
+    let mut slots = m::MenuSlots::new(before.clone(), &max_stack, &mut give);
+    if !m::quick_move(menu, &q, &mut moving, &mut slots) {{
+        return;
+    }}
+    // The block's slots the move changed; the clicked slot holds what is left.
+    let mut after = slots.container;
+    if slot < container_slots {{
+        after[slot] = Some(moving.clone()).filter(|s| s.count > 0);
+    }}
+    if entity.items.len() < container_slots {{
+        entity.items.resize_with(container_slots, || None);
+    }}
+    for (i, (was, now)) in before.iter().zip(&after).enumerate() {{
+        if was != now {{
+            entity.items[i] = now
+                .as_ref()
+                .map(|s| horizon_client::items::ItemStack::new(&s.item, s.count));
+        }}
+    }}
+    stack.count = moving.count;
+    *handled = true;
+}}
+"#
+                ),
+            ),
             "right_click_block"
             | "state_for_placement"
             | "update_shape"
             | "use_item_on"
             | "use_item"
+            | "random_tick"
+            | "tick_block"
+            | "can_survive"
+            | "has_analog_output"
+            | "analog_output"
+            | "place_block"
+            | "destroy_block"
+            | "item_tooltip"
                 if !self.behaviours.is_empty() || !self.places.is_empty() =>
             {
                 blocks::helper(hook, id, m, name, !self.block_entities.is_empty())

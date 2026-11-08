@@ -41,6 +41,37 @@ public class Shutter extends Block {
         return InteractionResult.SUCCESS;
     }
 
+    protected void randomTick(BlockState state, ServerLevel level, BlockPos pos, RandomSource random) {
+        if (random.nextInt(10) == 0) {
+            level.setBlock(pos, state.cycle(OPEN), 3);
+        }
+    }
+
+    protected void tick(BlockState state, ServerLevel level, BlockPos pos, RandomSource random) {
+        level.setBlock(pos, state.setValue(OPEN, false), 3);
+    }
+
+    protected boolean canSurvive(BlockState state, LevelReader level, BlockPos pos) {
+        return !level.getBlockState(pos.below()).isAir();
+    }
+
+    protected int getAnalogOutputSignal(BlockState state, Level level, BlockPos pos, Direction direction) {
+        return state.getValue(OPEN) ? 15 : 0;
+    }
+
+    public void setPlacedBy(Level level, BlockPos pos, BlockState state, LivingEntity placer, ItemStack stack) {
+        level.scheduleTick(pos, this, 20);
+    }
+
+    public BlockState playerWillDestroy(Level level, BlockPos pos, BlockState state, Player player) {
+        level.playSound(null, pos, SoundEvents.WOODEN_TRAPDOOR_CLOSE, SoundSource.BLOCKS, 1.0F, 1.0F);
+        return super.playerWillDestroy(level, pos, state, player);
+    }
+
+    public void appendHoverText(ItemStack stack, Item.TooltipContext context, TooltipDisplay display, Consumer<Component> tooltip, TooltipFlag flag) {
+        tooltip.accept(Component.translatable("tooltip.shutters.shutter").withStyle(ChatFormatting.GRAY));
+    }
+
     protected void createBlockStateDefinition(Builder<Block, BlockState> builder) {
         builder.add(FACING, OPEN, HINGE);
     }

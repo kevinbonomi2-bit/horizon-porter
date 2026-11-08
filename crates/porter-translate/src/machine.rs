@@ -46,6 +46,9 @@ pub struct Machine {
     pub texture: Option<String>,
     /// Slots the scanner could not place (added in a loop it could not unroll).
     pub approximate: bool,
+    /// The class whose `quickMoveStack` decides a shift-click (the menu's, or a
+    /// superclass of the mod's own), when it has one.
+    pub quick_move: Option<String>,
 }
 
 /// The mod's machines: its block entities whose class opens one of its menus.
@@ -109,9 +112,24 @@ pub fn find(scan: &ModScan, ns: &str, id: &str, entities: &[BlockEntity]) -> Vec
             ],
             texture: screen.and_then(|s| texture(s, ns)),
             approximate: menu.approximate,
+            quick_move: quick_move_owner(scan, &menu.class),
         });
     }
     out
+}
+
+/// The nearest of `class` and its superclasses (the mod's own) that defines
+/// `quickMoveStack`.
+fn quick_move_owner(scan: &ModScan, class: &str) -> Option<String> {
+    let mut name = class.to_string();
+    for _ in 0..16 {
+        let c = scan.classes.iter().find(|c| c.name == name)?;
+        if c.method_names.iter().any(|m| m == "quickMoveStack") {
+            return Some(c.name.clone());
+        }
+        name = c.superclass.clone()?;
+    }
+    None
 }
 
 /// The menu a block entity opens: one its class names (`createMenu` returns
@@ -210,6 +228,102 @@ pub fn recipe_types(scan: &ModScan, ns: &str) -> Vec<String> {
 /// `Machine`. Every mod with block entities has them: `tick_block_entity` takes a
 /// `Machine` (empty for a block entity without slots).
 pub const MACHINE_TYPES: &str = r#"
+/// A shift-click in a machine's menu (`quickMoveStack(player, index)`).
+pub struct QuickMove {
+    /// The slot clicked, as the menu numbers it: the block's slots first
+    /// (`container_slots` of them), then the player's 27 and their hotbar's 9.
+    pub slot: usize,
+    pub container_slots: usize,
+}
+
+/// A machine menu's slots, as a shift-click moves between them: the block's own,
+/// then the player's inventory (27 slots and the hotbar's 9, reached by giving).
+pub struct MenuSlots<'a> {
+    /// The block's slots.
+    pub container: Vec<Option<Stack>>,
+    max_stack: &'a dyn Fn(&str) -> u32,
+    give: &'a mut dyn FnMut(&str, u32) -> u32,
+}
+
+impl<'a> MenuSlots<'a> {
+    /// `container` the block's slots, `max_stack` an item's stack size, `give` what
+    /// puts items in the player's inventory (how many it took).
+    pub fn new(
+        container: Vec<Option<Stack>>,
+        max_stack: &'a dyn Fn(&str) -> u32,
+        give: &'a mut dyn FnMut(&str, u32) -> u32,
+    ) -> Self {
+        Self { container, max_stack, give }
+    }
+
+    /// How many slots the block has (the first menu index of the player's inventory).
+    pub fn container_slots(&self) -> usize {
+        self.container.len()
+    }
+
+    /// The block's slot `i` (`this.slots.get(i).getItem()`, for `i` below
+    /// `container_slots`).
+    pub fn item(&self, i: usize) -> Option<&Stack> {
+        self.container.get(i).and_then(Option::as_ref)
+    }
+
+    /// Puts `stack` in the block's slot `i` (`slot.set(..)`).
+    pub fn set(&mut self, i: usize, stack: Option<Stack>) {
+        if let Some(cell) = self.container.get_mut(i) {
+            *cell = stack.filter(|s| s.count > 0);
+        }
+    }
+
+    /// Java's `moveItemStackTo(stack, start, end, reverse)`: moves what fits of `stack`
+    /// into menu slots `start..end` (indices as `QuickMove::slot` numbers them), onto
+    /// stacks of the same item first, then into empty slots, from the end when
+    /// `reverse`. True when anything moved; `stack` keeps the rest.
+    pub fn move_item_stack_to(&mut self, stack: &mut Stack, start: usize, end: usize, reverse: bool) -> bool {
+        let n = self.container.len();
+        let before = stack.count;
+        let own = start.min(n)..end.min(n);
+        let player = end > n && start < n + 36;
+        if reverse && player {
+            self.to_player(stack);
+        }
+        let max = (self.max_stack)(&stack.item).clamp(1, 99);
+        let order: Vec<usize> = if reverse { own.clone().rev().collect() } else { own.clone().collect() };
+        for &i in &order {
+            if stack.count == 0 {
+                break;
+            }
+            if let Some(Some(s)) = self.container.get_mut(i) {
+                if s.item == stack.item && s.count < max {
+                    let moved = (max - s.count).min(stack.count);
+                    s.count += moved;
+                    stack.count -= moved;
+                }
+            }
+        }
+        for &i in &order {
+            if stack.count == 0 {
+                break;
+            }
+            if let Some(cell @ None) = self.container.get_mut(i) {
+                let moved = max.min(stack.count);
+                *cell = Some(Stack::new(&stack.item, moved));
+                stack.count -= moved;
+            }
+        }
+        if !reverse && player && stack.count > 0 {
+            self.to_player(stack);
+        }
+        stack.count < before
+    }
+
+    fn to_player(&mut self, stack: &mut Stack) {
+        if stack.count > 0 {
+            let given = (self.give)(&stack.item, stack.count).min(stack.count);
+            stack.count -= given;
+        }
+    }
+}
+
 /// The level around a machine whose screen is open, as its Java screen reads it on
 /// the client (`menu.blockEntity.getLevel()`): its block's position, the blocks
 /// around it, tags. A pot's heat icon shows whether the block below heats it.
@@ -816,7 +930,42 @@ pub const MACHINES: &[MachineMenu] = &[
     r.push_str(
         "        _ => {\n            let _ = (data, at);\n            Vec::new()\n        }\n    }\n}\n",
     );
+
+    // Shift-clicks: a function per menu whose Java decides them.
+    r.push_str("\n/// Whether menu type `menu`'s Java decides where a shift-click moves a stack\n/// (`quickMoveStack`).\npub fn moves_on_shift_click(menu: &str) -> bool {\n    matches!(menu, ");
+    let movers: Vec<&Machine> = machines.iter().filter(|m| m.quick_move.is_some()).collect();
+    if movers.is_empty() {
+        r.push_str("\"\"");
+    } else {
+        r.push_str(
+            &movers
+                .iter()
+                .map(|m| format!("\"{}\"", m.menu_type))
+                .collect::<Vec<_>>()
+                .join(" | "),
+        );
+    }
+    r.push_str(")\n}\n");
+    r.push_str("\n/// A shift-click in menu type `menu`, run by its menu class's function. True when\n/// the Java decided it: the game's own routing is skipped then.\npub fn quick_move(menu: &str, q: &QuickMove, stack: &mut Stack, slots: &mut MenuSlots<'_>) -> bool {\n    match menu {\n");
+    for m in &movers {
+        let _ = writeln!(r, "        \"{}\" => {}(q, stack, slots),", m.menu_type, quick_move_name(m));
+    }
+    r.push_str("        _ => {\n            let _ = (q, stack, slots);\n            false\n        }\n    }\n}\n");
+    for m in &movers {
+        let class = m.quick_move.as_deref().unwrap_or_default();
+        let _ = write!(
+            r,
+            "\n/// A shift-click in `{menu}`'s menu (`quickMoveStack(player, index)`): move what\n/// `stack` holds (slot `q.slot`'s items) with `slots.move_item_stack_to(stack, start,\n/// end, reverse)` as Java's `moveItemStackTo` does, the menu's indices as Java numbers\n/// them (the block's slots, then the player's 27 and 9). What is left in `stack` stays\n/// in the slot. Return true where Java decides the click (it always does, once ported),\n/// false to let the game move it as for any container.\n///\n/// TODO: port `quickMoveStack` of {class}.\nfn {name}(q: &QuickMove, stack: &mut Stack, slots: &mut MenuSlots<'_>) -> bool {{\n    let _ = (q, stack, slots);\n    false\n}}\n",
+            menu = m.menu_type,
+            name = quick_move_name(m),
+        );
+    }
     r
+}
+
+/// `crusher_quick_move`.
+fn quick_move_name(m: &Machine) -> String {
+    draw_name(m).replacen("draw_", "", 1) + "_quick_move"
 }
 
 /// `draw_crusher`.
@@ -840,6 +989,34 @@ fn draw_name(m: &Machine) -> String {
 pub fn runtime_tests(machines: &[Machine]) -> String {
     let mut t = String::from(
         r#"
+    #[test]
+    fn shift_clicks_move_as_java_does() {
+        let size = |_: &str| 64;
+        let mut taken = 0;
+        let mut give = |_: &str, n: u32| {
+            let n = n.min(10);
+            taken += n;
+            n
+        };
+        let mut slots = super::MenuSlots::new(
+            vec![Some(super::Stack::new("demo:ore", 60)), None, None],
+            &size,
+            &mut give,
+        );
+        // Onto the same item first, then the first empty slot.
+        let mut stack = super::Stack::new("demo:ore", 10);
+        assert!(slots.move_item_stack_to(&mut stack, 0, 2, false));
+        assert_eq!(stack.count, 0);
+        assert_eq!(slots.item(0).map(|s| s.count), Some(64));
+        assert_eq!(slots.item(1).map(|s| s.count), Some(6));
+        // Into the player's inventory (indices from 3), which takes 10.
+        let mut out = super::Stack::new("demo:dust", 15);
+        assert!(slots.move_item_stack_to(&mut out, 3, 39, true));
+        assert_eq!(out.count, 5);
+        drop(slots);
+        assert_eq!(taken, 10);
+    }
+
     #[test]
     fn transfers_wait_for_after_the_tick() {
         let none = |_: &str| Vec::new();

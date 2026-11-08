@@ -28,18 +28,51 @@ pub enum Kind {
     /// An item's `use`: what it does used in the air (or on a block its `useOn`
     /// passed).
     ItemUse,
+    /// `randomTick`: what a random tick does (a crop grows, a vine spreads).
+    RandomTick,
+    /// `tick`: what a tick it scheduled does (`level.scheduleTick(..)`).
+    Tick,
+    /// `canSurvive`: whether it can stay where it is.
+    Survive,
+    /// `getAnalogOutputSignal`: what a comparator reads from it.
+    Analog,
+    /// `onPlace`, `setPlacedBy`: what it does once a player placed it.
+    Placed,
+    /// `playerWillDestroy`, `playerDestroy`, `affectNeighborsAfterRemoval`: what it
+    /// does as a player breaks it.
+    Destroyed,
+    /// `appendHoverText`: the lines its item's tooltip adds.
+    Tooltip,
 }
 
 impl Kind {
-    const ALL: [Kind; 5] = [
+    const ALL: [Kind; 12] = [
         Kind::Place,
         Kind::Use,
         Kind::Shape,
         Kind::ItemUseOn,
         Kind::ItemUse,
+        Kind::RandomTick,
+        Kind::Tick,
+        Kind::Survive,
+        Kind::Analog,
+        Kind::Placed,
+        Kind::Destroyed,
+        Kind::Tooltip,
     ];
-    const BLOCK: [Kind; 3] = [Kind::Place, Kind::Use, Kind::Shape];
-    const ITEM: [Kind; 2] = [Kind::ItemUseOn, Kind::ItemUse];
+    const BLOCK: [Kind; 10] = [
+        Kind::Place,
+        Kind::Use,
+        Kind::Shape,
+        Kind::RandomTick,
+        Kind::Tick,
+        Kind::Survive,
+        Kind::Analog,
+        Kind::Placed,
+        Kind::Destroyed,
+        Kind::Tooltip,
+    ];
+    const ITEM: [Kind; 3] = [Kind::ItemUseOn, Kind::ItemUse, Kind::Tooltip];
 
     /// The Java methods that make it.
     pub fn methods(self) -> &'static [&'static str] {
@@ -49,6 +82,13 @@ impl Kind {
             Kind::Shape => &["updateShape"],
             Kind::ItemUseOn => &["useOn"],
             Kind::ItemUse => &["use"],
+            Kind::RandomTick => &["randomTick"],
+            Kind::Tick => &["tick"],
+            Kind::Survive => &["canSurvive"],
+            Kind::Analog => &["getAnalogOutputSignal"],
+            Kind::Placed => &["onPlace", "setPlacedBy"],
+            Kind::Destroyed => &["playerWillDestroy", "playerDestroy", "affectNeighborsAfterRemoval"],
+            Kind::Tooltip => &["appendHoverText"],
         }
     }
 
@@ -60,6 +100,13 @@ impl Kind {
             Kind::Shape => "update_shape",
             Kind::ItemUseOn => "use_item_on",
             Kind::ItemUse => "use_item",
+            Kind::RandomTick => "random_tick",
+            Kind::Tick => "tick_block",
+            Kind::Survive => "can_survive",
+            Kind::Analog => "analog_output",
+            Kind::Placed => "place_block",
+            Kind::Destroyed => "destroy_block",
+            Kind::Tooltip => "item_tooltip",
         }
     }
 
@@ -70,6 +117,13 @@ impl Kind {
             Kind::Shape => "shape",
             Kind::ItemUseOn => "use_on",
             Kind::ItemUse => "use",
+            Kind::RandomTick => "random_tick",
+            Kind::Tick => "tick",
+            Kind::Survive => "survives",
+            Kind::Analog => "comparator",
+            Kind::Placed => "placed",
+            Kind::Destroyed => "broken",
+            Kind::Tooltip => "tooltip",
         }
     }
 }
@@ -204,6 +258,12 @@ pub fn hooks(behaviours: &[Behaviour]) -> Vec<(&'static str, BTreeSet<String>)> 
         out.entry(b.kind.hook())
             .or_default()
             .insert(b.class.clone());
+        // A comparator asks first whether the block has an output at all.
+        if b.kind == Kind::Analog {
+            out.entry("has_analog_output")
+                .or_default()
+                .insert(b.class.clone());
+        }
     }
     out.into_iter().collect()
 }
@@ -335,6 +395,69 @@ pub fn runtime(
                 "bool",
                 "u.item",
             ),
+            Kind::RandomTick => (
+                "random_ticks_its_own_way",
+                "random_tick",
+                "t: &BlockTick, world: &mut dyn World",
+                "t, world",
+                "false",
+                "bool",
+                "t.block",
+            ),
+            Kind::Tick => (
+                "ticks_its_own_way",
+                "scheduled_tick",
+                "t: &BlockTick, world: &mut dyn World",
+                "t, world",
+                "false",
+                "bool",
+                "t.block",
+            ),
+            Kind::Survive => (
+                "decides_survival",
+                "can_survive",
+                "b: &BlockAt, world: &dyn Blocks",
+                "b, world",
+                "None",
+                "Option<bool>",
+                "b.block",
+            ),
+            Kind::Analog => (
+                "has_comparator_output",
+                "comparator_output",
+                "b: &BlockAt, world: &dyn Blocks",
+                "b, world",
+                "None",
+                "Option<i32>",
+                "b.block",
+            ),
+            Kind::Placed => (
+                "acts_when_placed",
+                "placed",
+                "p: &ByPlayer, world: &mut dyn World",
+                "p, world",
+                "false",
+                "bool",
+                "p.block",
+            ),
+            Kind::Destroyed => (
+                "acts_when_broken",
+                "broken",
+                "d: &ByPlayer, world: &mut dyn World",
+                "d, world",
+                "false",
+                "bool",
+                "d.block",
+            ),
+            Kind::Tooltip => (
+                "adds_tooltip",
+                "tooltip_lines",
+                "t: &TooltipFor",
+                "t",
+                "Vec::new()",
+                "Vec<TooltipLine>",
+                "t.item",
+            ),
         };
         let _ = write!(
             r,
@@ -392,6 +515,27 @@ pub fn runtime(
                 }
                 Kind::ItemUse => {
                     "what its items do used in the air: change blocks and the stack in hand\n/// through `world`, and return true where Java's `InteractionResult` is `SUCCESS` or\n/// `CONSUME`, false for `PASS`"
+                }
+                Kind::RandomTick => {
+                    "what a random tick does to its blocks (a crop's growth, a vine's spread):\n/// change blocks through `world` (`world.random()` is the level's random), and\n/// return true to replace the template's own random tick, false to let it run too\n/// (where Java calls `super.randomTick`). On the server level only blocks' properties\n/// change (`world.set_property`, or `set_block` with the same block); another block in\n/// their place, block entities and tags aren't reachable there"
+                }
+                Kind::Tick => {
+                    "what a tick it scheduled (`level.scheduleTick(pos, this, delay)`, which\n/// `world.schedule_tick` does) does to its blocks: change blocks through `world`, and\n/// return true to replace the template's own tick. As for a random tick, only blocks'\n/// properties change there"
+                }
+                Kind::Survive => {
+                    "whether its blocks can stay where they are (a plant on its soil, a\n/// torch on its wall): read the blocks around through `world`, and return Some(answer),\n/// or None to leave the template's rule. A block that can't survive breaks"
+                }
+                Kind::Analog => {
+                    "what a comparator reads from its blocks, 0 to 15: read the blocks\n/// through `world` and return Some(signal), or None to leave the template's. A block\n/// entity's items aren't reachable here; Horizon counts a container's own"
+                }
+                Kind::Placed => {
+                    "what its blocks do once a player placed them (`setPlacedBy`, and\n/// `onPlace` for that placement): change blocks, block entities and the stack through\n/// `world`; the return value is unused (return true where Java did anything).\n/// Placements by other means (a dispenser, a command) don't come here"
+                }
+                Kind::Destroyed => {
+                    "what its blocks do as a player breaks them (`playerWillDestroy`,\n/// `playerDestroy`, `affectNeighborsAfterRemoval`): change blocks and block entities\n/// through `world` (a door's other half, a bed's head, its items dropped with\n/// `world.drop`). It runs before the block is removed, for all three; the return\n/// value is unused. Blocks removed by other means don't come here"
+                }
+                Kind::Tooltip => {
+                    "the lines its item's tooltip adds under its name (`appendHoverText`):\n/// return each `tooltip.add(..)` as a `TooltipLine`, in order"
                 }
             };
             // Its blocks' registrations, where they pass the class different things:
@@ -497,9 +641,46 @@ pub fn helper(
         "use_item" => ("use_item.rs", ITEM_USE_HELPER),
         "state_for_placement" => ("state_for_placement.rs", PLACE_HELPER),
         "update_shape" => ("update_shape.rs", SHAPE_HELPER),
+        "random_tick" => ("random_tick.rs", TICK_HELPER),
+        "tick_block" => ("tick_block.rs", TICK_HELPER),
+        "can_survive" => ("can_survive.rs", SURVIVE_HELPER),
+        "has_analog_output" => ("has_analog_output.rs", HAS_ANALOG_HELPER),
+        "analog_output" => ("analog_output.rs", ANALOG_HELPER),
+        "place_block" => ("place_block.rs", PLAYER_HELPER),
+        "destroy_block" => ("destroy_block.rs", PLAYER_HELPER),
+        "item_tooltip" => ("item_tooltip.rs", TOOLTIP_HELPER),
         _ => return None,
     };
+    // What differs between the helpers that share a body.
+    let (java, check, dispatch, what, guard) = match hook {
+        "random_tick" => ("randomTick", "random_ticks_its_own_way", "random_tick", "", ""),
+        "tick_block" => ("tick", "ticks_its_own_way", "scheduled_tick", "", ""),
+        "place_block" => (
+            "`onPlace`, `setPlacedBy`",
+            "acts_when_placed",
+            "placed",
+            "places",
+            "",
+        ),
+        "destroy_block" => (
+            "`playerWillDestroy`, `playerDestroy`, `affectNeighborsAfterRemoval`",
+            "acts_when_broken",
+            "broken",
+            "breaks",
+            "    if *canceled {\n        return;\n    }\n",
+        ),
+        _ => ("", "", "", "", ""),
+    };
+    let level_entities = if entities { LEVEL_ENTITIES } else { "" };
     let body = body
+        .replace("{level_read}", LEVEL_READ)
+        .replace("{level_world}", &LEVEL_WORLD.replace("{level_entities}", level_entities))
+        .replace("{java}", java)
+        .replace("{check}", check)
+        .replace("{dispatch}", dispatch)
+        .replace("{what}", what)
+        .replace("{guard}", guard)
+        .replace("{hook}", hook)
         .replace("{world}", ITEM_WORLD)
         .replace("{tags}", TAG_FN)
         .replace(
@@ -518,6 +699,292 @@ pub fn helper(
         .replace("{params}", &params);
     Some((file, body))
 }
+
+const LEVEL_READ: &str = r#"    // The level as the block's code reads it, `facing` as Java names it.
+    fn level_block(game: &crate::game::native_hooks::GameLevel<'_>, pos: [i32; 3]) -> String {
+        let state = horizon_client::mod_api::LevelHost::block_state(game, pos);
+        game.native_state_block(state).unwrap_or("minecraft:air").to_string()
+    }
+    fn level_property(game: &crate::game::native_hooks::GameLevel<'_>, pos: [i32; 3], key: &str) -> Option<String> {
+        use crate::game::{m} as m;
+        let state = horizon_client::mod_api::LevelHost::block_state(game, pos);
+        let block = game.native_state_block(state)?;
+        let (_, values) = m::PROPERTY_VALUES.iter().find(|(k, _)| *k == key)?;
+        let value = values
+            .iter()
+            .find(|v| game.native_state_with_property(state, key, v) == Some(state))?;
+        Some(if key == "facing" {
+            m::java_facing(block, value)
+        } else {
+            value.to_string()
+        })
+    }
+"#;
+
+const LEVEL_WORLD: &str = r#"    // The server level as the block's code changes it: blocks' properties, sounds,
+    // particles, the level's random and scheduled ticks. Block entities and tags
+    // aren't reachable from the level's hooks.
+    struct Level<'g, 'a, 't> {
+        game: &'g mut crate::game::native_hooks::GameLevel<'a>,
+        ticks: &'t mut Ticks,
+    }
+    impl m::Blocks for Level<'_, '_, '_> {
+        fn block(&self, pos: [i32; 3]) -> String {
+            level_block(self.game, pos)
+        }
+        fn property(&self, pos: [i32; 3], key: &str) -> Option<String> {
+            level_property(self.game, pos, key)
+        }
+    }
+    impl m::World for Level<'_, '_, '_> {
+        fn set_property_flags(&mut self, pos: [i32; 3], key: &str, value: &str, flags: i32) -> bool {
+            let value = if key == "facing" {
+                m::stored_facing(&level_block(self.game, pos), value)
+            } else {
+                value.to_string()
+            };
+            self.game.native_set_block_property(self.ticks, pos, key, &value, flags)
+        }
+        fn play_sound(&mut self, sound: &str, pos: [i32; 3], volume: f32, pitch: f32) {
+            let at = [f64::from(pos[0]) + 0.5, f64::from(pos[1]) + 0.5, f64::from(pos[2]) + 0.5];
+            let _ = self.game.native_play_sound(sound, at, 4, volume, pitch);
+        }
+        fn random(&mut self) -> f32 {
+            self.game
+                .native_level_random()
+                .map_or(0.5, horizon_core::random::RandomSource::next_float)
+        }
+        fn set_block_flags(&mut self, pos: [i32; 3], block: &str, properties: &[(&str, &str)], flags: i32) -> bool {
+            // Only the same block, its properties changed: the level's hooks can't put
+            // another block in its place.
+            if level_block(self.game, pos) != block {
+                return false;
+            }
+            let mut any = false;
+            for (key, value) in properties {
+                any |= self.set_property_flags(pos, key, value, flags);
+            }
+            any
+        }
+        fn particles(&mut self, kind: &str, at: [f64; 3], spread: [f64; 3], speed: f64, count: i32) {
+            let options = if kind.contains(':') && !kind.starts_with("minecraft:") {
+                Some(ParticleOptions::named(kind))
+            } else {
+                ParticleType::from_name(kind).map(ParticleOptions::simple)
+            };
+            if let Some(options) = options {
+                let _ = self.game.native_send_particles(&options, None, at, spread, speed, count);
+            }
+        }
+        fn schedule_tick(&mut self, pos: [i32; 3], block: &str, delay: i32) -> bool {
+            self.game.native_schedule_block_tick(self.ticks, pos, block, delay)
+        }
+    }
+{level_entities}"#;
+
+const LEVEL_ENTITIES: &str = r#"    impl m::BlockEntities for Level<'_, '_, '_> {
+        fn entity(&mut self, pos: [i32; 3]) -> Option<m::EntityValues> {
+            let _ = pos;
+            None
+        }
+        fn save_entity(&mut self, pos: [i32; 3], values: &[(&str, m::Saved)]) -> bool {
+            let _ = (pos, values);
+            false
+        }
+        fn entity_slots(&mut self, pos: [i32; 3]) -> usize {
+            let _ = pos;
+            0
+        }
+        fn entity_item(&mut self, pos: [i32; 3], slot: usize) -> Option<(String, u32)> {
+            let _ = (pos, slot);
+            None
+        }
+        fn set_entity_item(&mut self, pos: [i32; 3], slot: usize, item: Option<(&str, u32)>) -> bool {
+            let _ = (pos, slot, item);
+            false
+        }
+        fn recipes(&mut self, kind: &str) -> Vec<m::Recipe> {
+            let _ = kind;
+            Vec::new()
+        }
+    }
+"#;
+
+const TICK_HELPER: &str = r#"// {name}'s blocks that run their own `{java}`: runtime.rs's `{dispatch}` runs
+// their code; taken, the template's own doesn't run.
+fn {id}_{hook}({params}) {
+    use crate::game::{m} as m;
+    let _ = dimension;
+    if *handled {
+        return;
+    }
+    let Some(block) = game.native_state_block(*state).map(str::to_string) else {
+        return;
+    };
+    if !m::{check}(&block) {
+        return;
+    }
+{level_read}{level_world}    let tick = m::BlockTick { block, pos: [pos.x, pos.y, pos.z] };
+    let mut level = Level { game, ticks };
+    if m::{dispatch}(&tick, &mut level) {
+        *handled = true;
+    }
+}
+"#;
+
+const SURVIVE_HELPER: &str = r#"// {name}'s blocks that decide where they can stay (`canSurvive`): runtime.rs's
+// `can_survive` answers; None leaves the template's rule.
+fn {id}_can_survive({params}) {
+    use crate::game::{m} as m;
+    let _ = dimension;
+    if survives.is_some() {
+        return;
+    }
+    let Some(block) = game.native_state_block(*state).map(str::to_string) else {
+        return;
+    };
+    if !m::decides_survival(&block) {
+        return;
+    }
+{level_read}    struct Read<'g, 'a> {
+        game: &'g crate::game::native_hooks::GameLevel<'a>,
+    }
+    impl m::Blocks for Read<'_, '_> {
+        fn block(&self, pos: [i32; 3]) -> String {
+            level_block(self.game, pos)
+        }
+        fn property(&self, pos: [i32; 3], key: &str) -> Option<String> {
+            level_property(self.game, pos, key)
+        }
+    }
+    let at = m::BlockAt { block, pos: [pos.x, pos.y, pos.z], face: None };
+    if let Some(answer) = m::can_survive(&at, &Read { game }) {
+        *survives = Some(answer);
+    }
+}
+"#;
+
+const HAS_ANALOG_HELPER: &str = r#"// {name}'s blocks that give a comparator a signal (`hasAnalogOutputSignal`).
+fn {id}_has_analog_output({params}) {
+    use crate::game::{m} as m;
+    if *output {
+        return;
+    }
+    if let Some(block) = game.native_state_block(*state) {
+        if m::has_comparator_output(block) {
+            *output = true;
+        }
+    }
+}
+"#;
+
+const ANALOG_HELPER: &str = r#"// {name}'s blocks' comparator signal (`getAnalogOutputSignal`): runtime.rs's
+// `comparator_output` answers; None leaves the template's.
+fn {id}_analog_output({params}) {
+    use crate::game::{m} as m;
+    let _ = dimension;
+    let Some(block) = game.native_state_block(*state).map(str::to_string) else {
+        return;
+    };
+    if !m::has_comparator_output(&block) {
+        return;
+    }
+{level_read}    struct Read<'g, 'a> {
+        game: &'g crate::game::native_hooks::GameLevel<'a>,
+    }
+    impl m::Blocks for Read<'_, '_> {
+        fn block(&self, pos: [i32; 3]) -> String {
+            level_block(self.game, pos)
+        }
+        fn property(&self, pos: [i32; 3], key: &str) -> Option<String> {
+            level_property(self.game, pos, key)
+        }
+    }
+    let at = m::BlockAt {
+        block,
+        pos: [pos.x, pos.y, pos.z],
+        face: Some(format!("{face:?}").to_lowercase()),
+    };
+    if let Some(signal) = m::comparator_output(&at, &Read { game }) {
+        *output = signal.clamp(0, 15);
+    }
+}
+"#;
+
+const PLAYER_HELPER: &str = r#"// {name}'s blocks that act as a player {what} them ({java}): runtime.rs's
+// `{dispatch}` runs their code.
+fn {id}_{hook}({params}) {
+    use crate::game::{m} as m;
+    let _ = state;
+{guard}    if !game.native_on(m::ID) {
+        return;
+    }
+    let block = game.native_block(pos);
+    if !m::{check}(&block) {
+        return;
+    }
+    let (held, held_count) = game
+        .native_held()
+        .map_or_else(|| ("minecraft:air".to_string(), 0), |(item, count, _)| (item, count));
+    let player = game.native_acting_player();
+    let facing = m::yaw_direction(player.as_ref().map_or(0.0, |p| p.yaw)).to_string();
+    let creative = player.is_some_and(|p| p.game_mode == 1);
+    let by = m::ByPlayer {
+        block,
+        pos,
+        held,
+        held_count,
+        creative,
+        facing,
+        sneaking: game
+            .player
+            .as_ref()
+            .is_some_and(|p| matches!(p.pose, crate::pose::Pose::Crouching)),
+    };
+{world}    let mut here = Here { game, creative, source: 4, changed: false };
+    let _ = m::{dispatch}(&by, &mut here);
+}
+"#;
+
+const TOOLTIP_HELPER: &str = r#"// {name}'s items' own tooltip lines (`appendHoverText`): runtime.rs's
+// `tooltip_lines` gives them, under the item's name.
+fn {id}_item_tooltip({params}) {
+    use crate::game::{m} as m;
+    if !game.native_on(m::ID) {
+        return;
+    }
+    let item = stack.item.to_string();
+    if !m::adds_tooltip(&item) {
+        return;
+    }
+    let max_damage = game.items().get(&item).map_or(0, |i| i.max_damage);
+    let of = m::TooltipFor {
+        item,
+        count: stack.count,
+        damage: stack.damage,
+        max_damage,
+    };
+    // `0xRRGGBB` as Horizon packs a line's colour (`rgba`); none keeps the text's own.
+    let packed = |rgb: Option<u32>| match rgb {
+        Some(c) => 0xFF00_0000 | (c & 0xFF) << 16 | (c >> 8 & 0xFF) << 8 | (c >> 16 & 0xFF),
+        None => u32::MAX,
+    };
+    // Under the name and what the game itself adds after it: Java's `appendHoverText`
+    // lines follow the name.
+    let mut at = 1.min(lines.len());
+    for line in m::tooltip_lines(&of) {
+        let (text, color) = match line {
+            m::TooltipLine::Translated { key, args, color } => {
+                let args: Vec<Text> = args.into_iter().map(Text::literal).collect();
+                (Text::translate(&key, &args), packed(color))
+            }
+            m::TooltipLine::Text { text, color } => (Text::literal(text), packed(color)),
+        };
+        lines.insert(at, (text, color));
+        at += 1;
+    }
+}
+"#;
 
 const USE_HELPER: &str = r#"// {name}'s blocks that act on a right click (`useItemOn`, `useWithoutItem`): runtime.rs's
 // `use_block` runs their code; a click it takes runs neither the template's use nor the item's.
@@ -1340,12 +1807,19 @@ fn {id}_update_shape({params}) {
 }
 "#;
 
-const DISPATCH_DOCS: [&str; 5] = [
+const DISPATCH_DOCS: [&str; 12] = [
     "\n/// The properties a block is placed with (Java's `getStateForPlacement` setting them\n/// on `defaultBlockState()`), from its class's function. None leaves its template's\n/// placement.\n",
     "\n/// A right click on a block, run by its class's function. True when it took the click\n/// (`InteractionResult.SUCCESS` or `CONSUME`): neither its template's use nor the held\n/// item's runs then. A click that opens a menu in Java (`player.openMenu(..)`) is false\n/// here: it goes on to the block's template (a barrel, a furnace), which opens the menu.\n",
     "\n/// The properties a block changes as its neighbour in `u.direction` changes (Java's\n/// `updateShape`), from its class's function. None keeps it as it is.\n",
     "\n/// One of the mod's items used on a block, run by its class's `useOn` function. True\n/// when it took the use: neither its template's use nor its `use` runs then.\n",
     "\n/// One of the mod's items used, run by its class's `use` function. True when it took\n/// the use: its template's own use doesn't run then.\n",
+    "\n/// A random tick of one of the mod's blocks, run by its class's `randomTick` function.\n/// True when it replaces the template's own random tick.\n",
+    "\n/// A scheduled tick of one of the mod's blocks, run by its class's `tick` function.\n/// True when it replaces the template's own tick.\n",
+    "\n/// Whether one of the mod's blocks can stay where it is, from its class's `canSurvive`\n/// function. None leaves the template's rule.\n",
+    "\n/// What a comparator reads from one of the mod's blocks, from its class's\n/// `getAnalogOutputSignal` function. None leaves the template's.\n",
+    "\n/// One of the mod's blocks placed by a player, run by its class's `onPlace` /\n/// `setPlacedBy` function.\n",
+    "\n/// One of the mod's blocks broken by a player, run by its class's `playerWillDestroy`\n/// / `playerDestroy` / `affectNeighborsAfterRemoval` function, before it goes.\n",
+    "\n/// The lines one of the mod's items adds to its tooltip, from its class's\n/// `appendHoverText` function.\n",
 ];
 
 const RUNTIME_TYPES: &str = r#"
@@ -1456,6 +1930,110 @@ pub trait World: Blocks {
     fn particles(&mut self, kind: &str, at: [f64; 3], spread: [f64; 3], speed: f64, count: i32) {
         let _ = (kind, at, spread, speed, count);
     }
+    /// Schedules a tick of `block` at `pos` in `delay` game ticks
+    /// (`level.scheduleTick(pos, this, delay)`): its class's `tick` function runs then.
+    /// False where it can't be scheduled (off the server level).
+    fn schedule_tick(&mut self, pos: [i32; 3], block: &str, delay: i32) -> bool {
+        let _ = (pos, block, delay);
+        false
+    }
+}
+
+/// A tick of one of the mod's blocks (`randomTick`'s, `tick`'s arguments).
+pub struct BlockTick {
+    pub block: String,
+    pub pos: [i32; 3],
+}
+
+/// One of the mod's blocks a hook asks about (`canSurvive`, `getAnalogOutputSignal`).
+pub struct BlockAt {
+    pub block: String,
+    pub pos: [i32; 3],
+    /// The side a comparator reads it from (`north`), for `getAnalogOutputSignal`.
+    pub face: Option<String>,
+}
+
+/// One of the mod's blocks a player placed or is breaking (`setPlacedBy`'s,
+/// `playerWillDestroy`'s arguments).
+pub struct ByPlayer {
+    pub block: String,
+    pub pos: [i32; 3],
+    /// The item in the player's main hand (what it was placed with, or breaks it),
+    /// `minecraft:air` when empty.
+    pub held: String,
+    pub held_count: u32,
+    /// Whether the player is in creative (`player.isCreative()`, which skips drops).
+    pub creative: bool,
+    /// The way the player faces (`player.getDirection()`): `north`.
+    pub facing: String,
+    pub sneaking: bool,
+}
+
+/// The item a tooltip is shown for (`appendHoverText`'s `stack`).
+pub struct TooltipFor {
+    pub item: String,
+    pub count: u32,
+    /// Its damage and the most it takes (`stack.getDamageValue()`,
+    /// `getMaxDamage()`), 0 for an item that doesn't wear.
+    pub damage: u32,
+    pub max_damage: u32,
+}
+
+/// A line `appendHoverText` adds (`tooltip.add(..)` / `tooltipAdder.accept(..)`).
+#[derive(Clone, Debug, PartialEq)]
+pub enum TooltipLine {
+    /// `Component.translatable(key, args..)`: the text of `key` in the player's
+    /// language (the mod's `lang/*.json`).
+    Translated {
+        key: String,
+        args: Vec<String>,
+        /// `0xRRGGBB` (`.withStyle(ChatFormatting.GRAY)`: see `chat_color`), None for
+        /// the tooltip's own.
+        color: Option<u32>,
+    },
+    /// `Component.literal(text)`.
+    Text { text: String, color: Option<u32> },
+}
+
+impl TooltipLine {
+    /// `Component.translatable(key)`.
+    pub fn translated(key: &str) -> Self {
+        TooltipLine::Translated { key: key.to_string(), args: Vec::new(), color: None }
+    }
+    /// `Component.literal(text)`.
+    pub fn text(text: &str) -> Self {
+        TooltipLine::Text { text: text.to_string(), color: None }
+    }
+    /// `.withStyle(ChatFormatting.X)`: the line in that colour (`chat_color("GRAY")`).
+    pub fn colored(self, rgb: u32) -> Self {
+        match self {
+            TooltipLine::Translated { key, args, .. } => TooltipLine::Translated { key, args, color: Some(rgb) },
+            TooltipLine::Text { text, .. } => TooltipLine::Text { text, color: Some(rgb) },
+        }
+    }
+}
+
+/// A `ChatFormatting` colour by name (`GRAY`, `BLUE`), as `0xRRGGBB`.
+pub fn chat_color(name: &str) -> Option<u32> {
+    Some(match name {
+        "BLACK" => 0x000000,
+        "DARK_BLUE" => 0x0000AA,
+        "DARK_GREEN" => 0x00AA00,
+        "DARK_AQUA" => 0x00AAAA,
+        "DARK_RED" => 0xAA0000,
+        "DARK_PURPLE" => 0xAA00AA,
+        "GOLD" => 0xFFAA00,
+        "GRAY" => 0xAAAAAA,
+        "DARK_GRAY" => 0x555555,
+        "BLUE" => 0x5555FF,
+        "GREEN" => 0x55FF55,
+        "AQUA" => 0x55FFFF,
+        "RED" => 0xFF5555,
+        "LIGHT_PURPLE" => 0xFF55FF,
+        "YELLOW" => 0xFFFF55,
+        "WHITE" => 0xFFFFFF,
+        _ => return None,
+    })
 }
 
 /// A right click on one of the mod's blocks (`useItemOn`'s arguments).
