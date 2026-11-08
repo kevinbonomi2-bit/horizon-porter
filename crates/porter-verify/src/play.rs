@@ -242,8 +242,7 @@ pub fn play_check(
     tools.truncate(8);
     if !clicks.is_empty() {
         for tool in &tools {
-            // A full stack: a click may use one up, in creative too (a flower planted).
-            game.run(&["give", tool, "64"], 30);
+            game.run(&["give", tool], 30);
         }
         game.select("9");
     }
@@ -293,6 +292,10 @@ pub fn play_check(
                 opened = game.opened_menu(&reply);
                 after = game.around(*pos);
                 if before != after || opened {
+                    // The click may have used it up (a flower planted, in creative too):
+                    // one again in its slot for the next block.
+                    game.run(&["command", &format!("clear @s {tool}")], 30);
+                    game.run(&["give", tool], 30);
                     break;
                 }
             }
