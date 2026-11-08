@@ -85,7 +85,7 @@ impl Kind {
             Kind::RandomTick => &["randomTick"],
             Kind::Tick => &["tick"],
             Kind::Survive => &["canSurvive"],
-            Kind::Analog => &["getAnalogOutputSignal"],
+            Kind::Analog => &["getAnalogOutputSignal", "hasAnalogOutputSignal"],
             Kind::Placed => &["onPlace", "setPlacedBy"],
             Kind::Destroyed => &["playerWillDestroy", "playerDestroy", "affectNeighborsAfterRemoval"],
             Kind::Tooltip => &["appendHoverText"],
@@ -517,10 +517,10 @@ pub fn runtime(
                     "what its items do used in the air: change blocks and the stack in hand\n/// through `world`, and return true where Java's `InteractionResult` is `SUCCESS` or\n/// `CONSUME`, false for `PASS`"
                 }
                 Kind::RandomTick => {
-                    "what a random tick does to its blocks (a crop's growth, a vine's spread):\n/// change blocks through `world` (`world.random()` is the level's random), and\n/// return true to replace the template's own random tick, false to let it run too\n/// (where Java calls `super.randomTick`). On the server level only blocks' properties\n/// change (`world.set_property`, or `set_block` with the same block); another block in\n/// their place, block entities and tags aren't reachable there"
+                    "what a random tick does to its blocks (a crop's growth, a vine's spread):\n/// change blocks through `world` (`world.random()` is the level's random), and\n/// return true to replace the template's own random tick, false to let it run too\n/// (where Java calls `super.randomTick`). It runs on the server level: blocks change\n/// (`world.set_property`, `world.set_block`), sounds and particles play, ticks are\n/// scheduled; block entities, tags (`world.block_is` is false) and light aren't\n/// reachable there"
                 }
                 Kind::Tick => {
-                    "what a tick it scheduled (`level.scheduleTick(pos, this, delay)`, which\n/// `world.schedule_tick` does) does to its blocks: change blocks through `world`, and\n/// return true to replace the template's own tick. As for a random tick, only blocks'\n/// properties change there"
+                    "what a tick it scheduled (`level.scheduleTick(pos, this, delay)`, which\n/// `world.schedule_tick` does) does to its blocks: change blocks through `world`, and\n/// return true to replace the template's own tick. As for a random tick, it runs on the\n/// server level: blocks, sounds, particles and ticks, not block entities, tags or light"
                 }
                 Kind::Survive => {
                     "whether its blocks can stay where they are (a plant on its soil, a\n/// torch on its wall): read the blocks around through `world`, and return Some(answer),\n/// or None to leave the template's rule. A block that can't survive breaks"
@@ -755,16 +755,33 @@ const LEVEL_WORLD: &str = r#"    // The server level as the block's code changes
                 .map_or(0.5, horizon_core::random::RandomSource::next_float)
         }
         fn set_block_flags(&mut self, pos: [i32; 3], block: &str, properties: &[(&str, &str)], flags: i32) -> bool {
-            // Only the same block, its properties changed: the level's hooks can't put
-            // another block in its place.
-            if level_block(self.game, pos) != block {
+            // The same block: its properties changed.
+            if level_block(self.game, pos) == block {
+                let mut any = false;
+                for (key, value) in properties {
+                    any |= self.set_property_flags(pos, key, value, flags);
+                }
+                return any;
+            }
+            // Another block in its place (compost turned to soil, a crop to air), written
+            // as `native_set_block_property` writes a state: through the level's block
+            // behaviours, with its updates. Horizon has no public helper for it yet.
+            let Some(mut id) = self.game.registry.default_state(block) else {
                 return false;
-            }
-            let mut any = false;
+            };
             for (key, value) in properties {
-                any |= self.set_property_flags(pos, key, value, flags);
+                let value = if *key == "facing" {
+                    m::stored_facing(block, value)
+                } else {
+                    value.to_string()
+                };
+                if let Some(next) = self.game.native_state_with_property(id, key, &value) {
+                    id = next;
+                }
             }
-            any
+            let at = BlockPos::new(pos[0], pos[1], pos[2]);
+            let behaviours = self.game.behaviours;
+            behaviours.set_block(self.game, self.ticks, at, id, flags)
         }
         fn particles(&mut self, kind: &str, at: [f64; 3], spread: [f64; 3], speed: f64, count: i32) {
             let options = if kind.contains(':') && !kind.starts_with("minecraft:") {

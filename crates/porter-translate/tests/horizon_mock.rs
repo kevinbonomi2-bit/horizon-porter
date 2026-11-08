@@ -182,6 +182,9 @@ pub mod horizon_core {
     pub mod position {
         #[derive(Clone, Copy, Debug, PartialEq, Eq)]
         pub struct BlockPos { pub x: i32, pub y: i32, pub z: i32 }
+        impl BlockPos {
+            pub fn new(x: i32, y: i32, z: i32) -> Self { BlockPos { x, y, z } }
+        }
     }
 }
 
@@ -466,8 +469,20 @@ pub mod game {
         }
     }
     // game.rs: a server level, which the world hooks run on.
+    #[allow(dead_code)]
     pub struct GameLevel<'a> {
         _level: std::marker::PhantomData<&'a ()>,
+        // Its private fields a helper in native_hooks reaches, as in game.rs.
+        pub(crate) registry: &'static crate::horizon_world::registry::BlockRegistry,
+        pub(crate) behaviours: &'a Behaviours,
+    }
+    // horizon-world's block behaviours: `set_block` writes a state with its updates.
+    pub struct Behaviours;
+    impl Behaviours {
+        pub fn set_block(&self, level: &mut GameLevel<'_>, ticks: &mut native_hooks::Ticks, at: crate::horizon_core::position::BlockPos, id: crate::horizon_world::registry::BlockStateId, flags: i32) -> bool {
+            let _ = (level, ticks, at, id, flags);
+            false
+        }
     }
     // native_block_entity_draw.rs: the pose stack a block entity is drawn under.
     pub mod native_block_entity_draw {

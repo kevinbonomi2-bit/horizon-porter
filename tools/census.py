@@ -199,8 +199,10 @@ def main() -> None:
     helper_calls = set(re.findall(r"`[^`\n]*?\.([a-z]\w+)\(", translate_src))
     content_calls = set(re.findall(r"\.([a-z]\w+)\(", content_src))
     # Methods the porter reads statically (a block's `getShape` into its shapes,
-    # `createBlockStateDefinition` into its states): named as strings in its source.
-    read_methods = set(re.findall(r'"([a-z]\w+)"', content_src + translate_src))
+    # `createBlockStateDefinition` into its states): named as strings in the Java
+    # reader and the content mod's code. (porter-translate names the methods it
+    # writes stubs for, which a port shows by naming them.)
+    read_methods = set(re.findall(r'"([a-z]\w+)"', content_src))
     # Every word the porter's code says: a method it knows of (reads, maps to a
     # hook, or writes a stub for), whether or not this port named it.
     known_words = set(re.findall(r"\b([a-z][A-Za-z0-9]+)\b", porter_text(
