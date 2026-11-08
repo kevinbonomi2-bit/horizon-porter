@@ -676,7 +676,7 @@ const ITEM_WORLD: &str = r#"{tags}    struct Here<'g, 'a> {
             let Some(item) = self.game.held_mut().as_ref().map(|s| s.item.clone()) else {
                 return false;
             };
-            let max = self.game.res.items().get(&item).map_or(0, |i| i.max_damage);
+            let max = self.game.items().get(&item).map_or(0, |i| i.max_damage);
             if max == 0 {
                 return false;
             }
@@ -732,6 +732,16 @@ const ITEM_WORLD: &str = r#"{tags}    struct Here<'g, 'a> {
         fn block_is(&mut self, pos: [i32; 3], tag: &str) -> bool {
             let block = self.game.native_block(pos);
             in_tag(&*self.game, "block", tag, &block)
+        }
+        fn remainder(&mut self, item: &str) -> Option<String> {
+            m::REMAINDERS
+                .iter()
+                .find(|(i, _)| *i == item)
+                .map(|(_, r)| r.to_string())
+                .or_else(|| self.game.items().get(item)?.crafting_remainder.clone())
+        }
+        fn max_stack(&mut self, item: &str) -> u32 {
+            self.game.items().get(item).map_or(64, |i| i.max_stack)
         }
         fn item_is(&mut self, item: &str, tag: &str) -> bool {
             if in_tag(&*self.game, "item", tag, item) {
@@ -1421,6 +1431,17 @@ pub trait World: Blocks {
     fn block_is(&mut self, pos: [i32; 3], tag: &str) -> bool {
         let _ = (pos, tag);
         false
+    }
+    /// What `item` leaves behind in a crafting grid (`stack.getCraftingRemainder()`):
+    /// `minecraft:bowl` for a stew. A cooking pot serves its meal into it.
+    fn remainder(&mut self, item: &str) -> Option<String> {
+        let _ = item;
+        None
+    }
+    /// The most of `item` a stack holds (`stack.getMaxStackSize()`): 64, 16, 1.
+    fn max_stack(&mut self, item: &str) -> u32 {
+        let _ = item;
+        64
     }
     /// Whether `item` is in item tag `tag` (`stack.is(ItemTags.FLOWERS)`, a mod's
     /// `TagKey<Item>`: `villagersplus:small_plantable_items`).

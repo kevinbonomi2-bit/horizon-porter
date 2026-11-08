@@ -68,7 +68,7 @@ pub fn find(scan: &ModScan, roots: &BTreeSet<String>) -> Vec<Module> {
             .iter()
             .filter(|f| f.is_static)
             .filter_map(|f| {
-                let kind = Kind::from_java(&f.ty)?;
+                let kind = Kind::from_java(&f.ty).filter(|k| *k != Kind::Item)?;
                 Some(Static {
                     java: format!("{simple}.{}", f.name),
                     declared: format!(
@@ -163,6 +163,10 @@ fn value(kind: Kind, is_final: bool, init: Option<&str>) -> Value {
         Kind::Long => Value::Atomic {
             ty: "AtomicI64",
             literal,
+        },
+        // Not given by `kind_of` above: an item is a block entity's, not a static's.
+        Kind::Item => Value::LeftOut {
+            why: "an item stack".into(),
         },
         Kind::Float => Value::Locked { ty: "f32", literal },
         Kind::Double => Value::Locked { ty: "f64", literal },

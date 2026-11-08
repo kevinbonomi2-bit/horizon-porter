@@ -908,9 +908,28 @@ pub fn generate_with(
             }
             json["components"] = serde_json::Value::Object(components);
         }
+        // What it leaves in a crafting grid (`.craftRemainder(Items.BOWL)`, read
+        // through the mod's helpers): Horizon's crafting and the mod's code
+        // (`getCraftingRemainder()`, a cooking pot's container) read it. A food or
+        // drink also leaves it once eaten, as the mod's item class gives it back.
+        let remainder = vanilla_constant(&reg.args, ".craftRemainder(Items.");
+        if let Some(r) = &remainder {
+            json["crafting_remainder"] = format!("minecraft:{r}").into();
+            let eaten = json["components"].get("minecraft:food").is_some()
+                || json["components"].get("minecraft:consumable").is_some();
+            if eaten {
+                let mut components = json["components"].as_object().cloned().unwrap_or_default();
+                components
+                    .entry("minecraft:use_remainder")
+                    .or_insert_with(|| serde_json::json!({ "id": format!("minecraft:{r}") }));
+                json["components"] = serde_json::Value::Object(components);
+            }
+        }
         // A bowl food (`bowlFoodItem(..)`, `usingConvertsTo(Items.BOWL)`): the bowl comes
         // back, and it stacks to 16.
-        if reg.args.contains("bowlFoodItem(") || reg.args.contains("usingConvertsTo(Items.BOWL)") {
+        if remainder.is_none()
+            && (reg.args.contains("bowlFoodItem(") || reg.args.contains("usingConvertsTo(Items.BOWL)"))
+        {
             let mut components = json["components"].as_object().cloned().unwrap_or_default();
             components.insert(
                 "minecraft:use_remainder".into(),
@@ -2693,7 +2712,13 @@ fn sound_block(sound_type: &str) -> Option<&'static str> {
 
 /// An item file from the registration's `Item.Properties`.
 fn item_json(args: &str) -> serde_json::Value {
-    let template = if let Some(item) = vanilla_constant(args, "Items.") {
+    // A vanilla item it copies (`Items.HONEY_BOTTLE`), not one it leaves behind
+    // (`.craftRemainder(Items.BOWL)`) or is mended with.
+    let own = args
+        .replace(".craftRemainder(Items.", ".craftRemainder(")
+        .replace("usingConvertsTo(Items.", "usingConvertsTo(")
+        .replace(".repairable(Items.", ".repairable(");
+    let template = if let Some(item) = vanilla_constant(&own, "Items.") {
         format!("minecraft:{item}")
     } else if args.contains(".sword(") {
         "minecraft:iron_sword".into()

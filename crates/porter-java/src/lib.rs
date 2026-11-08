@@ -1210,17 +1210,28 @@ fn created_class(args: &[String]) -> Option<String> {
 fn saved_values(file: &ParsedFile, class: &str) -> Vec<porter_model::SavedValue> {
     let mut out = Vec::new();
     for call in file.calls.iter().filter(|c| c.enclosing == class) {
-        if !call.method.starts_with("put") || call.args.len() != 2 {
-            continue;
-        }
         let Some(key) = call.literal_args.first().cloned().flatten() else {
             continue;
         };
-        out.push(porter_model::SavedValue {
-            key,
-            method: call.method.clone(),
-            value: call.args[1].trim().to_string(),
-        });
+        if call.method.starts_with("put") && call.args.len() == 2 {
+            out.push(porter_model::SavedValue {
+                key,
+                method: call.method.clone(),
+                value: call.args[1].trim().to_string(),
+            });
+        } else if (call.method == "store" || call.method == "storeNullable")
+            && call.args.len() == 3
+            && call.args[1].contains("ItemStack")
+        {
+            // `output.storeNullable("Container", ItemStack.CODEC, this.stack.isEmpty() ? null :
+            // this.stack)`: an item, its value the field after a null check.
+            let value = call.args[2].rsplit(':').next().unwrap_or_default().trim();
+            out.push(porter_model::SavedValue {
+                key,
+                method: "storeItem".into(),
+                value: value.to_string(),
+            });
+        }
     }
     out
 }

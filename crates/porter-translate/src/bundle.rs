@@ -344,6 +344,7 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
     let mut vanilla_containers = vanilla_containers;
     vanilla_containers.extend(item_holders);
     let cooking = cooking_recipes(&content);
+    let remainders = craft_remainders(&content);
     if !vanilla_containers.is_empty() && !content.is_empty() {
         let classes: BTreeSet<String> = block_entities
             .iter()
@@ -468,6 +469,7 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
         behaviour_blocks: &behaviour_blocks,
         vanilla_containers: &vanilla_containers,
         cooking: &cooking,
+        remainders: &remainders,
         places: &places,
         statics: &java_statics,
         ledger: horizon.map(|src| (src.to_path_buf(), unmapped_ports(scan, src))),
@@ -893,6 +895,8 @@ struct Ctx<'a> {
     vanilla_containers: &'a [(String, String, usize)],
     /// Cooking recipes, vanilla's and the mod's: (type, ingredient, result, count, ticks).
     cooking: &'a [(String, String, String, u32, u32)],
+    /// Items' crafting remainders: the mod's (`.craftRemainder(Items.BOWL)`) and vanilla's.
+    remainders: &'a [(String, String)],
     /// Items that plant a block of another name: (item, block, what it stands on).
     places: &'a [(String, String, String)],
     /// The Java statics the mod's code shares.
@@ -904,6 +908,39 @@ struct Ctx<'a> {
 
 /// Vanilla's cooking recipes (`tools/vanilla_cooking.py`), with the mod's own recipes
 /// of those types from its data.
+/// What items leave in a crafting grid: the mod's items' `crafting_remainder`, and
+/// vanilla's (`Item.Properties.craftRemainder`, not a data component).
+fn craft_remainders(content: &porter_content::Content) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = [
+        ("minecraft:water_bucket", "minecraft:bucket"),
+        ("minecraft:lava_bucket", "minecraft:bucket"),
+        ("minecraft:milk_bucket", "minecraft:bucket"),
+        ("minecraft:powder_snow_bucket", "minecraft:bucket"),
+        ("minecraft:dragon_breath", "minecraft:glass_bottle"),
+        ("minecraft:honey_bottle", "minecraft:glass_bottle"),
+    ]
+    .iter()
+    .map(|(a, b)| (a.to_string(), b.to_string()))
+    .collect();
+    for (path, text) in &content.files {
+        // `data/<ns>/horizon/item/<name>.json`
+        let parts: Vec<&str> = path.split('/').collect();
+        let ["data", ns, "horizon", "item", file] = parts.as_slice() else {
+            continue;
+        };
+        let Some(name) = file.strip_suffix(".json") else {
+            continue;
+        };
+        let Ok(json) = serde_json::from_str::<serde_json::Value>(text) else {
+            continue;
+        };
+        if let Some(r) = json.get("crafting_remainder").and_then(|r| r.as_str()) {
+            out.push((format!("{ns}:{name}"), r.to_string()));
+        }
+    }
+    out
+}
+
 fn cooking_recipes(content: &porter_content::Content) -> Vec<(String, String, String, u32, u32)> {
     const VANILLA: &str = include_str!("../data/vanilla-cooking.json");
     type Row = (String, String, String, u32, u32);
@@ -1259,6 +1296,13 @@ pub const DESCRIPTION: &str = "{description}";
             }
             r.push_str("];\n");
         }
+        r.push_str(
+            "\n/// What items leave in a crafting grid (`getCraftingRemainder()`): the mod's\n/// and vanilla's, which `machine.remainder` and `world.remainder` read.\npub const REMAINDERS: &[(&str, &str)] = &[\n",
+        );
+        for (item, rest) in self.remainders {
+            let _ = writeln!(r, "    ({item:?}, {rest:?}),");
+        }
+        r.push_str("];\n");
         if self.uses("standalone_models") {
             r.push_str("\n/// Models baked on their own, for renderers to draw as parts (`draw.model`).\npub const STANDALONE_MODELS: &[&str] = &[\n");
             for model in &self.scan.standalone_models {
@@ -1697,8 +1741,18 @@ fn {id}_block_entity_tick(
         .collect();
     let data = entity.data.clone();
 {tag_fn}    let tags = |kind: &str, tag: &str, id: &str| in_tag(&*game, kind, tag, id);
+    let items = |id: &str| {{
+        let info = game.items().get(id);
+        let rest = m::REMAINDERS
+            .iter()
+            .find(|(i, _)| *i == id)
+            .map(|(_, r)| r.to_string())
+            .or_else(|| info.and_then(|i| i.crafting_remainder.clone()));
+        Some((info.map_or(64, |i| i.max_stack), rest))
+    }};
     let mut machine = m::Machine::new(slots.clone(), data.clone(), &recipes);
     machine.tags = Some(&tags);
+    machine.items = Some(&items);
     // Its random: a different draw each tick and block.
     {{
         thread_local! {{
@@ -2216,11 +2270,15 @@ fn {id}_block_entity_update_tag(
     if m::BLOCK_ENTITIES.iter().any(|(_, id, _)| *id == entity.id) {{
         let mut nbt = entity.nbt.clone();
         // Its items, which its renderer draws (a skillet's food): `item.N` and `count.N`.
+        // An empty slot is sent too (an empty name): the client merges what it gets
+        // into what it had, so a slot left out would keep drawing its last item.
         for (i, slot) in entity.items.iter().enumerate() {{
-            if let Some(stack) = slot {{
-                nbt.insert(format!("item.{{i}}").as_str().into(), horizon_world::nbt::Tag::String(stack.item.as_ref().into()));
-                nbt.insert(format!("count.{{i}}").as_str().into(), horizon_world::nbt::Tag::Int(stack.count as i32));
-            }}
+            let (item, count) = match slot {{
+                Some(stack) => (stack.item.as_ref(), stack.count as i32),
+                None => ("", 0),
+            }};
+            nbt.insert(format!("item.{{i}}").as_str().into(), horizon_world::nbt::Tag::String(item.into()));
+            nbt.insert(format!("count.{{i}}").as_str().into(), horizon_world::nbt::Tag::Int(count));
         }}
         *tag = Some(nbt);
     }}
@@ -2255,8 +2313,9 @@ fn {id}_block_entity_submit(
         // Its items, as the update tag carries them.
         items: {{
             let nbt = &entity.nbt;
+            // An empty name is an emptied slot.
             let text = |key: String| match nbt.get(&JavaString::from(key.as_str())) {{
-                Some(Tag::String(s)) => Some(s.to_string_lossy()),
+                Some(Tag::String(s)) => Some(s.to_string_lossy()).filter(|s| !s.is_empty()),
                 _ => None,
             }};
             let count = |key: String| match nbt.get(&JavaString::from(key.as_str())) {{

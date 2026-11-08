@@ -377,6 +377,10 @@ pub mod game {
         fn held_mut(&mut self) -> &mut Option<crate::items::ItemStack> {
             &mut self.held
         }
+        // game.rs: the world's item table (its data packs' and the content mods' items).
+        fn items(&self) -> &Items {
+            &Items
+        }
     }
     pub struct Resources;
     #[allow(dead_code)]
@@ -390,6 +394,7 @@ pub mod game {
     pub struct ItemInfo {
         pub max_stack: u32,
         pub max_damage: u32,
+        pub crafting_remainder: Option<String>,
     }
     #[allow(dead_code)]
     impl Items {

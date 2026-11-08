@@ -320,6 +320,8 @@ pub struct Machine<'a> {
     /// Its block's `facing` (`getBlockState().getValue(FACING)`), when it has one:
     /// `north`.
     pub facing: Option<String>,
+    /// An item's facts: (its stack size, its crafting remainder).
+    pub items: Option<&'a dyn Fn(&str) -> Option<(u32, Option<String>)>>,
 }
 
 /// A particle burst or a sound a tick plays, near its block.
@@ -488,7 +490,20 @@ impl<'a> Machine<'a> {
             tags: None,
             seed: 0x9E37_79B9_7F4A_7C15,
             facing: None,
+            items: None,
         }
+    }
+
+    /// What `item` leaves behind in a crafting grid (`stack.getCraftingRemainder()`,
+    /// `Item.Properties.craftRemainder`): `minecraft:bowl` for a stew, a bucket for a
+    /// milk bucket. A cooking pot's meal needs it as its container.
+    pub fn remainder(&self, item: &str) -> Option<String> {
+        self.items.and_then(|f| f(item)).and_then(|(_, r)| r)
+    }
+
+    /// The most of `item` a stack holds (`stack.getMaxStackSize()`): 64, 16, 1.
+    pub fn max_stack(&self, item: &str) -> u32 {
+        self.items.and_then(|f| f(item)).map_or(64, |(n, _)| n)
     }
 
     /// A random number from 0 to 1 (`level.random.nextFloat()`, `random.nextInt(10) == 0`

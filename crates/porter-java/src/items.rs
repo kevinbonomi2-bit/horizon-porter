@@ -50,6 +50,32 @@ pub(crate) fn resolve(sources: &[(String, String)], scan: &mut ModScan) {
         {
             reg.args = format!("{}\n/* super */ {sup}", reg.args);
         }
+        // `bowlFoodItem(FoodValues.BEEF_STEW)`: a static helper of the mod that makes
+        // the item's settings (`return new Properties().food(food).craftRemainder(
+        // Items.BOWL).stacksTo(16);`), its settings added, as they read in Java.
+        let mut inlined = Vec::new();
+        let mut text = reg.args.clone();
+        for _ in 0..3 {
+            let mut added = String::new();
+            for (name, args) in helper_calls(&text) {
+                if inlined.contains(&(name.clone(), args.len())) {
+                    continue;
+                }
+                let Some((params, ret)) = sources
+                    .iter()
+                    .find_map(|(_, src)| properties_helper(src, &name, args.len()))
+                else {
+                    continue;
+                };
+                inlined.push((name.clone(), args.len()));
+                added.push_str(&format!("\n/* {name} */ {}", substitute(&ret, &params, &args)));
+            }
+            if added.is_empty() {
+                break;
+            }
+            reg.args.push_str(&added);
+            text = added;
+        }
     }
     // Foods and consumables: the components their constants build.
     for (_, src) in sources {
@@ -433,6 +459,66 @@ fn method(src: &str, name: &str) -> Option<(Vec<String>, String)> {
             .filter_map(|p| p.split_whitespace().last().map(str::to_string))
             .collect();
         return Some((names, body.to_string()));
+    }
+    None
+}
+
+/// The calls in `text` to a plain function (`bowlFoodItem(a, b)`, not `x.f(..)` or
+/// `new X(..)`), with their arguments.
+fn helper_calls(text: &str) -> Vec<(String, Vec<String>)> {
+    let mut out = Vec::new();
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i] as char;
+        if !(c.is_ascii_lowercase() || c == '_') || (i > 0 && {
+            let b = bytes[i - 1] as char;
+            b.is_ascii_alphanumeric() || b == '_' || b == '.' || b == ':'
+        }) {
+            i += 1;
+            continue;
+        }
+        let name: String = text[i..]
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect();
+        let after = i + name.len();
+        let preceded_by_new = text[..i].trim_end().ends_with("new");
+        if text[after..].starts_with('(') && !preceded_by_new && name != "new" && name != "super" {
+            if let Some(args) = balanced(&text[after..]) {
+                let args: Vec<String> = split_args(args)
+                    .into_iter()
+                    .filter(|a| !a.trim().is_empty())
+                    .collect();
+                out.push((name.clone(), args));
+            }
+        }
+        i = after.max(i + 1);
+    }
+    out
+}
+
+/// A static method `name` of `src` with `arity` parameters that returns an item's
+/// settings (`new Properties()...`, or another such helper): its parameter names and
+/// the expression it returns.
+fn properties_helper(src: &str, name: &str, arity: usize) -> Option<(Vec<String>, String)> {
+    let mut from = 0;
+    while let Some(i) = src[from..].find(&format!(" {name}(")).map(|i| from + i) {
+        from = i + 1;
+        // A declaration returning `Properties` / `Item.Properties`.
+        let line_start = src[..i].rfind(['\n', ';', '}', '{']).map_or(0, |n| n + 1);
+        let head = &src[line_start..i];
+        if !head.contains("static") || !head.trim_end().ends_with("Properties") {
+            continue;
+        }
+        let Some((params, body)) = method(&src[i..], name) else {
+            continue;
+        };
+        if params.len() != arity {
+            continue;
+        }
+        let ret = body.find("return ").map(|r| until_semicolon(&body[r + 7..]))?;
+        return Some((params, ret.trim().to_string()));
     }
     None
 }

@@ -72,6 +72,9 @@ pub enum Kind {
     Float,
     Double,
     Text,
+    /// An `ItemStack` (a pot's meal container, a shell's flower): the item's id,
+    /// empty for `ItemStack.EMPTY`.
+    Item,
 }
 
 impl Kind {
@@ -86,6 +89,7 @@ impl Kind {
             "float" | "Float" => Kind::Float,
             "double" | "Double" => Kind::Double,
             "String" => Kind::Text,
+            "ItemStack" | "ItemStackTemplate" => Kind::Item,
             _ => return None,
         })
     }
@@ -101,6 +105,8 @@ impl Kind {
             "putFloat" => Kind::Float,
             "putDouble" => Kind::Double,
             "putString" => Kind::Text,
+            // `output.store("Container", ItemStack.CODEC, stack)`, read as `storeItem`.
+            "storeItem" => Kind::Item,
             _ => return None,
         })
     }
@@ -114,7 +120,7 @@ impl Kind {
             Kind::Long => "i64",
             Kind::Float => "f32",
             Kind::Double => "f64",
-            Kind::Text => "String",
+            Kind::Text | Kind::Item => "String",
         }
     }
 
@@ -127,7 +133,7 @@ impl Kind {
             Kind::Long => "Long",
             Kind::Float => "Float",
             Kind::Double => "Double",
-            Kind::Text => "Text",
+            Kind::Text | Kind::Item => "Text",
         }
     }
 }
@@ -406,6 +412,11 @@ pub const BLOCK_ENTITIES: &[(&str, &str, bool)] = &[
                     one_line(&f.key)
                 )
             };
+            let how = if f.kind == Kind::Item {
+                format!("{how}; the item's id (`minecraft:bowl`), empty for none")
+            } else {
+                how
+            };
             let _ = writeln!(
                 r,
                 "    /// `{}`, {how}.\n    pub {}: {},",
@@ -450,7 +461,7 @@ pub const BLOCK_ENTITIES: &[(&str, &str, bool)] = &[
         for f in &be.fields {
             let value = match f.kind {
                 Kind::Bool => format!("i8::from(self.{})", f.name),
-                Kind::Text => format!("self.{}.clone()", f.name),
+                Kind::Text | Kind::Item => format!("self.{}.clone()", f.name),
                 _ => format!("self.{}", f.name),
             };
             let _ = writeln!(
@@ -966,6 +977,7 @@ mod tests {
         assert_eq!(Kind::from_java("float"), Some(Kind::Float));
         assert_eq!(Kind::from_java("java.lang.String"), Some(Kind::Text));
         assert_eq!(Kind::from_java("ItemStackHandler"), None);
+        assert_eq!(Kind::from_java("ItemStack"), Some(Kind::Item));
         assert_eq!(Kind::from_put("putBoolean"), Some(Kind::Bool));
     }
 }
