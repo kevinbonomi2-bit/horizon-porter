@@ -218,6 +218,21 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
     for (hook, classes) in blocks::hooks(&behaviours) {
         wired.entry(hook).or_default().extend(classes);
     }
+    // Items that plant a block of another name (seeds), placed from `use_item_on`.
+    let places: Vec<(String, String, String)> = content
+        .places
+        .iter()
+        .map(|(item, block, rule)| {
+            (
+                format!("{ns}:{item}"),
+                format!("{ns}:{block}"),
+                rule.clone(),
+            )
+        })
+        .collect();
+    if !places.is_empty() {
+        wired.entry("use_item_on").or_default();
+    }
     let behaviour_blocks: Vec<(String, porter_content::Block)> = content
         .blocks
         .iter()
@@ -453,6 +468,7 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
         behaviour_blocks: &behaviour_blocks,
         vanilla_containers: &vanilla_containers,
         cooking: &cooking,
+        places: &places,
         statics: &java_statics,
         ledger: horizon.map(|src| (src.to_path_buf(), unmapped_ports(scan, src))),
     };
@@ -877,6 +893,8 @@ struct Ctx<'a> {
     vanilla_containers: &'a [(String, String, usize)],
     /// Cooking recipes, vanilla's and the mod's: (type, ingredient, result, count, ticks).
     cooking: &'a [(String, String, String, u32, u32)],
+    /// Items that plant a block of another name: (item, block, what it stands on).
+    places: &'a [(String, String, String)],
     /// The Java statics the mod's code shares.
     statics: &'a [crate::statics::Module],
     /// The Horizon checkout read, and the functions that port each unmapped
@@ -1254,8 +1272,9 @@ pub const DESCRIPTION: &str = "{description}";
             self.behaviours,
             self.behaviour_blocks,
             !self.block_entities.is_empty(),
+            self.places,
         ));
-        if !self.behaviours.is_empty() {
+        if !self.behaviours.is_empty() || !self.places.is_empty() {
             // Which blocks open a menu when used: a machine's, a chest-like one's.
             let mut checks = Vec::new();
             if !self.machines.is_empty() {
@@ -2323,7 +2342,7 @@ fn {id}_net_from_server(game: &mut crate::game::Game<'_>, channel: &str, data: &
             | "update_shape"
             | "use_item_on"
             | "use_item"
-                if !self.behaviours.is_empty() =>
+                if !self.behaviours.is_empty() || !self.places.is_empty() =>
             {
                 blocks::helper(hook, id, m, name, !self.block_entities.is_empty())
                     .expect("a block hook's bindings")

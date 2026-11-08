@@ -489,6 +489,14 @@ pub mod game {
         pub struct Ticks;
         #[derive(Clone, Copy, Debug)]
         pub struct FluidState;
+        pub struct FluidKind;
+        impl FluidKind {
+            pub const fn name(self) -> &'static str { "minecraft:empty" }
+        }
+        impl FluidState {
+            pub const fn kind(self) -> FluidKind { FluidKind }
+            pub const fn amount(self) -> u8 { 0 }
+        }
         // horizon-world's level/place.rs: vanilla's BlockPlaceContext.
         pub struct PlacementContext {
             pub pos: BlockPos,

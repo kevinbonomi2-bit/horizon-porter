@@ -194,8 +194,9 @@ pub fn runtime(
     behaviours: &[Behaviour],
     blocks: &[(String, porter_content::Block)],
     entities: bool,
+    places: &[(String, String, String)],
 ) -> String {
-    if behaviours.is_empty() {
+    if behaviours.is_empty() && places.is_empty() {
         return String::new();
     }
     let mut r = if entities {
@@ -206,8 +207,11 @@ pub fn runtime(
     } else {
         RUNTIME_TYPES.to_string()
     };
-    let ns = behaviours[0].blocks[0]
-        .split_once(':')
+    let ns = behaviours
+        .first()
+        .and_then(|b| b.blocks.first())
+        .or_else(|| places.first().map(|(item, _, _)| item))
+        .and_then(|id| id.split_once(':'))
         .map_or("", |(ns, _)| ns);
     let _ = write!(
         r,
@@ -246,6 +250,11 @@ pub fn runtime(
     }
     r.push_str("];\n");
 
+    r.push_str("\n/// Items that plant a block of another name (`cabbage_seeds` plants `cabbages`):\n/// (item, block, what it stands on: `farmland`, `soil`, `water` or `any`).\npub const PLACES: &[(&str, &str, &str)] = &[\n");
+    for (item, block, rule) in places {
+        let _ = writeln!(r, "    ({item:?}, {block:?}, {rule:?}),");
+    }
+    r.push_str("];\n");
     for b in behaviours {
         let _ = write!(r, "\nconst {}: &[&str] = &[\n", consts(&b.function));
         for id in &b.blocks {
@@ -346,7 +355,7 @@ pub fn runtime(
                 .join(", ");
             let what = match kind {
                 Kind::Place => {
-                    "the state its blocks are placed in: return the properties Java sets on\n/// `defaultBlockState()` (`facing` as Java names it: Horizon turns it to the one\n/// stored), or None to leave the template's placement"
+                    "the state its blocks are placed in: return the properties Java sets on\n/// `defaultBlockState()` (`facing` as Java names it: Horizon turns it to the one\n/// stored), or None to leave the template's placement. Where Java returns `null`\n/// (no block), return `Some(vec![(CANCEL.into(), String::new())])`"
                 }
                 Kind::Use => {
                     "what a right click on its blocks does: read and change blocks through\n/// `world`, and return true where Java returns `SUCCESS` or `CONSUME`, false for `PASS`.\n/// Where Java opens a menu (`player.openMenu(..)`), return false: the click goes on to\n/// the block's template (a barrel, a furnace), which opens the block's menu itself; true\n/// would stop it"
@@ -415,6 +424,8 @@ pub fn tests(behaviours: &[Behaviour]) -> String {
             pitch: 0.0,
             sneaking: false,
             replace_clicked: false,
+            water: false,
+            water_source: false,
         };
         assert_eq!(p.horizontal_direction(), "south");
         p.yaw = 90.0;
@@ -956,6 +967,63 @@ fn {id}_use_item_on({params}) {
         return;
     }
     let item = stack.item.to_string();
+    // An item that plants a block of another name (seeds): placed as Java's
+    // `BlockItem.place` does, where the block can stand.
+    if let Some((_, block, rule)) = m::PLACES.iter().find(|(i, _, _)| *i == item) {
+        let clicked = game.native_block(pos);
+        let replaceable = |b: &str| {
+            matches!(
+                b,
+                "minecraft:air" | "minecraft:short_grass" | "minecraft:tall_grass" | "minecraft:fern" | "minecraft:water"
+            )
+        };
+        let target = if replaceable(&clicked) && clicked != "minecraft:water" {
+            pos
+        } else {
+            [pos[0] + face[0], pos[1] + face[1], pos[2] + face[2]]
+        };
+        let here = game.native_block(target);
+        let below = game.native_block([target[0], target[1] - 1, target[2]]);
+        let room = here == "minecraft:air" || (*rule == "water" && here == "minecraft:water");
+        let stands = match *rule {
+            "farmland" => below == "minecraft:farmland",
+            "soil" => matches!(
+                below.as_str(),
+                "minecraft:grass_block" | "minecraft:dirt" | "minecraft:coarse_dirt" | "minecraft:podzol"
+                    | "minecraft:rooted_dirt" | "minecraft:moss_block" | "minecraft:mud" | "minecraft:farmland"
+            ),
+            "water" => here == "minecraft:water",
+            _ => below != "minecraft:air",
+        };
+        if room && stands {
+            let state = game.pack.assets.registry.default_state(block);
+            if let Some(state) = state {
+                let dimension = game.native_dimension();
+                if game.native_set_block(dimension, target, state, 3) {
+                    let creative = game
+                        .native_acting_player()
+                        .is_some_and(|p| p.game_mode == 1);
+                    if !creative {
+                        let slot = game.held_mut();
+                        if let Some(s) = slot.as_mut() {
+                            s.count = s.count.saturating_sub(1);
+                            if s.count == 0 {
+                                *slot = None;
+                            }
+                        }
+                    }
+                    let at = [
+                        f64::from(target[0]) + 0.5,
+                        f64::from(target[1]) + 0.5,
+                        f64::from(target[2]) + 0.5,
+                    ];
+                    let _ = game.native_level_play_sound("minecraft:item.crop.plant", at, 4, 1.0, 1.0);
+                    *claimed = true;
+                }
+            }
+        }
+        return;
+    }
     if !m::item_acts_on_block(&item) {
         return;
     }
@@ -1074,10 +1142,25 @@ fn {id}_state_for_placement({params}) {
         pitch: context.pitch,
         sneaking: context.sneaking,
         replace_clicked: context.replace_clicked,
+        water: fluid.kind().name().contains("water"),
+        water_source: fluid.kind().name().contains("water") && fluid.amount() == 8,
     };
-    let Some(set) = m::state_for_placement(&placement, &Level { game }) else {
+    let mut set = m::state_for_placement(&placement, &Level { game }).unwrap_or_default();
+    // Java's `null`: no block.
+    if set.iter().any(|(k, _)| k == m::CANCEL) {
+        *answer = Some(None);
         return;
-    };
+    }
+    // A waterlogged block is so only where it is placed in water (`SimpleWaterloggedBlock`),
+    // whatever its default.
+    if !set.iter().any(|(k, _)| k == "waterlogged")
+        && game.native_state_with_property(*state, "waterlogged", "false").is_some()
+    {
+        set.push(("waterlogged".into(), placement.water_source.to_string()));
+    }
+    if set.is_empty() {
+        return;
+    }
     let mut placed = *state;
     for (key, value) in set {
         let value = if key == "facing" {
@@ -1397,7 +1480,16 @@ pub struct Placement {
     pub sneaking: bool,
     /// The clicked block is being replaced (`replacingClickedOnBlock`).
     pub replace_clicked: bool,
+    /// The spot holds water (`getFluidState(pos).is(FluidTags.WATER)`), and a source
+    /// (`getAmount() == 8`).
+    pub water: bool,
+    pub water_source: bool,
 }
+
+/// What a place function returns, as the only property, to refuse the placement as
+/// Java's `getStateForPlacement` returning `null` does: `Some(vec![(CANCEL.into(),
+/// String::new())])`.
+pub const CANCEL: &str = "!cancel";
 
 impl Placement {
     /// The way the placer looks, flat (`getHorizontalDirection`, Java's

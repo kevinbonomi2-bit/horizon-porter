@@ -57,6 +57,10 @@ pub struct Content {
     pub items: Vec<Item>,
     /// The mod's mobs, as `id (template)`.
     pub entities: Vec<String>,
+    /// Items that plant a block of another name (`cabbage_seeds` plants `cabbages`,
+    /// `BlockItem::new` with the crop): (item, block, what the block stands on:
+    /// `farmland`, `soil`, `water` or `any`).
+    pub places: Vec<(String, String, String)>,
     /// Resource files left out, with why.
     pub skipped: Vec<String>,
 }
@@ -722,6 +726,57 @@ pub fn generate_with(
         );
     }
     let blocks: BTreeSet<String> = content.blocks.iter().map(|b| b.name.clone()).collect();
+    // Items that plant a block of another name: the block registered with the same
+    // first argument (`ModBlockItemIds.CABBAGE_CROP`, a constant naming both).
+    for reg in scan.registrations.iter().filter(|r| r.registry == "item") {
+        let Some(item_name) = reg.id.as_deref().filter(|n| valid_name(n)) else {
+            continue;
+        };
+        if blocks.contains(item_name) || !reg.args.contains("BlockItem") {
+            continue;
+        }
+        let key = reg.args.split(',').next().unwrap_or("").trim();
+        if key.is_empty() || key.starts_with('"') {
+            continue;
+        }
+        let Some(block) = scan
+            .registrations
+            .iter()
+            .filter(|r| r.registry == "block")
+            .find(|r| r.args.split(',').next().map(str::trim) == Some(key))
+            .and_then(|r| r.id.clone())
+            .filter(|b| blocks.contains(b))
+        else {
+            continue;
+        };
+        let template = content
+            .blocks
+            .iter()
+            .find(|b| b.name == block)
+            .map_or("", |b| b.template.as_str());
+        let rule = match template {
+            "minecraft:wheat"
+            | "minecraft:carrots"
+            | "minecraft:potatoes"
+            | "minecraft:beetroots"
+            | "minecraft:torchflower_crop"
+            | "minecraft:pitcher_crop"
+            | "minecraft:melon_stem"
+            | "minecraft:pumpkin_stem" => "farmland",
+            "minecraft:seagrass" | "minecraft:kelp" | "minecraft:tall_seagrass" => "water",
+            t if t.ends_with("_sapling")
+                || t.ends_with("bush")
+                || t.contains("flower")
+                || t.ends_with("_tulip") =>
+            {
+                "soil"
+            }
+            _ => "any",
+        };
+        content
+            .places
+            .push((item_name.to_string(), block, rule.to_string()));
+    }
     let mut seen = BTreeSet::new();
     for reg in scan
         .registrations
