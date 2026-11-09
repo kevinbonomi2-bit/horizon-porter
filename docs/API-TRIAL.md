@@ -93,12 +93,27 @@ pinned API with no warnings, and the generated Macaw's mod plays as the hand-wri
 `/modprofile` counted its `PortedBlock` placing a birch curved gate (facing south), opening it on a
 click, and reshaping a metal fence.
 
+## Block entities
+
+`port --api` now covers block entities too: each type declared with its blocks and a
+`BlockEntityPart`, its saved state from runtime.rs's defaults, its tick on runtime.rs's `Machine`
+(its slots, data slots, the blocks beside it and their saved values, recipes, tags, item facts,
+sounds, particles and drops), its container (`block_entity_container`) and what clients get of it.
+A click's or an item's code reaches block entities through the API's handles, and can give and
+drop items, change the hand's stack, wear a tool, send particles and test tags.
+
+Checked in the fork's game with Farmer's Delight: its cooking pot cooks beef stew on a campfire and
+keeps it for a bowl, and its cutting board takes a cabbage that a knife cuts into two leaves.
+
+Two things the API didn't give as expected: a mod's own recipe type comes with empty ingredients
+and results (the glue reads them from the recipe's JSON, as the bundle does), and the update tag a
+client gets has no host to name items with (the glue keeps the ids its ticks and clicks named).
+A player's hands go through `LivingRef::new`, a game-side helper.
+
 ## Next
 
-1. **Block entities and machines** as `BlockEntityPart`s: the state (`block_entity`), the tick
-   with its `Machine` (slots, data slots, recipes, effects), `menu_quick_move`, the update tag and
-   the renderer (`block_entity_submit`), screens. They are most of Farmer's Delight's code, and
-   the glue's `BlockEntities` answers "none" until then.
+1. **The rest of block entities:** renderers (`block_entity_submit`), screens (`screen`,
+   `screen_draw`) and shift-clicks (`menu_quick_move`); tanks, energy and hopper transfers.
 2. **Placed and broken by a player** (`onPlace`/`setPlacedBy`, `playerWillDestroy`): global
    hooks on `Hooks`, filtered to the mod's blocks.
 3. **The rest of `World`**: giving and dropping items, the hand, particles, tags and schedules on
