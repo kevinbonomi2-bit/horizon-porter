@@ -1191,6 +1191,8 @@ const ITEM_WORLD: &str = r#"{tags}    struct Here<'g, 'a> {
             stack.insert(JavaString::from("count"), Tag::Int(count.min(99) as i32));
             let mut nbt = Compound::new();
             nbt.insert(JavaString::from("Item"), Tag::Compound(stack));
+        // `ItemEntity.setDefaultPickUpDelay`: it pops out before anyone can take it.
+        nbt.insert(JavaString::from("PickupDelay"), Tag::Short(10));
             nbt.insert(
                 JavaString::from("Motion"),
                 Tag::List(motion.iter().map(|v| Tag::Double(v.to_bits())).collect()),

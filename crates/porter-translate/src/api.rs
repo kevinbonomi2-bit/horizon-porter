@@ -33,6 +33,7 @@ pub fn files(
     behaviours: &[Behaviour],
     entities: bool,
     machines: bool,
+    renderers: bool,
     particles: &[String],
 ) -> BTreeMap<String, String> {
     let mut out = BTreeMap::new();
@@ -49,7 +50,7 @@ pub fn files(
             "[package]\nname = \"mod-{id}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\n# The launcher points this at the Horizon source it builds the game from.\nhorizon-mod-api = {{ git = \"https://github.com/arismoko/horizon\", rev = \"{API_HORIZON}\" }}\n"
         ),
     );
-    out.insert("api/src/lib.rs".into(), lib_rs(behaviours, entities, machines, particles));
+    out.insert("api/src/lib.rs".into(), lib_rs(behaviours, entities, machines, renderers, particles));
     out
 }
 
@@ -63,7 +64,13 @@ fn covered(kind: Kind) -> bool {
     !matches!(kind, Kind::Placed | Kind::Destroyed)
 }
 
-fn lib_rs(behaviours: &[Behaviour], entities: bool, machines: bool, particles: &[String]) -> String {
+fn lib_rs(
+    behaviours: &[Behaviour],
+    entities: bool,
+    machines: bool,
+    renderers: bool,
+    particles: &[String],
+) -> String {
     let has = |k: Kind| behaviours.iter().any(|b| b.kind == k);
     let block_kinds = [
         Kind::Place,
@@ -108,7 +115,9 @@ fn lib_rs(behaviours: &[Behaviour], entities: bool, machines: bool, particles: &
             &ENTITIES
                 .replace("__FROM_TAG__", &crate::block_entity::FROM_TAG.replace("m::", "runtime::"))
                 .replace("__TO_TAG__", &crate::block_entity::TO_TAG.replace("m::", "runtime::"))
-                .replace("__MACHINE_CONTAINER__", if machines { MACHINE_CONTAINER } else { "" }),
+                .replace("__MACHINE_CONTAINER__", if machines { MACHINE_CONTAINER } else { "" })
+                .replace("__SUBMIT__", if renderers { SUBMIT } else { "" })
+                .replace("__SCREENS__", if machines { SCREENS } else { "" }),
         );
     }
     if has(Kind::Use) || has(Kind::ItemUseOn) || has(Kind::ItemUse) {
@@ -592,6 +601,8 @@ impl runtime::World for Here<'_> {
         stack.insert("count".into(), Tag::Int(count.min(99) as i32));
         let mut nbt = mod_api::Compound::new();
         nbt.insert("Item".into(), Tag::Compound(stack));
+        // `ItemEntity.setDefaultPickUpDelay`: it pops out before anyone can take it.
+        nbt.insert("PickupDelay".into(), Tag::Short(10));
         nbt.insert(
             "Motion".into(),
             Tag::List(motion.iter().map(|v| Tag::Double(v.to_bits())).collect()),
@@ -1275,6 +1286,8 @@ impl mod_api::BlockEntityPart for PortedEntity {
                     stack.insert("count".into(), Tag::Int(count.min(99) as i32));
                     let mut nbt = mod_api::Compound::new();
                     nbt.insert("Item".into(), Tag::Compound(stack));
+        // `ItemEntity.setDefaultPickUpDelay`: it pops out before anyone can take it.
+        nbt.insert("PickupDelay".into(), Tag::Short(10));
                     nbt.insert(
                         "Motion".into(),
                         Tag::List(motion.iter().map(|v| Tag::Double(v.to_bits())).collect()),
@@ -1323,7 +1336,7 @@ impl mod_api::BlockEntityPart for PortedEntity {
         }
         Some(nbt)
     }
-}
+__SUBMIT____SCREENS__}
 "##;
 
 const MACHINE_CONTAINER: &str = r#"    if let Some(machine) = runtime::MACHINES.iter().find(|x| x.block == block) {
@@ -1420,3 +1433,185 @@ const VANILLA_PARTICLES: &[&str] = &[
     "end_rod", "totem_of_undying", "sneeze", "dolphin", "fishing", "underwater", "mycelium",
     "snowflake", "sculk_soul", "soul", "egg_crack", "cherry_leaves", "firefly",
 ];
+
+const SUBMIT: &str = r#"
+    fn block_entity_submit(&self, host: &dyn mod_api::ClientHost, event: &mut mod_api::BlockEntitySubmitEvent<'_>) {
+        let id = event.entity.id().to_string();
+        if !runtime::BLOCK_ENTITIES.iter().any(|(_, e, _)| *e == id) {
+            return;
+        }
+        let nbt = &event.entity.nbt;
+        // Its items, as the update tag carries them (an empty name is an emptied slot).
+        let text = |key: String| match compound_get(nbt, &key) {
+            Some(mod_api::Tag::String(s)) => Some(s.to_string_lossy()).filter(|s| !s.is_empty()),
+            _ => None,
+        };
+        let count = |key: String| match compound_get(nbt, &key) {
+            Some(mod_api::Tag::Int(n)) => (*n).max(0) as u32,
+            _ => 1,
+        };
+        let slots = (0..64).rev().find(|i| text(format!("item.{i}")).is_some()).map_or(0, |i| i + 1);
+        let props = host.block_state_string(event.state).map(|t| parse_state(&t).1).unwrap_or_default();
+        let frame = runtime::Frame {
+            pos: event.pos,
+            block: event.block.to_string(),
+            facing: props.iter().find(|(k, _)| k == "facing").map(|(_, v)| v.clone()),
+            partial: event.draw.partial(),
+            game_time: event.draw.game_time(),
+            items: (0..slots)
+                .map(|i| text(format!("item.{i}")).map(|item| (item, count(format!("count.{i}")))))
+                .collect(),
+        };
+        let mut ops = runtime::Draw::default();
+        runtime::render_block_entity(&id, |key| saved_of(compound_get(nbt, key)?), &frame, &mut ops);
+        let draw = &mut *event.draw;
+        for op in ops.ops {
+            match op {
+                runtime::DrawOp::Push => draw.push(),
+                runtime::DrawOp::Pop => draw.pop(),
+                runtime::DrawOp::Translate(by) => draw.translate(by),
+                runtime::DrawOp::Rotate { axis, degrees, pivot } => draw.rotate_about(axis, degrees, pivot),
+                runtime::DrawOp::Scale(by) => draw.scale(by),
+                runtime::DrawOp::Block { block, properties } => {
+                    if let Some(state) = host.block_state_id(&block) {
+                        let properties: Vec<(&str, &str)> =
+                            properties.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+                        let _ = draw.block(state.block(), &properties);
+                    }
+                }
+                runtime::DrawOp::Cube { from, to, sprite, tint } => {
+                    // Horizon names vanilla's textures without `minecraft:` (`block/stone`).
+                    let sprite = sprite.strip_prefix("minecraft:").unwrap_or(&sprite);
+                    let face = Some(mod_api::CubeFace::new(sprite));
+                    let _ = draw.cube(from, to, [face; 6], tint);
+                }
+                runtime::DrawOp::Item { item, count } => {
+                    if let Some(stack) = item_stack(host, &item, count) {
+                        let _ = draw.item(&stack, mod_api::NativeItemDisplayContext::Fixed, None, 0);
+                    }
+                }
+                runtime::DrawOp::Keep => draw.keep(),
+                // A model baked on its own: not reached through the API glue yet.
+                runtime::DrawOp::Model { .. } => {}
+            }
+        }
+    }
+"#;
+
+const SCREENS: &str = r#"
+    // A machine's menu screen: where each slot sits, as its Java menu places them.
+    fn screen(&self, host: &dyn mod_api::Host, event: &mut mod_api::ScreenEvent<'_>) -> Option<mod_api::NativeScreen> {
+        let _ = host;
+        let machine = runtime::MACHINES.iter().find(|x| x.block == event.block)?;
+        Some(mod_api::NativeScreen {
+            width: machine.size[0],
+            height: machine.size[1],
+            slots: machine.layout.to_vec(),
+            inventory_y: machine.inventory[1],
+            inventory_x: machine.inventory[0],
+            own_labels: false,
+            // The mod's own texture instead of the plain panel.
+            own_background: machine.texture.is_some(),
+        })
+    }
+
+    // Draws a machine's screen under its slots and items.
+    fn screen_draw(&self, host: &dyn mod_api::ClientHost, event: &mut mod_api::ScreenDrawEvent<'_>) {
+        let level = host.level(host.dimension());
+        let read = |p: [i32; 3]| {
+            level
+                .and_then(|l| l.block_state(host, p))
+                .and_then(|s| host.block_state_string(s))
+                .map(|t| parse_state(&t).0)
+                .unwrap_or_else(|| "minecraft:air".into())
+        };
+        // The machine's place: the block under the crosshair, whose menu is open.
+        let pos = host
+            .raycast(6.0)
+            .map(|hit| [hit.block_x, hit.block_y, hit.block_z])
+            .filter(|p| read(*p) == event.block);
+        let tags = |kind: &str, tag: &str, id: &str| in_tag(host, kind, tag, id);
+        let at = runtime::ScreenAt { pos, block: &read, tags: &tags };
+        let origin = event.origin;
+        for sprite in runtime::screen_sprites(event.block, event.data, &at) {
+            let [x, y, w, h] = sprite.dst;
+            let _ = event.draw.sprite(sprite.name, sprite.src, [origin[0] + x, origin[1] + y, w, h], None);
+        }
+    }
+
+    // A shift-click in a machine's menu: the Java menu's `quickMoveStack` decides.
+    fn menu_quick_move(&self, host: &mut dyn ServerHost, event: &mut mod_api::MenuQuickMoveEvent<'_>) -> Flow {
+        let player = host.players().acting_player();
+        let Some(level) = player.and_then(|p| p.entity().level(&*host)) else {
+            return Flow::Continue;
+        };
+        let block = level
+            .block_state(&*host, event.pos)
+            .and_then(|s| host.block_state_string(s))
+            .map(|t| parse_state(&t).0)
+            .unwrap_or_default();
+        let Some(menu) = runtime::MACHINES.iter().find(|x| x.block == block).map(|x| x.menu) else {
+            return Flow::Continue;
+        };
+        if !runtime::moves_on_shift_click(menu) {
+            return Flow::Continue;
+        }
+        let container_slots = event.container_slots;
+        let before: Vec<Option<runtime::Stack>> = (0..container_slots)
+            .map(|i| {
+                event.entity.items.get(i).and_then(Option::as_ref).and_then(|s| stack_of(&*host, s))
+                    .map(|(item, count)| runtime::Stack::new(&item, count))
+            })
+            .collect();
+        let Some((item, count)) = stack_of(&*host, event.stack) else {
+            return Flow::Continue;
+        };
+        // Stack sizes, read before `give` borrows the host.
+        let mut sizes: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+        for s in before.iter().flatten().map(|s| s.item.clone()).chain(std::iter::once(item.clone())) {
+            let n = item_facts(&*host, &s).map_or(64, |(n, _)| n);
+            sizes.insert(s, n);
+        }
+        let max_stack = |item: &str| sizes.get(item).copied().unwrap_or(64);
+        let q = runtime::QuickMove { slot: event.slot, container_slots };
+        // The API's stacks are never empty, so a move that takes the whole stack can't
+        // leave its slot empty: tried first without giving, that one goes the game's way.
+        let mut moving = runtime::Stack::new(&item, count);
+        let mut keep = |_: &str, count: u32| count;
+        let mut slots = runtime::MenuSlots::new(before.clone(), &max_stack, &mut keep);
+        if !runtime::quick_move(menu, &q, &mut moving, &mut slots) || moving.count == 0 {
+            return Flow::Continue;
+        }
+        let dimension = host.dimension();
+        let mut here = Here {
+            host: &mut *host,
+            level: Some(level),
+            dimension,
+            player,
+            hand: mod_api::Hand::Main,
+            seed: seed_of(event.pos),
+        };
+        let mut give = |item: &str, count: u32| runtime::World::give(&mut here, item, count);
+        let mut moving = runtime::Stack::new(&item, count);
+        let mut slots = runtime::MenuSlots::new(before.clone(), &max_stack, &mut give);
+        if !runtime::quick_move(menu, &q, &mut moving, &mut slots) || moving.count == 0 {
+            return Flow::Continue;
+        }
+        // The block's slots the move changed; the clicked slot holds what is left.
+        let mut after = slots.container;
+        drop(give);
+        if event.slot < container_slots {
+            after[event.slot] = Some(moving.clone()).filter(|s| s.count > 0);
+        }
+        if event.entity.items.len() < container_slots {
+            event.entity.items.resize_with(container_slots, || None);
+        }
+        for (i, (was, now)) in before.iter().zip(&after).enumerate() {
+            if was != now {
+                event.entity.items[i] = now.as_ref().and_then(|s| item_stack(&*here.host, &s.item, s.count));
+            }
+        }
+        let _ = event.stack.set_count(moving.count);
+        Flow::Cancel
+    }
+"#;

@@ -530,6 +530,7 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
             &behaviours,
             !block_entities.is_empty(),
             !machines.is_empty(),
+            wired.contains_key("block_entity_submit"),
             &mod_particles(&content),
         )
     } else {
@@ -2052,6 +2053,8 @@ fn {id}_block_entity_tick(
                 stack.insert(JavaString::from("count"), Tag::Int(count.min(99) as i32));
                 let mut nbt = Compound::new();
                 nbt.insert(JavaString::from("Item"), Tag::Compound(stack));
+        // `ItemEntity.setDefaultPickUpDelay`: it pops out before anyone can take it.
+        nbt.insert(JavaString::from("PickupDelay"), Tag::Short(10));
                 nbt.insert(
                     JavaString::from("Motion"),
                     Tag::List(motion.iter().map(|v| Tag::Double(v.to_bits())).collect()),
