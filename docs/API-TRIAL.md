@@ -44,6 +44,23 @@ compile"), against about 5 minutes for a mixin build.
   #4), slot rules a mod's code can answer (`MenuPart::menu_slot_rules`: #14), and an
   `entity_inside` part method (#13).
 
+## In game
+
+The prebuilt game crashed at start here (below), so the game was built from source at the same
+commit instead (`native-build --profile balanced`: 944 s the first time; later builds recompile
+only the mod). In a creative world, with `/modprofile` counting the mod's calls:
+
+- A player placing a spruce curved gate ran the ported `getStateForPlacement` through the part's
+  `state_for_placement`: it faced east with its hinge on the right, as the Java picks them.
+- Clicking an oak curved gate ran the ported `useWithoutItem` through `use_item_on` (0.09 ms): it
+  opened, and closed on the next click.
+- Placing blocks beside a metal fence ran its ported `updateShape` through `update_shape`
+  (0.01 to 0.04 ms a call).
+
+Two more stand-ins were needed for this game: the fork's own `horizon-prepare` (its newer
+resource format), and the vanilla fluid states table that the fork's newer Java exporters write
+(`fluid_state_definitions`), added to `block-behaviours.json` by hand.
+
 ## What didn't work yet
 
 - **No playable fork release to build on.** The fork publishes prebuilt game libraries
@@ -51,9 +68,9 @@ compile"), against about 5 minutes for a mixin build.
   a copy of an installed Nightly `nightly-2026-11-09-62c91f4` so the launcher took it as a base at
   the prebuilt's commit.
 - **The prebuilt game crashes at start on this Windows machine** (`0xc0000005`, before any log),
-  with an empty mod as well as with ours, so the trial mod has not run in game yet. Stack size is
+  with an empty mod as well as with ours. Stack size is
   the same as Horizon's own builds (8 MB). Building the whole game from source at that commit
-  (`--profile balanced`, 20 to 40 minutes the first time) would get around it.
+  got around it (above).
 - **The API moves daily.** Between the prebuilt (`62c91f4`) and the next day's code, three names
   the glue uses lost their `Native` prefix (`NativeBlockClick` → `BlockClick`...). A port pins one
   prebuilt; the porter would regenerate its glue for the API it targets.
