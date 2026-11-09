@@ -283,6 +283,23 @@ doesn't have where it runs) doesn't stop the mod: `install --build` and the app 
 function back to its stub, marked to port again, and build once more. The mod plays
 without it, and the build says which ones it put back.
 
+### As a mod on Horizon's new mod API
+
+```
+horizon-porter port my-mod.jar --out my-mod-horizon --api
+```
+
+Horizon's mod API (`mod_api`, in the [arismoko/horizon](https://github.com/arismoko/horizon)
+fork for now) replaces horizon-mixins bundles with typed hooks and Parts, compiled against a
+prebuilt game in seconds. `--api` writes the mod that way too, in `api/`, beside the bundle:
+`horizon-mod.toml` with `[native]` pins to the prebuilt game the porter was checked against,
+`Cargo.toml`, the content's `assets/` and `data/`, `src/runtime.rs` (the bundle's, with what
+`translate` ported in it; `translate` refreshes it) and `src/lib.rs`, the glue: a `BlockPart`
+for placement, clicks, shape updates, ticks, survival and comparators, and an `ItemPart` for
+item use and tooltips. Build it with that fork's launcher (`horizon-launcher native-build
+my-mod-horizon/api --trust-native-code`). Block entities, machines and screens stay in the
+bundle for now; [docs/API-TRIAL.md](docs/API-TRIAL.md) has what was tried and what's next.
+
 ### Trying it in the game
 
 ```

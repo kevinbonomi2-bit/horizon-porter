@@ -83,3 +83,25 @@ The porter can target the API by adding a backend that writes a trait mod (`hori
 with `[native]`, `Cargo.toml`, `src/lib.rs` glue, the same `runtime.rs`) beside the mixin bundle
 it writes today, and keep the bundle while players' launchers run upstream Horizon. Tier 2's
 helpers belong in that glue, on the API's `ServerHost` and handles, not on game internals.
+
+## Generated: `port --api`
+
+The glue is now written by the porter (`crates/porter-translate/src/api.rs`): `port --api` puts
+the mod in `api/` beside the bundle. The 7 trial mods with code (Farmer's Delight, Villagers
+Plus, Advanced Netherite, Beautify, Friends & Foes, Naturalist, Macaw's) all compile against the
+pinned API with no warnings, and the generated Macaw's mod plays as the hand-written trial did:
+`/modprofile` counted its `PortedBlock` placing a birch curved gate (facing south), opening it on a
+click, and reshaping a metal fence.
+
+## Next
+
+1. **Block entities and machines** as `BlockEntityPart`s: the state (`block_entity`), the tick
+   with its `Machine` (slots, data slots, recipes, effects), `menu_quick_move`, the update tag and
+   the renderer (`block_entity_submit`), screens. They are most of Farmer's Delight's code, and
+   the glue's `BlockEntities` answers "none" until then.
+2. **Placed and broken by a player** (`onPlace`/`setPlacedBy`, `playerWillDestroy`): global
+   hooks on `Hooks`, filtered to the mod's blocks.
+3. **The rest of `World`**: giving and dropping items, the hand, particles, tags and schedules on
+   a click (a tick has them).
+4. **The mod's own hooks** (events and Mixins the bundle stubs): as `Hooks` methods.
+5. **`--api` in the app**, and a build that installs `api/` with the fork's launcher.
