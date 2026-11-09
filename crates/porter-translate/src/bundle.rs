@@ -523,12 +523,14 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
         .iter()
         .map(|(rel, src)| (format!("content/{rel}"), src.clone()))
         .collect();
-    let api_files = if native && crate::api::wanted(&behaviours) {
+    let api_files = if native && crate::api::wanted(&behaviours, !block_entities.is_empty()) {
         crate::api::files(
             &id,
             content.files.get("horizon-mod.toml").map_or("", String::as_str),
             &behaviours,
             !block_entities.is_empty(),
+            !machines.is_empty(),
+            &mod_particles(&content),
         )
     } else {
         BTreeMap::new()
@@ -661,6 +663,25 @@ fn write_api(bundle: &Bundle, out: &Path) -> Result<()> {
         }
     }
     sync_api_runtime(out, &bundle.id)
+}
+
+/// The mod's own particle types (`assets/<ns>/particles/<name>.json`): `ns:name`.
+fn mod_particles(content: &porter_content::Content) -> Vec<String> {
+    let mut out: Vec<String> = content
+        .copies
+        .keys()
+        .chain(content.files.keys())
+        .filter_map(|rel| {
+            let parts: Vec<&str> = rel.split('/').collect();
+            match parts.as_slice() {
+                ["assets", ns, "particles", file] => Some(format!("{ns}:{}", file.strip_suffix(".json")?)),
+                _ => None,
+            }
+        })
+        .collect();
+    out.sort();
+    out.dedup();
+    out
 }
 
 /// Copies the bundle's runtime.rs (`mixins/<id>/runtime.rs`, with whatever `translate`
