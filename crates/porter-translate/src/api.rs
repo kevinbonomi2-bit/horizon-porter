@@ -1111,6 +1111,8 @@ fn recipes(host: &dyn mod_api::Host, kind: &str) -> Vec<runtime::Recipe> {
                 let v = v.as_array().and_then(|a| a.first()).unwrap_or(v);
                 let json = match (v.as_str(), v.get("id"), v.get("item")) {
                     (Some(id), _, _) => format!("{{\"id\": {id:?}}}"),
+                    // `{"item": {"id": .., "count": ..}}` (Farmer's Delight's cutting).
+                    (None, None, Some(item)) if item.is_object() => item.to_string(),
                     (None, None, Some(item)) => {
                         let count = v.get("count").and_then(|c| c.as_u64()).unwrap_or(1);
                         format!("{{\"id\": {item}, \"count\": {count}}}")
