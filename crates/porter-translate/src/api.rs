@@ -190,8 +190,8 @@ impl Hooks for Mod {
         }
 ",
     );
-    if entities {
-        // The particles its ticks may send: vanilla's plain ones and the mod's own.
+    {
+        // The particles its code may send: vanilla's plain ones and the mod's own.
         let mut names: Vec<String> = VANILLA_PARTICLES.iter().map(|p| format!("minecraft:{p}")).collect();
         names.extend(particles.iter().cloned());
         let _ = write!(
@@ -204,6 +204,8 @@ impl Hooks for Mod {
 ",
             names.iter().map(|n| format!("{n:?}")).collect::<Vec<_>>().join(", ")
         );
+    }
+    if entities {
         r.push_str(
             "        // Each block entity type, declared with the blocks that have it.
         let mut types: Vec<(&str, Vec<&str>)> = Vec::new();
@@ -402,6 +404,78 @@ fn seed_of(pos: [i32; 3]) -> u64 {
         | 1
 }
 
+/// Item ids by key, as a host named them: what clients get of a block entity is written
+/// where no host is at hand.
+static ITEM_IDS: std::sync::Mutex<Vec<(mod_api::ItemKey, String)>> = std::sync::Mutex::new(Vec::new());
+
+/// A stack's item and count.
+fn stack_of(host: &dyn mod_api::Host, stack: &mod_api::ItemStack) -> Option<(String, u32)> {
+    let key = stack.item();
+    let id = key.id(host);
+    if let Ok(mut ids) = ITEM_IDS.lock() {
+        if !ids.iter().any(|(k, _)| *k == key) {
+            ids.push((key, id.clone()));
+        }
+    }
+    Some((id, stack.count()))
+}
+
+/// A stack's item and count, by an id a host named before.
+fn stack_known(stack: &mod_api::ItemStack) -> Option<(String, u32)> {
+    let key = stack.item();
+    let ids = ITEM_IDS.lock().ok()?;
+    let (_, id) = ids.iter().find(|(k, _)| *k == key)?;
+    Some((id.clone(), stack.count()))
+}
+
+/// The particle keys the mod may send, requested at registration: vanilla's plain ones
+/// and the mod's own.
+static PARTICLES: std::sync::OnceLock<Vec<(String, mod_api::ParticleKey)>> = std::sync::OnceLock::new();
+
+fn particle(kind: &str) -> Option<mod_api::ParticleKey> {
+    let name = if kind.contains(':') { kind.to_string() } else { format!("minecraft:{kind}") };
+    PARTICLES.get()?.iter().find(|(n, _)| *n == name).map(|(_, k)| *k)
+}
+
+/// A stack of `count` `item`, as the game makes one.
+fn item_stack(host: &dyn mod_api::Host, item: &str, count: u32) -> Option<mod_api::ItemStack> {
+    let key = host.item_key(&mod_api::Identifier::parse(item).ok()?)?;
+    mod_api::ItemStack::new(key, count)
+}
+
+/// An item's stack size and what it leaves in a crafting grid.
+fn item_facts(host: &dyn mod_api::Host, item: &str) -> Option<(u32, Option<String>)> {
+    let rest = runtime::REMAINDERS
+        .iter()
+        .find(|(i, _)| *i == item)
+        .map(|(_, r)| r.to_string());
+    let max = mod_api::Identifier::parse(item)
+        .ok()
+        .and_then(|id| host.item_key(&id))
+        .and_then(|key| host.max_stack_size(key))
+        .unwrap_or(64);
+    Some((max, rest))
+}
+
+/// Whether `id` (a block or item, by `kind`) is in tag `tag`.
+fn in_tag(host: &dyn mod_api::Host, kind: &str, tag: &str, id: &str) -> bool {
+    let tag = tag.trim_start_matches('#');
+    if kind == "block" {
+        return host
+            .block_state_id(id)
+            .and_then(|s| host.block_in_tag(s.block(), tag))
+            .unwrap_or(false);
+    }
+    let (Ok(item), Ok(tag)) = (mod_api::Identifier::parse(id), mod_api::Identifier::parse(tag)) else {
+        return false;
+    };
+    let tags = host.tags();
+    match (host.item_key(&item), tags.key(&tag)) {
+        (Some(item), Some(tag)) => tags.is_in_tag(item, tag).unwrap_or(false),
+        _ => false,
+    }
+}
+
 /// The level, as the port's code reads it.
 struct Read<'a> {
     level: &'a dyn LevelHost,
@@ -428,6 +502,10 @@ const HERE: &str = r#"
 struct Here<'h> {
     host: &'h mut dyn ServerHost,
     level: Option<mod_api::LevelRef>,
+    dimension: &'static str,
+    /// The player who clicked or used the item, and the hand they used.
+    player: Option<mod_api::PlayerRef>,
+    hand: mod_api::Hand,
     seed: u64,
 }
 
@@ -490,6 +568,96 @@ impl runtime::World for Here<'_> {
     }
     fn random(&mut self) -> f32 {
         next_random(&mut self.seed)
+    }
+    fn give(&mut self, item: &str, count: u32) -> u32 {
+        use mod_api::HostTransaction;
+        let (Some(player), Some(stack)) = (self.player, item_stack(&*self.host, item, count)) else {
+            return 0;
+        };
+        let Some(items) = player.entity().capability(self.host, &mod_api::ENTITY_ITEMS, ()) else {
+            return 0;
+        };
+        let resource = mod_api::ItemResource::of(&stack);
+        self.host
+            .transaction(|host, tx| Ok::<u32, ()>(items.insert_any(host, tx, &resource, count)))
+            .unwrap_or(0)
+    }
+    fn drop(&mut self, item: &str, count: u32, at: [f64; 3], motion: [f64; 3]) {
+        use mod_api::Tag;
+        if count == 0 || item == "minecraft:air" {
+            return;
+        }
+        let mut stack = mod_api::Compound::new();
+        stack.insert("id".into(), Tag::String(item.into()));
+        stack.insert("count".into(), Tag::Int(count.min(99) as i32));
+        let mut nbt = mod_api::Compound::new();
+        nbt.insert("Item".into(), Tag::Compound(stack));
+        nbt.insert(
+            "Motion".into(),
+            Tag::List(motion.iter().map(|v| Tag::Double(v.to_bits())).collect()),
+        );
+        let _ = self.host.summon(self.dimension, "minecraft:item", at, nbt);
+    }
+    // A player's hands are a living entity's; `LivingRef::new` is the API's only way
+    // from a player to its living handle at the pinned prebuilt.
+    fn set_held(&mut self, item: &str, count: u32) {
+        let Some(player) = self.player else {
+            return;
+        };
+        let stack = if count == 0 || item == "minecraft:air" {
+            None
+        } else {
+            item_stack(&*self.host, item, count)
+        };
+        let _ = mod_api::LivingRef::new(player.entity()).set_hand_item(self.host, self.hand, stack);
+    }
+    fn shrink_held(&mut self, n: u32) {
+        let Some(player) = self.player else {
+            return;
+        };
+        let living = mod_api::LivingRef::new(player.entity());
+        let Some(mut stack) = living.hand_item(&*self.host, self.hand) else {
+            return;
+        };
+        let left = stack.count().saturating_sub(n);
+        let next = if left == 0 {
+            None
+        } else {
+            let _ = stack.set_count(left);
+            Some(stack)
+        };
+        let _ = living.set_hand_item(self.host, self.hand, next);
+    }
+    fn hurt_held(&mut self, n: u32) -> bool {
+        let Some(player) = self.player else {
+            return false;
+        };
+        let slot = match self.hand {
+            mod_api::Hand::Off => mod_api::EquipmentSlot::OffHand,
+            _ => mod_api::EquipmentSlot::MainHand,
+        };
+        let living = mod_api::LivingRef::new(player.entity());
+        let _ = living.hurt_and_break(self.host, slot, n as i32);
+        living.hand_item(&*self.host, self.hand).is_none()
+    }
+    fn particles(&mut self, kind: &str, at: [f64; 3], spread: [f64; 3], speed: f64, count: i32) {
+        if let (Some(level), Some(key)) = (self.level, particle(kind)) {
+            let options = mod_api::ParticleOptions::simple(key);
+            let _ = level.send_particles(self.host, &options, None, at, spread, speed, count);
+        }
+    }
+    fn block_is(&mut self, pos: [i32; 3], tag: &str) -> bool {
+        let block = runtime::Blocks::block(self, pos);
+        in_tag(&*self.host, "block", tag, &block)
+    }
+    fn item_is(&mut self, item: &str, tag: &str) -> bool {
+        in_tag(&*self.host, "item", tag, item)
+    }
+    fn remainder(&mut self, item: &str) -> Option<String> {
+        item_facts(&*self.host, item).and_then(|(_, r)| r)
+    }
+    fn max_stack(&mut self, item: &str) -> u32 {
+        item_facts(&*self.host, item).map_or(64, |(n, _)| n)
     }
 }
 "#;
@@ -732,8 +900,10 @@ fn click(host: &mut dyn ServerHost, state: BlockState, click: &BlockClick<'_>) -
         creative,
         sneaking,
     };
-    let level = host.level(dimension_id(click.dimension));
-    let mut here = Here { host, level, seed: seed_of(click.pos) };
+    let dimension = dimension_id(click.dimension);
+    let level = host.level(dimension);
+    let player = host.player(click.player);
+    let mut here = Here { host, level, dimension, player, hand: click.hand, seed: seed_of(click.pos) };
     runtime::use_block(&used, &mut here).then_some(InteractionResult::Success)
 }
 "#;
@@ -827,7 +997,8 @@ fn item_use(
     let sneaking = player.and_then(|p| p.is_crouching(&*host)).unwrap_or(false);
     let acting = host.players().acting_player();
     let creative = acting.and_then(|p| p.is_creative(&*host)).unwrap_or(false);
-    let level = acting.and_then(|p| p.entity().level(&*host));
+    let dimension = host.dimension();
+    let level = acting.and_then(|p| p.entity().level(&*host)).or_else(|| host.level(dimension));
     let pos = on.as_ref().map_or([0, 0, 0], |o| o.pos);
     let u = runtime::ItemUse {
         item,
@@ -837,7 +1008,14 @@ fn item_use(
         creative,
         sneaking,
     };
-    let mut here = Here { host, level, seed: seed_of(pos) };
+    let mut here = Here {
+        host,
+        level,
+        dimension,
+        player: acting,
+        hand: mod_api::Hand::Main,
+        seed: seed_of(pos),
+    };
     run(&u, &mut here)
 }
 "#;
@@ -863,78 +1041,6 @@ fn compound_get<'a>(nbt: &'a mod_api::Compound, key: &str) -> Option<&'a mod_api
 /// The block entity block `block` has (runtime.rs's `BLOCK_ENTITIES`).
 fn entity_of(block: &str) -> Option<&'static str> {
     runtime::BLOCK_ENTITIES.iter().find(|(b, _, _)| *b == block).map(|(_, id, _)| *id)
-}
-
-/// Item ids by key, as a host named them: what clients get of a block entity is written
-/// where no host is at hand.
-static ITEM_IDS: std::sync::Mutex<Vec<(mod_api::ItemKey, String)>> = std::sync::Mutex::new(Vec::new());
-
-/// A stack's item and count.
-fn stack_of(host: &dyn mod_api::Host, stack: &mod_api::ItemStack) -> Option<runtime::Stack> {
-    let key = stack.item();
-    let id = key.id(host);
-    if let Ok(mut ids) = ITEM_IDS.lock() {
-        if !ids.iter().any(|(k, _)| *k == key) {
-            ids.push((key, id.clone()));
-        }
-    }
-    Some(runtime::Stack::new(&id, stack.count()))
-}
-
-/// A stack's item and count, by an id a host named before.
-fn stack_known(stack: &mod_api::ItemStack) -> Option<runtime::Stack> {
-    let key = stack.item();
-    let ids = ITEM_IDS.lock().ok()?;
-    let (_, id) = ids.iter().find(|(k, _)| *k == key)?;
-    Some(runtime::Stack::new(id, stack.count()))
-}
-
-/// The particle keys the mod may send, requested at registration: vanilla's plain ones
-/// and the mod's own.
-static PARTICLES: std::sync::OnceLock<Vec<(String, mod_api::ParticleKey)>> = std::sync::OnceLock::new();
-
-fn particle(kind: &str) -> Option<mod_api::ParticleKey> {
-    let name = if kind.contains(':') { kind.to_string() } else { format!("minecraft:{kind}") };
-    PARTICLES.get()?.iter().find(|(n, _)| *n == name).map(|(_, k)| *k)
-}
-
-/// A stack of `count` `item`, as the game makes one.
-fn item_stack(host: &dyn mod_api::Host, item: &str, count: u32) -> Option<mod_api::ItemStack> {
-    let key = host.item_key(&mod_api::Identifier::parse(item).ok()?)?;
-    mod_api::ItemStack::new(key, count)
-}
-
-/// An item's stack size and what it leaves in a crafting grid.
-fn item_facts(host: &dyn mod_api::Host, item: &str) -> Option<(u32, Option<String>)> {
-    let rest = runtime::REMAINDERS
-        .iter()
-        .find(|(i, _)| *i == item)
-        .map(|(_, r)| r.to_string());
-    let max = mod_api::Identifier::parse(item)
-        .ok()
-        .and_then(|id| host.item_key(&id))
-        .and_then(|key| host.max_stack_size(key))
-        .unwrap_or(64);
-    Some((max, rest))
-}
-
-/// Whether `id` (a block or item, by `kind`) is in tag `tag`.
-fn in_tag(host: &dyn mod_api::Host, kind: &str, tag: &str, id: &str) -> bool {
-    let tag = tag.trim_start_matches('#');
-    if kind == "block" {
-        return host
-            .block_state_id(id)
-            .and_then(|s| host.block_in_tag(s.block(), tag))
-            .unwrap_or(false);
-    }
-    let (Ok(item), Ok(tag)) = (mod_api::Identifier::parse(id), mod_api::Identifier::parse(tag)) else {
-        return false;
-    };
-    let tags = host.tags();
-    match (host.item_key(&item), tags.key(&tag)) {
-        (Some(item), Some(tag)) => tags.is_in_tag(item, tag).unwrap_or(false),
-        _ => false,
-    }
 }
 
 /// A tool by what it does (`{"type": "item_ability", "action": "axe_strip"}`): the tag of
@@ -974,6 +1080,20 @@ fn recipes(host: &dyn mod_api::Host, kind: &str) -> Vec<runtime::Recipe> {
         .iter()
         .map(|r| {
             let mut ingredients: Vec<Vec<String>> = r.ingredients.iter().map(|i| i.order.clone()).collect();
+            // A mod's own recipe type, whose fields the game doesn't know: its ingredients
+            // as the file writes them (`ingredient`, `ingredients`, `input`, `inputs`).
+            if ingredients.is_empty() {
+                for key in ["ingredient", "input"] {
+                    if let Some(v) = r.json.get(key) {
+                        ingredients.push(items(&v.to_string()));
+                    }
+                }
+                for key in ["ingredients", "inputs"] {
+                    if let Some(list) = r.json.get(key).and_then(|v| v.as_array()) {
+                        ingredients.extend(list.iter().map(|v| items(&v.to_string())));
+                    }
+                }
+            }
             // The tool or catalyst it takes besides (a cutting board's knife), last.
             for key in ["tool", "catalyst"] {
                 if let Some(v) = r.json.get(key) {
@@ -984,7 +1104,22 @@ fn recipes(host: &dyn mod_api::Host, kind: &str) -> Vec<runtime::Recipe> {
                     ingredients.push(items(&json));
                 }
             }
-            let result = r.results.first().and_then(|s| stack_of(host, s));
+            // Its result: the game's, else the file's (`"result": "id"`, `{"id": ..}`,
+            // `{"item": ..}`, or a list of them: the first).
+            let result = r.results.first().and_then(|s| stack_of(host, s)).map(|(i, c)| runtime::Stack::new(&i, c)).or_else(|| {
+                let v = r.json.get("result")?;
+                let v = v.as_array().and_then(|a| a.first()).unwrap_or(v);
+                let json = match (v.as_str(), v.get("id"), v.get("item")) {
+                    (Some(id), _, _) => format!("{{\"id\": {id:?}}}"),
+                    (None, None, Some(item)) => {
+                        let count = v.get("count").and_then(|c| c.as_u64()).unwrap_or(1);
+                        format!("{{\"id\": {item}, \"count\": {count}}}")
+                    }
+                    _ => v.to_string(),
+                };
+                let stack = host.recipe_result(&json).ok().flatten()?;
+                stack_of(host, &stack).map(|(i, c)| runtime::Stack::new(&i, c))
+            });
             let mut values: Vec<(String, String)> = r
                 .json
                 .as_object()
@@ -1061,7 +1196,7 @@ impl mod_api::BlockEntityPart for PortedEntity {
             .map(|t| parse_state(&t))
             .unwrap_or_default();
         let slots: Vec<Option<runtime::Stack>> =
-            event.entity.items.iter().map(|s| s.as_ref().and_then(|s| stack_of(&*host, s))).collect();
+            event.entity.items.iter().map(|s| s.as_ref().and_then(|s| stack_of(&*host, s)).map(|(i, c)| runtime::Stack::new(&i, c))).collect();
         let data = event.entity.data.clone();
         let (changed, mut done) = {
             let reader: &dyn mod_api::Host = &*host;
@@ -1072,6 +1207,33 @@ impl mod_api::BlockEntityPart for PortedEntity {
             machine.tags = Some(&tags);
             machine.items = Some(&items);
             machine.block = block;
+            // The blocks beside it, and their block entities' saved values where its tick
+            // reads them (runtime.rs's `NEIGHBOURS`).
+            if let Some(level) = level {
+                let reads = runtime::NEIGHBOURS.contains(&id.as_str());
+                machine.neighbours = runtime::Side::ALL
+                    .iter()
+                    .map(|side| {
+                        let [dx, dy, dz] = side.offset();
+                        let at = [pos[0] + dx, pos[1] + dy, pos[2] + dz];
+                        let block = level
+                            .block_state(reader, at)
+                            .and_then(|s| reader.block_state_string(s))
+                            .map_or_else(|| "minecraft:air".to_string(), |t| parse_state(&t).0);
+                        let found = if reads { reader.block_entity(level, at) } else { None };
+                        let entity = found.and_then(|e| e.kind(reader)).map(|k| k.id(reader));
+                        let values = found
+                            .and_then(|e| e.data(reader))
+                            .map(|data| {
+                                data.iter()
+                                    .filter_map(|(k, t)| saved_of(t).map(|v| (k.to_string_lossy(), v)))
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        Some(runtime::Neighbour { block, entity, values })
+                    })
+                    .collect();
+            }
             // Its `facing`, as the block stores it.
             machine.facing = props.iter().find(|(k, _)| k == "facing").map(|(_, v)| v.clone());
             // Its random: a different draw each tick and block.
@@ -1151,7 +1313,7 @@ impl mod_api::BlockEntityPart for PortedEntity {
         // an emptied slot too, since a client merges what it gets into what it had.
         for (i, slot) in event.entity.items.iter().enumerate() {
             let (item, count) = match slot.as_ref().and_then(stack_known) {
-                Some(s) => (s.item, s.count as i32),
+                Some((i, c)) => (i, c as i32),
                 None => (String::new(), 0),
             };
             nbt.insert(format!("item.{i}").as_str().into(), Tag::String(item.as_str().into()));
@@ -1217,7 +1379,7 @@ impl runtime::BlockEntities for Here<'_> {
     fn entity_item(&mut self, pos: [i32; 3], slot: usize) -> Option<(String, u32)> {
         let entity = self.host.block_entity(self.level?, pos)?;
         let stack = entity.item_slot(&*self.host, slot as u32).ok()??;
-        stack_of(&*self.host, &stack).map(|s| (s.item, s.count))
+        stack_of(&*self.host, &stack)
     }
     fn set_entity_item(&mut self, pos: [i32; 3], slot: usize, item: Option<(&str, u32)>) -> bool {
         use mod_api::HostTransaction;
