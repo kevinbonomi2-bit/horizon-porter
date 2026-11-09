@@ -57,6 +57,12 @@ pub struct Bundle {
     /// Hooks the mod needs that Horizon's hook table doesn't have, or a helper
     /// can't take: wired by hand.
     pub unwired: BTreeMap<&'static str, Uses>,
+    /// The mod as a trait mod on Horizon's mod API (`api/`: its manifest, Cargo.toml
+    /// and glue; see `api`), when its code has behaviours the glue runs. Written only
+    /// with `write_api`.
+    pub api: BTreeMap<String, String>,
+    /// Write `api/` too (`port --api`).
+    pub write_api: bool,
 }
 
 /// Who needs a hook: the Java classes (or Mixins), and what in them (the API or
@@ -517,6 +523,16 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
         .iter()
         .map(|(rel, src)| (format!("content/{rel}"), src.clone()))
         .collect();
+    let api_files = if native && crate::api::wanted(&behaviours) {
+        crate::api::files(
+            &id,
+            content.files.get("horizon-mod.toml").map_or("", String::as_str),
+            &behaviours,
+            !block_entities.is_empty(),
+        )
+    } else {
+        BTreeMap::new()
+    };
     let bundle = Bundle {
         id: id.clone(),
         files,
@@ -533,6 +549,8 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
         },
         stubbed: stubbed.clone(),
         unwired,
+        api: api_files,
+        write_api: false,
     };
     let porting = ctx.porting_md(&bundle);
     let mut bundle = bundle;
@@ -598,7 +616,90 @@ pub fn write(bundle: &Bundle, out: &Path, overwrite: bool) -> Result<()> {
         fs::copy(src, &path)
             .with_context(|| format!("copying {} to {}", src.display(), path.display()))?;
     }
+    if bundle.write_api && !bundle.api.is_empty() {
+        write_api(bundle, out)?;
+    }
     Ok(())
+}
+
+/// Writes `api/`: the trait mod's own files, the content mod's assets and data beside
+/// them, and runtime.rs as the bundle's now is (its translated functions included).
+fn write_api(bundle: &Bundle, out: &Path) -> Result<()> {
+    let api = out.join("api");
+    // Its content is all generated, as `content/` is.
+    for dir in ["assets", "data"] {
+        let path = api.join(dir);
+        if path.is_dir() {
+            fs::remove_dir_all(&path).with_context(|| format!("clearing {}", path.display()))?;
+        }
+    }
+    let put = |rel: &str, bytes: &[u8]| -> Result<()> {
+        let path = api.join(rel);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+        }
+        fs::write(&path, bytes).with_context(|| format!("writing {}", path.display()))
+    };
+    for (rel, text) in &bundle.api {
+        let rel = rel.strip_prefix("api/").unwrap_or(rel);
+        put(rel, text.as_bytes())?;
+    }
+    for (rel, text) in &bundle.content.files {
+        if rel.starts_with("assets/") || rel.starts_with("data/") {
+            put(rel, text.as_bytes())?;
+        }
+    }
+    for (rel, src) in &bundle.content.copies {
+        if rel.starts_with("assets/") || rel.starts_with("data/") {
+            let path = api.join(rel);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent)
+                    .with_context(|| format!("creating {}", parent.display()))?;
+            }
+            fs::copy(src, &path)
+                .with_context(|| format!("copying {} to {}", src.display(), path.display()))?;
+        }
+    }
+    sync_api_runtime(out, &bundle.id)
+}
+
+/// Copies the bundle's runtime.rs (`mixins/<id>/runtime.rs`, with whatever `translate`
+/// ported in it) into `api/src/runtime.rs`, where a port has `api/`: the trait mod runs
+/// the same code.
+pub fn sync_api_runtime(out: &Path, id: &str) -> Result<()> {
+    let api = out.join("api").join("src");
+    if !api.is_dir() {
+        return Ok(());
+    }
+    let from = out.join("mixins").join(id).join("runtime.rs");
+    if from.is_file() {
+        let text = fs::read_to_string(&from)
+            .with_context(|| format!("reading {}", from.display()))?;
+        // Its own items by `crate::` path (`crate::cutting_board::MAX`), as the trait
+        // mod's crate has them: under `runtime`.
+        fs::write(api.join("runtime.rs"), api_paths(&text))
+            .with_context(|| format!("writing api/src/runtime.rs from {}", from.display()))?;
+    }
+    Ok(())
+}
+
+/// `text` (runtime.rs) with each `crate::` path made `crate::runtime::`, where the trait
+/// mod's crate keeps the module.
+fn api_paths(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(i) = rest.find("crate::") {
+        let before = rest[..i].chars().next_back();
+        let after = &rest[i + 7..];
+        out.push_str(&rest[..i + 7]);
+        let word = before.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$');
+        if !word && !after.starts_with("runtime::") {
+            out.push_str("runtime::");
+        }
+        rest = after;
+    }
+    out.push_str(rest);
+    out
 }
 
 /// A Horizon mod id: lowercase `a-z`, `0-9` and `_`, starting with a letter.

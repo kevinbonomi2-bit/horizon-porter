@@ -55,6 +55,10 @@ enum Command {
         /// Replace the generated files in a folder that already has files
         #[arg(long)]
         force: bool,
+        /// Also write the mod as a trait mod on Horizon's new mod API (api/: Parts, built
+        /// against a prebuilt game), beside the horizon-mixins bundle
+        #[arg(long)]
+        api: bool,
     },
     /// Build a ported mod into a Horizon instance with your Horizon launcher
     Build {
@@ -221,7 +225,12 @@ fn run(cli: Cli) -> Result<ExitCode> {
             }
             Ok(ExitCode::SUCCESS)
         }
-        Command::Port { path, out, force } => {
+        Command::Port {
+            path,
+            out,
+            force,
+            api,
+        } => {
             // A jar is decompiled into a source tree first (once; it is kept).
             let source = if path.is_dir() {
                 path.clone()
@@ -240,12 +249,23 @@ fn run(cli: Cli) -> Result<ExitCode> {
             };
             let scan = porter_java::scan(&source)?;
             let lang = porter_translate::bundle::load_lang(&scan);
-            let bundle = porter_translate::bundle::generate_with(
+            let mut bundle = porter_translate::bundle::generate_with(
                 &scan,
                 &lang,
                 porter_map::ledger::horizon_source().as_deref(),
             );
+            bundle.write_api = api;
             porter_translate::bundle::write(&bundle, &out, force)?;
+            if api {
+                if bundle.api.is_empty() {
+                    println!("No api/: the mod's code has no behaviour the mod API glue runs yet.");
+                } else {
+                    println!(
+                        "Wrote api/: the mod as a trait mod on Horizon's mod API, pinned to the prebuilt game {}.",
+                        &porter_translate::api::API_HORIZON[..7]
+                    );
+                }
+            }
             let what = match (bundle.native, bundle.content.is_empty()) {
                 (true, true) => "a Horizon native mod",
                 (true, false) => "a Horizon native mod and content mod",
@@ -515,6 +535,10 @@ fn run(cli: Cli) -> Result<ExitCode> {
                     thousands(input_tokens as usize),
                     thousands(output_tokens as usize)
                 );
+            }
+            // A port with api/ runs the same runtime.rs as a trait mod.
+            if let Some(id) = info["id"].as_str() {
+                porter_translate::bundle::sync_api_runtime(&path, id)?;
             }
             println!(
                 "Next: read what changed (each ported function says so above it), then build: horizon-porter build {} --trust-native-code",

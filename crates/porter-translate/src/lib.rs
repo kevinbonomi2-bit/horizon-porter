@@ -9,6 +9,7 @@
 //! with the compiler (milestone M4).
 
 pub mod ai;
+pub mod api;
 pub mod block_entity;
 pub mod blocks;
 pub mod bundle;
