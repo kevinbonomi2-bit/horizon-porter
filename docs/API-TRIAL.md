@@ -217,7 +217,31 @@ entity renderers (#860), typed network payloads (#813).
 Regular Horizon has none of the left column for hook code except `living_death` and
 `player_died`, which only listen. So these come to ports through `--api` first.
 
-What moving to the fork's main takes: a game built from its source at that commit for the launcher
-to build ports against (the prebuilt one crashed on this machine last time, and the source build
-needed the fork's own `horizon-prepare` and a hand-added fluid table), then the seven edits above
-in `api.rs`, then giving `World` and `Machine` the calls in the table.
+## On the fork's Nightly (2026-11-10)
+
+The fork publishes Nightlies now, and `port --api` targets one: `34724f7` (Nightly 2026-11-10).
+The seven edits above are in `api.rs`, and all twelve trial mods' glue type-checks against that
+commit's `horizon-mod-api`.
+
+How it was set up here, with nothing done by hand to the game this time:
+
+1. The fork's launcher, built from the Nightly's own source (`launcher/`, `cargo build
+   --release`): the notes say to install with it, and there is no prebuilt fork launcher.
+2. `horizon-launcher install nightly` (it downloads and verifies the build), in a launcher folder
+   of its own (`HORIZON_LAUNCHER_HOME`), with the Rust toolchain copied from the older one.
+3. `horizon-launcher prepare --version nightly-2026-11-10-34724f7 --minecraft <folder>`, the
+   folder being the regular Horizon launcher's own Minecraft (`horizon-launcher/minecraft`).
+4. `horizon-launcher native-build <port>/api --instance "api nightly" --version
+   nightly-2026-11-10-34724f7 --trust-native-code`. There is no prebuilt game for a Nightly's
+   commit (only for the daily `prebuilt-<commit>` ones), so the first build compiles the game.
+5. The game started on its own from inside the launcher's folder stops with "start the launcher
+   once to register this installation": it wants leases the launcher's window sets up. For
+   scripted checks, a copy of the version folder outside the launcher's folder runs without them.
+
+What ported code can reach through it now, beside what it had: `World::stat` (`awardStat`),
+`cooldown` (`addCooldown`), `effect` (`addEffect` on the player), `can_eat`, `ray` (`level.clip`,
+`getPlayerPOVHitResult`), `mobs_in` (`getEntitiesOfClass`) and `mob_love` (`setInLove`). On
+regular Horizon these do nothing, as its hooks give no way to.
+
+Still to give: the same to a block entity's tick (`Machine`), a "player died, here are the
+drops" function from the `living_drops` hook (a grave), trades and menus for a player.

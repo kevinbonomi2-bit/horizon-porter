@@ -193,10 +193,36 @@ const REACHES: &[(u32, &[&str])] = &[
             "multiface",
         ],
     ),
+    // Stats, item cooldowns, effects on the player, whether they can eat, a ray, the
+    // mobs near a spot and love mode.
+    (
+        8,
+        &[
+            "awardstat",
+            "stats.",
+            "stat award",
+            "no stat",
+            "cooldown",
+            "addeffect",
+            "mobeffectinstance",
+            "caneat",
+            "can eat",
+            "povhit",
+            "ray cast",
+            "raycast",
+            "no ray",
+            "clip(",
+            "getentitiesofclass",
+            "entity query",
+            "getentities",
+            "setinlove",
+            "love",
+        ],
+    ),
 ];
 
 /// The newest line of `REACHES`.
-pub const REACH: u32 = 7;
+pub const REACH: u32 = 8;
 
 /// Whether a function ported at reach `at`, whose port says `notes` were out of reach,
 /// is worth porting again now.
@@ -1111,9 +1137,9 @@ mod tests {
     #[test]
     fn refresh_is_for_what_a_newer_reach_gives() {
         // Ported before any reach: every gap is worth another go.
-        assert!(reach_grew_for(0, "// Missing: the stat award."));
+        assert!(reach_grew_for(0, "// Missing: the advancement trigger."));
         // Ported at reach 1: only what reach 2 gives.
-        assert!(!reach_grew_for(1, "// Missing: the stat award."));
+        assert!(!reach_grew_for(1, "// Missing: the advancement trigger."));
         assert!(reach_grew_for(
             1,
             "// Missing: `isFaceSturdy(level, below, UP)`."
@@ -1135,6 +1161,14 @@ mod tests {
         assert!(!reach_grew_for(
             3,
             "// Missing: `level.levelEvent(2001, pos, id)`."
+        ));
+        assert!(reach_grew_for(
+            7,
+            "// Missing: `player.awardStat(Stats.ITEM_USED)`."
+        ));
+        assert!(!reach_grew_for(
+            REACH,
+            "// Missing: `player.awardStat(Stats.ITEM_USED)`."
         ));
     }
 

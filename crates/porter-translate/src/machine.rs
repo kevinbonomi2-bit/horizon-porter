@@ -450,6 +450,8 @@ pub struct Machine<'a> {
     pub powered: bool,
     /// The dropped items in a box: see `dropped_in`.
     pub dropped: Option<&'a dyn Fn([f64; 3], [f64; 3]) -> Vec<Dropped>>,
+    /// The living things in a box: see `mobs_in`.
+    pub mobs: Option<&'a dyn Fn([f64; 3], [f64; 3]) -> Vec<NearMob>>,
 }
 
 /// A particle burst or a sound a tick plays, near its block.
@@ -489,6 +491,20 @@ pub enum Effect {
     Xp { at: [f64; 3], amount: u32 },
     /// An entity spawned (`type.create(level, ..)`, `addFreshEntity`), a baby when `baby`.
     Summon { kind: String, at: [f64; 3], baby: bool },
+    /// Mob `id` (`machine.mobs_in`) put in love mode (`animal.setInLove(null)`).
+    Love { id: u32 },
+}
+
+/// A living thing near the block (`Animal`, `Mob`), as `machine.mobs_in` finds it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NearMob {
+    /// Which one it is, for `machine.love`.
+    pub id: u32,
+    /// `minecraft:cow`, one of the mod's own.
+    pub kind: String,
+    pub at: [f64; 3],
+    /// A baby (`isBaby()`, `getAge() < 0`).
+    pub baby: bool,
 }
 
 /// A dropped item in the world (`ItemEntity`), as `machine.dropped_in` finds it.
@@ -643,6 +659,7 @@ impl<'a> Machine<'a> {
             properties: Vec::new(),
             powered: false,
             dropped: None,
+            mobs: None,
         }
     }
 
@@ -660,6 +677,20 @@ impl<'a> Machine<'a> {
             p.1 = value.to_string();
         }
         self.effects.push(Effect::SetState { key: key.to_string(), value: value.to_string() });
+    }
+
+    /// The living things, players aside, in the box from `min` to `max` (world
+    /// coordinates): `level.getEntitiesOfClass(Animal.class, new AABB(pos).inflate(r))`.
+    /// Pick the kinds the Java asks for by `NearMob::kind`. Empty where Horizon lists
+    /// none.
+    pub fn mobs_in(&self, min: [f64; 3], max: [f64; 3]) -> Vec<NearMob> {
+        self.mobs.map(|f| f(min, max)).unwrap_or_default()
+    }
+
+    /// Puts mob `id` in love mode after the tick (`animal.setInLove(null)`), what a
+    /// feeder does once it has spent the food.
+    pub fn love(&mut self, id: u32) {
+        self.effects.push(Effect::Love { id });
     }
 
     /// The dropped items (`ItemEntity`) whose position is in the box from `min` to `max`

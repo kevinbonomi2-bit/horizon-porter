@@ -19,7 +19,7 @@ use crate::blocks::{Behaviour, Kind};
 
 /// The prebuilt game the glue was checked against (`prebuilt-<commit>` on
 /// arismoko/horizon): the API changes daily, so a port pins one.
-pub const API_HORIZON: &str = "62c91f44bfd1f0a40c236083702e456305796f3a";
+pub const API_HORIZON: &str = "34724f76860e7c53d0f95c711aff32baac8b49b7";
 /// The horizon-mixins commit that prebuilt's launcher pins.
 pub const API_MIXINS: &str = "5a64af938ec86b00d53d16a408aabc0038fb3e57";
 
@@ -304,10 +304,13 @@ impl Hooks for Mod {
             "
     // The entities block ticks asked for (an egg hatching): a tick's level can't spawn,
     // so they waited in runtime.rs until the level's tick was over.
-    fn level_tick_post(&self, host: &mut dyn ServerHost, event: &mut mod_api::LevelTickPostEvent<'_>) {
+    fn level_tick_post(&self, host: mod_api::HostSide<'_>, event: &mut mod_api::LevelTickPostEvent) {
+        let mod_api::HostSide::Server(host) = host else {
+            return;
+        };
         for spawn in runtime::take_spawns() {
             let nbt = spawn_nbt(spawn.baby, spawn.velocity);
-            let _ = host.summon(event.dimension, &spawn.kind, spawn.at, nbt);
+            let _ = host.summon(event.level.dimension_id(), &spawn.kind, spawn.at, nbt);
         }
     }
 ",
@@ -384,12 +387,8 @@ use mod_api::{
     self, BlockPart, BlockState, Direction, Flow, Hooks, ItemPart, LevelHost, Registrar,
     RegistrationContext, ServerHost,
 };
-// Names of the pinned prebuilt game's API (they lose the `Native` prefix in later ones).
 #[allow(unused_imports)]
-use mod_api::{
-    NativeBlockClick as BlockClick, NativeBlockUpdateFlags as BlockUpdateFlags,
-    NativeInteractionResult as InteractionResult,
-};
+use mod_api::{BlockClick, BlockUpdateFlags, InteractionResult};
 "#;
 
 const COMMON: &str = r#"
@@ -676,15 +675,15 @@ impl runtime::Blocks for Here<'_> {
     }
     fn sturdy(&self, pos: [i32; 3], face: &str) -> bool {
         let side = match face {
-            "down" => mod_api::NativeBlockFace::Down,
-            "up" => mod_api::NativeBlockFace::Up,
-            "north" => mod_api::NativeBlockFace::North,
-            "south" => mod_api::NativeBlockFace::South,
-            "west" => mod_api::NativeBlockFace::West,
-            _ => mod_api::NativeBlockFace::East,
+            "down" => mod_api::BlockFace::Down,
+            "up" => mod_api::BlockFace::Up,
+            "north" => mod_api::BlockFace::North,
+            "south" => mod_api::BlockFace::South,
+            "west" => mod_api::BlockFace::West,
+            _ => mod_api::BlockFace::East,
         };
         self.level
-            .and_then(|l| l.block_face_sturdy(&*self.host, pos, side, mod_api::NativeSupportType::Full))
+            .and_then(|l| l.block_face_sturdy(&*self.host, pos, side, mod_api::SupportType::Full))
             .unwrap_or_else(|| runtime::block_seems_solid(&runtime::Blocks::block(self, pos)))
     }
     fn light(&self, pos: [i32; 3]) -> u8 {
@@ -874,7 +873,7 @@ impl runtime::World for Here<'_> {
     fn game_event(&mut self, event: &str, pos: [i32; 3]) {
         if let Some(level) = self.level {
             let at = [f64::from(pos[0]) + 0.5, f64::from(pos[1]) + 0.5, f64::from(pos[2]) + 0.5];
-            let _ = level.game_event(self.host, event, at);
+            let _ = level.game_event(self.host, event, at, mod_api::GameEventContext::default());
         }
     }
     fn overlay(&mut self, text: &str) {
@@ -898,6 +897,100 @@ impl runtime::World for Here<'_> {
             mod_api::Text::literal(text)
         };
         let _ = player.tell(self.host, line);
+    }
+    fn stat(&mut self, kind: &str, key: &str) {
+        let Some(player) = self.player else {
+            return;
+        };
+        use mod_api::StatType;
+        let of = match kind {
+            "mined" => StatType::Mined,
+            "crafted" => StatType::Crafted,
+            "used" => StatType::Used,
+            "broken" => StatType::Broken,
+            "picked_up" => StatType::PickedUp,
+            "dropped" => StatType::Dropped,
+            "killed" => StatType::Killed,
+            "killed_by" => StatType::KilledBy,
+            _ => StatType::Custom,
+        };
+        let _ = player.award_stat(self.host, of, key, 1);
+    }
+    fn cooldown(&mut self, item: &str, ticks: i32) {
+        // An item's cooldown group is its own id unless it declares another.
+        if let Some(player) = self.player {
+            let _ = player.set_item_cooldown(self.host, item, ticks);
+        }
+    }
+    fn effect(&mut self, effect: &str, ticks: i32, amplifier: i32) {
+        let Some(living) = self.player.and_then(|p| self.host.living(p.entity())) else {
+            return;
+        };
+        if let Some(id) = mod_api::__private::effect_key(effect) {
+            let given = mod_api::ActiveEffect::new(id, ticks, amplifier, false, true, true);
+            let _ = living.add_effect(self.host, &given);
+        }
+    }
+    fn can_eat(&mut self, always: bool) -> bool {
+        self.player
+            .and_then(|p| p.can_eat(&*self.host, always))
+            .unwrap_or(true)
+    }
+    fn ray(&mut self, from: [f64; 3], to: [f64; 3]) -> Option<runtime::RayHit> {
+        let hit = self.level?.clip(
+            &*self.host,
+            from,
+            to,
+            mod_api::ClipBlock::Outline,
+            mod_api::ClipFluid::None,
+        )?;
+        if hit.miss {
+            return None;
+        }
+        let face = match hit.face {
+            mod_api::BlockFace::Down => "down",
+            mod_api::BlockFace::Up => "up",
+            mod_api::BlockFace::North => "north",
+            mod_api::BlockFace::South => "south",
+            mod_api::BlockFace::West => "west",
+            _ => "east",
+        };
+        Some(runtime::RayHit { pos: hit.block, face: face.to_string(), at: hit.location })
+    }
+    fn mobs_in(&mut self, min: [f64; 3], max: [f64; 3]) -> Vec<runtime::Mob> {
+        let Some(level) = self.level else {
+            return Vec::new();
+        };
+        let host = &*self.host;
+        level
+            .entities_in(host, min, max)
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|e| {
+                // Living things only, and not the players.
+                let living = host.living(e)?;
+                let kind = e.kind(host)?;
+                if kind == "minecraft:player" {
+                    return None;
+                }
+                Some(runtime::Mob {
+                    id: e.id(),
+                    kind,
+                    pos: e.position(host)?,
+                    baby: living.baby(host).unwrap_or(false),
+                })
+            })
+            .collect()
+    }
+    fn mob_love(&mut self, id: u32) -> bool {
+        use mod_api::Tag;
+        let Some(entity) = self.host.entity(id) else {
+            return false;
+        };
+        // `Animal.setInLove`: 600 ticks of it.
+        let mut nbt = mod_api::Compound::new();
+        nbt.insert("InLove".into(), Tag::Int(600));
+        entity.merge_nbt(self.host, nbt)
     }
     fn destroy(&mut self, pos: [i32; 3], drop: bool) -> bool {
         let Some(level) = self.level else {
@@ -1676,6 +1769,30 @@ impl mod_api::BlockEntityPart for PortedEntity {
                 }
                 out
             };
+            let mobs = |min: [f64; 3], max: [f64; 3]| -> Vec<runtime::NearMob> {
+                let Some(level) = level else {
+                    return Vec::new();
+                };
+                level
+                    .entities_in(reader, min, max)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter_map(|e| {
+                        // Living things only, and not the players.
+                        let living = reader.living(e)?;
+                        let kind = e.kind(reader)?;
+                        if kind == "minecraft:player" {
+                            return None;
+                        }
+                        Some(runtime::NearMob {
+                            id: e.id(),
+                            kind,
+                            at: e.position(reader)?,
+                            baby: living.baby(reader).unwrap_or(false),
+                        })
+                    })
+                    .collect()
+            };
             let recipes_of = |kind: &str| recipes(reader, kind);
             let tags = |kind: &str, tag: &str, id: &str| in_tag(reader, kind, tag, id);
             let items = |item: &str| item_facts(reader, item);
@@ -1715,6 +1832,7 @@ impl mod_api::BlockEntityPart for PortedEntity {
             machine.properties = props.clone();
             machine.powered = level.is_some_and(|l| l.has_neighbor_signal(reader, pos));
             machine.dropped = Some(&dropped);
+            machine.mobs = Some(&mobs);
             // Its random: a different draw each tick and block.
             thread_local! {
                 static TICKS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
@@ -1783,6 +1901,14 @@ impl mod_api::BlockEntityPart for PortedEntity {
                 }
                 runtime::Effect::Summon { kind, at, baby } => {
                     let _ = host.summon(dimension, &kind, at, spawn_nbt(baby, [0.0; 3]));
+                }
+                runtime::Effect::Love { id } => {
+                    // `Animal.setInLove`: 600 ticks of it.
+                    if let Some(entity) = host.entity(id) {
+                        let mut nbt = mod_api::Compound::new();
+                        nbt.insert("InLove".into(), mod_api::Tag::Int(600));
+                        let _ = entity.merge_nbt(host, nbt);
+                    }
                 }
                 runtime::Effect::SetState { key, value } => {
                     let mut now = props.clone();
@@ -2051,7 +2177,7 @@ const SUBMIT: &str = r#"
                 }
                 runtime::DrawOp::Item { item, count } => {
                     if let Some(stack) = item_stack(host, &item, count) {
-                        let _ = draw.item(&stack, mod_api::NativeItemDisplayContext::Fixed, None, 0);
+                        let _ = draw.item(&stack, mod_api::ItemDisplayContext::Fixed, None, 0);
                     }
                 }
                 runtime::DrawOp::Keep => draw.keep(),
@@ -2064,10 +2190,10 @@ const SUBMIT: &str = r#"
 
 const SCREENS: &str = r#"
     // A machine's menu screen: where each slot sits, as its Java menu places them.
-    fn screen(&self, host: &dyn mod_api::Host, event: &mut mod_api::ScreenEvent<'_>) -> Option<mod_api::NativeScreen> {
+    fn screen(&self, host: &dyn mod_api::Host, event: &mut mod_api::ScreenEvent<'_>) -> Option<mod_api::Screen> {
         let _ = host;
         let machine = runtime::MACHINES.iter().find(|x| x.block == event.block)?;
-        Some(mod_api::NativeScreen {
+        Some(mod_api::Screen {
             width: machine.size[0],
             height: machine.size[1],
             slots: machine.layout.to_vec(),
@@ -2076,6 +2202,7 @@ const SCREENS: &str = r#"
             own_labels: false,
             // The mod's own texture instead of the plain panel.
             own_background: machine.texture.is_some(),
+            ..Default::default()
         })
     }
 

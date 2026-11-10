@@ -2174,6 +2174,8 @@ fn {id}_block_entity_tick(
                 nbt.insert(JavaString::from("Value"), Tag::Short(amount.min(32767) as i16));
                 let _ = game.native_summon(&dimension_here, "minecraft:experience_orb", at, nbt);
             }}
+            // Horizon's hooks give a tick no mobs: `mobs_in` found none to love.
+            m::Effect::Love {{ .. }} => {{}}
             m::Effect::Summon {{ kind, at, baby }} => {{
                 use horizon_world::nbt::{{Compound, Tag}};
                 let mut nbt = Compound::new();

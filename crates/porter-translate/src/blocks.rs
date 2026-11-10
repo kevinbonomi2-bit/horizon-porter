@@ -2491,6 +2491,51 @@ pub trait World: Blocks {
     fn chat(&mut self, text: &str) {
         let _ = text;
     }
+    /// `player.awardStat(..)` for the player who clicked. `kind` is `used`, `crafted`,
+    /// `mined`, `broken`, `picked_up`, `dropped`, `killed` or `killed_by`, with the item,
+    /// block or entity as `key` (`Stats.ITEM_USED.get(item)` is `("used", item)`), or
+    /// `custom` with the stat's own id (`Stats.INTERACT_WITH_FURNACE` is `("custom",
+    /// "minecraft:interact_with_furnace")`).
+    fn stat(&mut self, kind: &str, key: &str) {
+        let _ = (kind, key);
+    }
+    /// `player.getCooldowns().addCooldown(stack, ticks)`: the player who clicked can't
+    /// use `item` again for `ticks`.
+    fn cooldown(&mut self, item: &str, ticks: i32) {
+        let _ = (item, ticks);
+    }
+    /// `player.addEffect(new MobEffectInstance(effect, ticks, amplifier))` on the player
+    /// who clicked: `minecraft:regeneration`, one of the mod's own.
+    fn effect(&mut self, effect: &str, ticks: i32, amplifier: i32) {
+        let _ = (effect, ticks, amplifier);
+    }
+    /// `player.canEat(always)`: whether the player who clicked can eat now. True where
+    /// Horizon can't tell.
+    fn can_eat(&mut self, always: bool) -> bool {
+        let _ = always;
+        true
+    }
+    /// The first block a ray from `from` to `to` meets (`level.clip(new ClipContext(from,
+    /// to, OUTLINE, NONE, player))`, `getPlayerPOVHitResult`, fluids not counted): for a
+    /// use, `from` is `u.eye` and `to` the eye plus `u.look` times the reach (5.0). None
+    /// for a miss, and where Horizon casts no ray.
+    fn ray(&mut self, from: [f64; 3], to: [f64; 3]) -> Option<RayHit> {
+        let _ = (from, to);
+        None
+    }
+    /// The living things in the box `min` to `max`, players aside
+    /// (`level.getEntitiesOfClass(Animal.class, new AABB(..))`, `getEntities`): pick the
+    /// kinds the Java asks for by `Mob::kind`. Empty where Horizon lists none.
+    fn mobs_in(&mut self, min: [f64; 3], max: [f64; 3]) -> Vec<Mob> {
+        let _ = (min, max);
+        Vec::new()
+    }
+    /// `animal.setInLove(player)`: mob `id` (a `Mob::id`) goes into love mode. False
+    /// where it can't.
+    fn mob_love(&mut self, id: u32) -> bool {
+        let _ = id;
+        false
+    }
     /// Breaks the block at `pos` (`level.destroyBlock(pos, drop)`): it goes, with its
     /// drops when `drop`. False when there was nothing to break.
     fn destroy(&mut self, pos: [i32; 3], drop: bool) -> bool {
@@ -2781,6 +2826,28 @@ pub const REMOVE: &str = "!remove";
 /// block (`scheduledTickAccess.scheduleTick(pos, this, delay)`): `(TICK_IN.into(),
 /// delay.to_string())`. Alone, the state is kept and the tick scheduled.
 pub const TICK_IN: &str = "!tick";
+
+/// What a ray met: `World::ray`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RayHit {
+    /// The block it met, and the side of it (`up`, `north`...).
+    pub pos: [i32; 3],
+    pub face: String,
+    /// Where on it, in world coordinates.
+    pub at: [f64; 3],
+}
+
+/// A living thing near a spot: `World::mobs_in`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Mob {
+    /// Which one it is, for `mob_love`.
+    pub id: u32,
+    /// `minecraft:cow`, one of the mod's own.
+    pub kind: String,
+    pub pos: [f64; 3],
+    /// A baby (`isBaby()`, `getAge() < 0`).
+    pub baby: bool,
+}
 
 /// An entity to spawn: what `World::summon`, `summon_baby` and `launch` ask for.
 #[derive(Debug, Clone, Default, PartialEq)]
