@@ -1082,7 +1082,8 @@ fn plant(host: &mut dyn ServerHost, event: &mod_api::UseOnEvent<'_>, block: &str
     let target = if replaced { pos } else { [pos[0] + face[0], pos[1] + face[1], pos[2] + face[2]] };
     let here = name(&*host, level, target);
     let below = name(&*host, level, [target[0], target[1] - 1, target[2]]);
-    let room = here == "minecraft:air" || (rule == "water" && here == "minecraft:water");
+    let in_water = here == "minecraft:water";
+    let room = here == "minecraft:air" || (rule == "water" && in_water);
     let stands = match rule {
         "farmland" => below == "minecraft:farmland" || below.ends_with("_farmland"),
         "soil" => matches!(
@@ -1097,7 +1098,8 @@ fn plant(host: &mut dyn ServerHost, event: &mod_api::UseOnEvent<'_>, block: &str
     let stands = if runtime::decides_survival(block) {
         let at = runtime::BlockAt { block: block.to_string(), pos: target, face: None };
         let here = Here { host: &mut *host, level: Some(level), dimension: "", player: Some(player), hand: event.hand, seed: 0 };
-        runtime::can_survive(&at, &here).unwrap_or(stands)
+        // A water crop goes only into water (its `getStateForPlacement`).
+        (rule != "water" || in_water) && runtime::can_survive(&at, &here).unwrap_or(stands)
     } else {
         stands
     };

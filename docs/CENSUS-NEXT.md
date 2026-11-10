@@ -96,3 +96,23 @@ and ticked), `rotate` and `mirror` (the block's template), `saveAdditional` /
 Haiku for one try each (retries and fixes add some). Translating every surveyed mod
 after Tiers 1 and 2 is affordable, and the translations' own "Missing:" notes then
 become the next census.
+
+## What ports still say is missing (0.9.1)
+
+After `translate --refresh`, Farmer's Delight's ported code still carries 96 `// Missing:` notes.
+By theme, the next things to give ported code:
+
+| Missing | Notes | Would need |
+| --- | --- | --- |
+| Block shapes and sturdy faces (`canSupportCenter`, `isFaceSturdy`, collision tests) | 12 | a shape query on `Blocks` |
+| Light and sky where the level hook gives none (`canSeeSky`, light in `canSurvive`) | 10 | Horizon request 18 |
+| Entities: damage, effects, passengers, the placer | 10 | Horizon requests 9, 12, 13 |
+| Stats and advancements (`awardStat`, criteria triggers) | 8 | a `World::stat`, to check in Horizon |
+| The mod's own config holders (not `ModConfigSpec`) | 7 | reading Cloth/owo/custom config classes |
+| Item and block particles (`ItemParticleOption`, `BlockParticleOption`) | 4 | particles with a payload |
+| Rolled results (`rollResults`, chance outputs, Fortune) | 3 | recipe results with chances |
+| Overlay messages (`displayClientMessage(.., true)`) | 2 | `World::overlay` (`native_action_bar`) |
+
+Also: a block entity whose slot count comes from a method (`getInventorySlotCount()`, Farmer's
+Delight's stove) gets no slots, so its own cooking isn't ported; `level.destroyBlock`,
+`levelEvent` and `gameEvent` from Tier 2 are still open.

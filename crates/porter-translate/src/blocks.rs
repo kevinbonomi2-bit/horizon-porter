@@ -1642,7 +1642,9 @@ fn {id}_use_item_on({params}) {
                 }
             }
             let at = m::BlockAt { block: block.to_string(), pos: target, face: None };
-            m::can_survive(&at, &PlantRead { game: &*game }).unwrap_or(stands)
+            // A water crop goes only into water (its `getStateForPlacement`).
+            (*rule != "water" || here == "minecraft:water")
+                && m::can_survive(&at, &PlantRead { game: &*game }).unwrap_or(stands)
         } else {
             stands
         };

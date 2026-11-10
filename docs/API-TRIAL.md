@@ -162,6 +162,16 @@ into a bowl. Neither translation ports the stove's own six-slot grill yet (it he
 but doesn't cook food put straight on it), and a whole-stack shift-click goes the game's way
 (Horizon request 15).
 
+## Refreshed, and the same on today's Horizon (0.9.1)
+
+`translate --refresh` ported 89 of the trial port's functions again (about $1.90 on Haiku) against
+what runtime.rs gives now: tag, water and light queries, dropped items, redstone and state in a
+tick. Rebuilt on the mod API and played: the cutting board, knife, basket, cooking pot, skillet and
+feasts behave as before, seeds plant, and rice plants into water and keeps it. The second, fresh
+port was built the way the app builds it, on Horizon 2ebf00a, and played the same; getting there
+found that Horizon's sound and particle helpers had changed (fixed in the porter) and that
+comparators didn't read a mod's containers (the port now counts the slots itself).
+
 ## Next
 
 1. **The rest of block entities:** tanks, energy and hopper transfers.
