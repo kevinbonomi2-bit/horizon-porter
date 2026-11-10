@@ -111,10 +111,34 @@ const REACHES: &[(u32, &[&str])] = &[
             "config",
         ],
     ),
+    // Spawning an entity, the player's position, eyes and look in a use, vanilla's
+    // level events and a block's break effect, game events, the sky.
+    (
+        3,
+        &[
+            "levelevent",
+            "level event",
+            "break effect",
+            "block-break effect",
+            "gameevent",
+            "game event",
+            "spawn",
+            "summon",
+            "addfreshentity",
+            "player's position",
+            "player position",
+            "look vector",
+            "look angle",
+            "pov",
+            "eye",
+            "canseesky",
+            "sky",
+        ],
+    ),
 ];
 
 /// The newest line of `REACHES`.
-pub const REACH: u32 = 2;
+pub const REACH: u32 = 3;
 
 /// Whether a function ported at reach `at`, whose port says `notes` were out of reach,
 /// is worth porting again now.
@@ -966,6 +990,11 @@ mod tests {
             "// `Placement` does not carry the held item."
         ));
         assert!(!reach_grew_for(REACH, "// Missing: `isFaceSturdy`."));
+        assert!(reach_grew_for(
+            2,
+            "// Missing: `level.levelEvent(2001, pos, id)`."
+        ));
+        assert!(!reach_grew_for(2, "// Missing: `isFaceSturdy`."));
     }
 
     #[test]

@@ -625,6 +625,11 @@ impl runtime::Blocks for Here<'_> {
     fn in_tag(&self, pos: [i32; 3], tag: &str) -> bool {
         in_tag(&*self.host, "block", tag, &runtime::Blocks::block(self, pos))
     }
+    fn sees_sky(&self, pos: [i32; 3]) -> bool {
+        self.level
+            .and_then(|l| l.can_see_sky(&*self.host, pos))
+            .unwrap_or(true)
+    }
     fn sturdy(&self, pos: [i32; 3], face: &str) -> bool {
         let side = match face {
             "down" => mod_api::NativeBlockFace::Down,
@@ -779,6 +784,29 @@ impl runtime::World for Here<'_> {
     fn xp(&mut self, at: [f64; 3], amount: u32) {
         if let Some(level) = self.level {
             let _ = level.award_experience(self.host, at[0], at[1], at[2], amount);
+        }
+    }
+    fn summon(&mut self, kind: &str, at: [f64; 3]) -> bool {
+        self.host.summon(self.dimension, kind, at, mod_api::Compound::new()).is_some()
+    }
+    fn level_event(&mut self, id: i32, pos: [i32; 3], data: i32) {
+        if let Some(level) = self.level {
+            let _ = level.level_event(self.host, id, pos, data);
+        }
+    }
+    fn break_effect(&mut self, pos: [i32; 3], block: &str) {
+        let (Some(level), Some(key)) = (self.level, particle("block")) else {
+            return;
+        };
+        let state = self.host.block_state_id(block);
+        let at = [f64::from(pos[0]) + 0.5, f64::from(pos[1]) + 0.5, f64::from(pos[2]) + 0.5];
+        let options = mod_api::ParticleOptions::simple(key);
+        let _ = level.send_particles(self.host, &options, state, at, [0.25, 0.25, 0.25], 0.05, 30);
+    }
+    fn game_event(&mut self, event: &str, pos: [i32; 3]) {
+        if let Some(level) = self.level {
+            let at = [f64::from(pos[0]) + 0.5, f64::from(pos[1]) + 0.5, f64::from(pos[2]) + 0.5];
+            let _ = level.game_event(self.host, event, at);
         }
     }
     fn overlay(&mut self, text: &str) {
@@ -1066,7 +1094,16 @@ fn click(host: &mut dyn ServerHost, state: BlockState, click: &BlockClick<'_>) -
         .player(click.player)
         .and_then(|p| p.is_creative(&*host))
         .unwrap_or(false);
+    // Where the player stands, their eyes, and the way they look.
+    let stand = player.and_then(|p| p.position(&*host)).unwrap_or([0.0; 3]);
+    let turn = player.and_then(|p| p.rotation(&*host)).unwrap_or([0.0; 2]);
+    let (yaw_r, pitch_r) = (f64::from(turn[0]).to_radians(), f64::from(turn[1]).to_radians());
+    let eye_at = [stand[0], stand[1] + 1.62, stand[2]];
+    let look_at = [-yaw_r.sin() * pitch_r.cos(), -pitch_r.sin(), yaw_r.cos() * pitch_r.cos()];
     let used = runtime::BlockUse {
+        player: stand,
+        eye: eye_at,
+        look: look_at,
         block,
         pos: click.pos,
         face: click.hit.face,
@@ -1268,7 +1305,16 @@ fn item_use(
     let dimension = host.dimension();
     let level = acting.and_then(|p| p.entity().level(&*host)).or_else(|| host.level(dimension));
     let pos = on.as_ref().map_or([0, 0, 0], |o| o.pos);
+    // Where the player stands, their eyes, and the way they look.
+    let stand = player.and_then(|p| p.position(&*host)).unwrap_or([0.0; 3]);
+    let turn = player.and_then(|p| p.rotation(&*host)).unwrap_or([0.0; 2]);
+    let (yaw_r, pitch_r) = (f64::from(turn[0]).to_radians(), f64::from(turn[1]).to_radians());
+    let eye_at = [stand[0], stand[1] + 1.62, stand[2]];
+    let look_at = [-yaw_r.sin() * pitch_r.cos(), -pitch_r.sin(), yaw_r.cos() * pitch_r.cos()];
     let u = runtime::ItemUse {
+        player: stand,
+        eye: eye_at,
+        look: look_at,
         item,
         count: stack.count(),
         damage: 0,
@@ -1751,6 +1797,7 @@ impl runtime::BlockEntities for Here<'_> {
 
 /// Vanilla's particles that need no options, which a tick may send by name.
 const VANILLA_PARTICLES: &[&str] = &[
+    "block",
     "smoke",
     "large_smoke",
     "white_smoke",

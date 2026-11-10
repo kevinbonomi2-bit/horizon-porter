@@ -1088,6 +1088,18 @@ fn {id}_right_click_block({params}) {
     };
     let facing = m::yaw_direction(player.as_ref().map_or(0.0, |p| p.yaw)).to_string();
     let creative = player.is_some_and(|p| p.game_mode == 1);
+    // Where the player stands, their eyes, and the way they look.
+    let (stand, eye_at, look_at) = match game.native_acting_player() {
+        Some(p) => {
+            let (yaw, pitch) = (f64::from(p.yaw).to_radians(), f64::from(p.pitch).to_radians());
+            (
+                p.position,
+                [p.position[0], p.position[1] + 1.62, p.position[2]],
+                [-yaw.sin() * pitch.cos(), -pitch.sin(), yaw.cos() * pitch.cos()],
+            )
+        }
+        None => ([0.0; 3], [0.0; 3], [0.0, 0.0, 1.0]),
+    };
     let used = m::BlockUse {
         block,
         pos,
@@ -1097,6 +1109,9 @@ fn {id}_right_click_block({params}) {
         held_count,
         facing,
         creative,
+        player: stand,
+        eye: eye_at,
+        look: look_at,
         // The acting player's pose, swapped in for the hook.
         sneaking: game
         .player
@@ -1149,6 +1164,36 @@ const ITEM_WORLD: &str = r#"{tags}    struct Here<'g, 'a> {
         }
     }
     impl m::World for Here<'_, '_> {
+        fn summon(&mut self, kind: &str, at: [f64; 3]) -> bool {
+            self.changed = true;
+            let dimension = self.game.native_dimension();
+            self.game
+                .native_summon(dimension, kind, at, horizon_world::nbt::Compound::new())
+                .is_some()
+        }
+        fn level_event(&mut self, id: i32, pos: [i32; 3], data: i32) {
+            let _ = data;
+            let at = [f64::from(pos[0]) + 0.5, f64::from(pos[1]) + 0.5, f64::from(pos[2]) + 0.5];
+            // Horizon has no level events for hook code: the common ones, by hand.
+            let (sound, particle, count) = match id {
+                1009 => (Some("minecraft:block.fire.extinguish"), "large_smoke", 8),
+                1505 | 2005 => (None, "happy_villager", 15),
+                _ => return,
+            };
+            if let Some(sound) = sound {
+                @@LEVEL_CALL(self.game; native_level_play_sound; sound, at, 4, 0.5, 2.6)@@
+            }
+            if let Some(options) = ParticleType::from_name(particle).map(ParticleOptions::simple) {
+                @@LEVEL_CALL(self.game; native_level_send_particles; &options, None, at, [0.3, 0.3, 0.3], 0.0, count)@@
+            }
+        }
+        fn break_effect(&mut self, pos: [i32; 3], block: &str) {
+            let at = [f64::from(pos[0]) + 0.5, f64::from(pos[1]) + 0.5, f64::from(pos[2]) + 0.5];
+            let state = self.game.pack.assets.registry.default_state(block);
+            if let Some(options) = ParticleType::from_name("block").map(ParticleOptions::simple) {
+                @@LEVEL_CALL(self.game; native_level_send_particles; &options, state, at, [0.25, 0.25, 0.25], 0.05, 30)@@
+            }
+        }
         fn overlay(&mut self, text: &str) {
             let Some(player) = self.game.native_acting_player() else {
                 return;
@@ -1707,7 +1752,22 @@ fn {id}_use_item_on({params}) {
         None => m::ray_hit([0.0; 3], [0.0; 3], pos, face, &[]),
     };
     let creative = player.is_some_and(|p| p.game_mode == 1);
+    // Where the player stands, their eyes, and the way they look.
+    let (stand, eye_at, look_at) = match game.native_acting_player() {
+        Some(p) => {
+            let (yaw, pitch) = (f64::from(p.yaw).to_radians(), f64::from(p.pitch).to_radians());
+            (
+                p.position,
+                [p.position[0], p.position[1] + 1.62, p.position[2]],
+                [-yaw.sin() * pitch.cos(), -pitch.sin(), yaw.cos() * pitch.cos()],
+            )
+        }
+        None => ([0.0; 3], [0.0; 3], [0.0, 0.0, 1.0]),
+    };
     let used = m::ItemUse {
+        player: stand,
+        eye: eye_at,
+        look: look_at,
         item,
         count: stack.count,
         damage: stack.damage,
@@ -1743,7 +1803,22 @@ fn {id}_use_item({params}) {
     let creative = game
         .native_acting_player()
         .is_some_and(|p| p.game_mode == 1);
+    // Where the player stands, their eyes, and the way they look.
+    let (stand, eye_at, look_at) = match game.native_acting_player() {
+        Some(p) => {
+            let (yaw, pitch) = (f64::from(p.yaw).to_radians(), f64::from(p.pitch).to_radians());
+            (
+                p.position,
+                [p.position[0], p.position[1] + 1.62, p.position[2]],
+                [-yaw.sin() * pitch.cos(), -pitch.sin(), yaw.cos() * pitch.cos()],
+            )
+        }
+        None => ([0.0; 3], [0.0; 3], [0.0, 0.0, 1.0]),
+    };
     let used = m::ItemUse {
+        player: stand,
+        eye: eye_at,
+        look: look_at,
         item,
         count: stack.count,
         damage: stack.damage,
@@ -1980,6 +2055,12 @@ pub trait Blocks {
         let _ = face;
         block_seems_solid(&self.block(pos))
     }
+    /// Whether the spot at `pos` is open to the sky (`level.canSeeSky(pos)`). True where
+    /// Horizon gives no answer.
+    fn sees_sky(&self, pos: [i32; 3]) -> bool {
+        let _ = pos;
+        true
+    }
     /// The light at `pos`, 0 to 15 (`level.getRawBrightness(pos, 0)`,
     /// `getMaxLocalRawBrightness(pos)`): the brighter of the sky's and the blocks'. 15
     /// where Horizon gives no light query.
@@ -2212,6 +2293,28 @@ pub trait World: Blocks {
         let _ = pos;
         false
     }
+    /// Spawns entity `kind` (`minecraft:bee`, a mod's `naturalist:snail`) at `at`
+    /// (`type.spawn(level, pos, ..)`, `level.addFreshEntity(entity)`). True when it did.
+    fn summon(&mut self, kind: &str, at: [f64; 3]) -> bool {
+        let _ = (kind, at);
+        false
+    }
+    /// `level.levelEvent(id, pos, data)`: one of vanilla's sound-and-particle events
+    /// (1009 a fire going out, 2005 and 1505 bone meal's sparkle). For 2001, a block
+    /// breaking, use `break_effect`.
+    fn level_event(&mut self, id: i32, pos: [i32; 3], data: i32) {
+        let _ = (id, pos, data);
+    }
+    /// The particles and sound of `block` breaking at `pos` (`level.levelEvent(2001,
+    /// pos, Block.getId(state))`, what `Block.playerWillDestroy` plays).
+    fn break_effect(&mut self, pos: [i32; 3], block: &str) {
+        let _ = (pos, block);
+    }
+    /// `level.gameEvent(player, GameEvent.BLOCK_CHANGE, pos)`: what sculk sensors hear,
+    /// by its name (`minecraft:block_change`).
+    fn game_event(&mut self, event: &str, pos: [i32; 3]) {
+        let _ = (event, pos);
+    }
     /// Shows the player who clicked a line above their hotbar
     /// (`player.displayClientMessage(text, true)`, `sendOverlayMessage`): a translation
     /// key (`farmersdelight.block.rice.invalid_placement`) or plain words.
@@ -2358,6 +2461,11 @@ pub struct BlockUse {
     pub creative: bool,
     /// Whether the player sneaks (`player.isShiftKeyDown()`, `isCrouching()`).
     pub sneaking: bool,
+    /// Where the player stands (`player.position()`), where their eyes are
+    /// (`getEyePosition()`) and the way they look (`getLookAngle()`, one block long).
+    pub player: [f64; 3],
+    pub eye: [f64; 3],
+    pub look: [f64; 3],
 }
 
 /// The way a player at `yaw` looks, flat (Java's `Direction.fromYRot`): `north`,
@@ -2381,6 +2489,11 @@ pub struct ItemUse {
     pub creative: bool,
     /// Whether the player sneaks (`player.isShiftKeyDown()`).
     pub sneaking: bool,
+    /// Where the player stands (`player.position()`), where their eyes are
+    /// (`getEyePosition()`) and the way they look (`getLookAngle()`, one block long).
+    pub player: [f64; 3],
+    pub eye: [f64; 3],
+    pub look: [f64; 3],
 }
 
 /// The block an item is used on (`UseOnContext`).

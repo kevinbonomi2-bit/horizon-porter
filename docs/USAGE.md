@@ -101,7 +101,9 @@ of that size, so it opens the chest's screen and hoppers reach it.
 Ported block code asks the world what Java asks it: a block and its state, whether it is
 in a tag (`world.in_tag(pos, "minecraft:dirt")`; where Horizon gives no tag query, from a
 table of the vanilla tags the mod's Java names and the mod's own), the water and the light
-at a spot, and whether redstone powers it. A block that always holds water in Java (rice,
+at a spot, whether a block's face is sturdy, and whether redstone powers it. A click's
+code can also show an action-bar line and break a block with its drops, and a placement
+knows the item in the placer's hand. A block that always holds water in Java (rice,
 a `LiquidBlockContainer`) keeps its water.
 
 Each **block entity** becomes a state struct in `runtime.rs`, saved with its block
@@ -133,8 +135,9 @@ tick moves items to and from the blocks beside it as a hopper does
 A mod's **network messages** (`CustomPacketPayload` records) become Rust structs with
 their channel and fields, sent and received through Horizon's `native_net_*` hooks: the
 port decodes each message and calls its handler, which you (or the translation) port
-from the Java one. Its **config** (`ModConfigSpec`) becomes a `Config` kept in Horizon's
-mod settings, with a page in Options > Mods that toggles, cycles and steps each value.
+from the Java one. Its **config** (NeoForge's `ModConfigSpec`, or a class of plain fields
+as Cloth/AutoConfig, OmegaConfig and MidnightLib mods keep theirs) becomes a `Config` kept in
+Horizon's mod settings, with a page in Options > Mods that toggles, cycles and steps each value.
 
 A **block entity renderer** becomes a `render_<name>` function that draws with a pose
 stack (push, pop, translate, rotate, scale) and block models, cubes and items, animated
@@ -206,8 +209,11 @@ horizon-porter translate my-mod-horizon --refresh             # port them again
 ```
 
 `--refresh` ports those again from the Java alone, and also the functions whose port said
-something was out of reach (`// Missing: ...`) when an older version made it. One that
+something was out of reach (`// Missing: ...`) that this version can now reach. One that
 fails keeps its old port. The app does this when you port a mod again.
+
+**What didn't come over.** After translating, `TRANSLATION-NOTES.md` in the port folder lists
+each ported function that couldn't do part of what its Java does, and what that part is.
 
 **What it costs.** `--dry-run` prints an estimate before anything is spent, and more
 than five functions need `--yes`. Claude Haiku 5.5 is the default: about $2 for

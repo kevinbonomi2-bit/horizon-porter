@@ -875,7 +875,9 @@ impl Game {
         if playing(self) {
             return;
         }
-        self.run(&["key", "esc"], 30);
+        // A sign's editor closes on Escape (`close` leaves it).
+        self.run(&["key", "esc", "tap"], 30);
+        self.run(&["wait", "3"], 30);
         if playing(self) {
             return;
         }
