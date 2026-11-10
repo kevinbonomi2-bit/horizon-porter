@@ -934,6 +934,19 @@ fn folder_compiles_against_the_mock(mixins: &Path, dir: &Path) {
         )
         .replace("__HOOKS__", &hooks)
         .replace("__LEVEL_HOOKS__", &level_hooks);
+    // The same helpers on a Horizon before 2ebf00a, where sounds and particles play in
+    // the level in place: a port builds on whichever Horizon its instance plays.
+    let older = lib
+        .replace(
+            "native_level_play_sound(&mut self, level: crate::mod_api::LevelRef, ",
+            "native_level_play_sound(&mut self, ",
+        )
+        .replace(
+            "native_level_send_particles(&mut self, level: crate::mod_api::LevelRef, ",
+            "native_level_send_particles(&mut self, ",
+        );
+    assert_ne!(older, lib, "the mock's level calls changed their text");
+    check_mock(&older, &dir.join("older"));
     check_mock(&lib, dir);
 }
 
