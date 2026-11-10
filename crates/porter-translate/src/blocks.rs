@@ -277,6 +277,10 @@ pub fn hooks(behaviours: &[Behaviour]) -> Vec<(&'static str, BTreeSet<String>)> 
                 .insert(b.class.clone());
         }
     }
+    // What a placement sets on top of its template's own is set once the block is placed.
+    if behaviours.iter().any(|b| b.kind == Kind::Place) {
+        out.entry("place_block").or_default();
+    }
     // What a tick spawns appears once the level's tick is over.
     if behaviours
         .iter()
@@ -537,7 +541,7 @@ pub fn runtime(
                 .join(", ");
             let what = match kind {
                 Kind::Place => {
-                    "the state its blocks are placed in: return the properties Java sets on\n/// `defaultBlockState()` (`facing` as Java names it: Horizon turns it to the one\n/// stored), or None to leave the template's placement. Where Java returns `null`\n/// (no block), return `Some(vec![(CANCEL.into(), String::new())])`"
+                    "the state its blocks are placed in: return the properties Java sets on\n/// `defaultBlockState()` (`facing` as Java names it: Horizon turns it to the one\n/// stored), or None to leave the template's placement. Where Java returns `null`\n/// (no block), return `Some(vec![(CANCEL.into(), String::new())])`. Where Java starts from\n/// `super.getStateForPlacement(context)` of a vanilla class and sets more on it (a\n/// multiface block's faces, a slab's half), return what it sets with\n/// `(SUPER.into(), String::new())` added: the template places the block its own way,\n/// waterlogging included, and the rest is set on it"
                 }
                 Kind::Use => {
                     "what a right click on its blocks does: read and change blocks through\n/// `world`, and return true where Java returns `SUCCESS` or `CONSUME`, false for `PASS`.\n/// Where Java opens a menu (`player.openMenu(..)`), return false: the click goes on to\n/// the block's template (a barrel, a furnace), which opens the block's menu itself; true\n/// would stop it"
@@ -710,7 +714,7 @@ pub fn helper(
             "acts_when_placed",
             "placed",
             "places",
-            "",
+            "    // What its placement set on top of its template's own (`super.getStateForPlacement`).\n    for (key, value) in m::take_placed(pos) {\n        let value = if key == \"facing\" {\n            m::stored_facing(&game.native_block(pos), &value)\n        } else {\n            value\n        };\n        let _ = game.native_set_block_property_with(pos, &key, &value, 3);\n    }\n",
         ),
         "destroy_block" => (
             "`playerWillDestroy`, `playerDestroy`, `affectNeighborsAfterRemoval`",
@@ -1980,6 +1984,14 @@ fn {id}_state_for_placement({params}) {
         *answer = Some(None);
         return;
     }
+    // On top of the template's own placement (`super.getStateForPlacement`): the template
+    // places it (its faces, its half, its water), and what else was returned is set once
+    // it is placed.
+    if set.iter().any(|(k, _)| k == m::SUPER) {
+        set.retain(|(k, _)| k != m::SUPER && k != "waterlogged");
+        m::keep_placed([context.pos.x, context.pos.y, context.pos.z], set);
+        return;
+    }
     // A waterlogged block is so only where it is placed in water (`SimpleWaterloggedBlock`),
     // whatever its default.
     if !set.iter().any(|(k, _)| k == "waterlogged")
@@ -2731,6 +2743,34 @@ pub struct Placement {
 /// Java's `getStateForPlacement` returning `null` does: `Some(vec![(CANCEL.into(),
 /// String::new())])`.
 pub const CANCEL: &str = "!cancel";
+
+/// What a place function adds to what it returns where Java starts from
+/// `super.getStateForPlacement(context)` of a vanilla class (a multiface block's faces, a
+/// slab's half, a stair's shape): `(SUPER.into(), String::new())`. The template places
+/// the block its own way and the other properties returned are set on it afterwards.
+pub const SUPER: &str = "!super";
+
+// What the last such placement set on top, until the block is placed.
+static PLACED_ON_TOP: std::sync::Mutex<Option<([i32; 3], Vec<(String, String)>)>> =
+    std::sync::Mutex::new(None);
+
+/// Keeps `properties` for the block about to be placed at `pos`.
+pub fn keep_placed(pos: [i32; 3], properties: Vec<(String, String)>) {
+    if let Ok(mut kept) = PLACED_ON_TOP.lock() {
+        *kept = Some((pos, properties));
+    }
+}
+
+/// The properties kept for the block just placed at `pos`.
+pub fn take_placed(pos: [i32; 3]) -> Vec<(String, String)> {
+    let Ok(mut kept) = PLACED_ON_TOP.lock() else {
+        return Vec::new();
+    };
+    match kept.take() {
+        Some((at, properties)) if at == pos => properties,
+        _ => Vec::new(),
+    }
+}
 
 /// What a shape function returns, as the only property, where Java's `updateShape`
 /// returns `Blocks.AIR.defaultBlockState()` (the block can't stay): the block breaks,

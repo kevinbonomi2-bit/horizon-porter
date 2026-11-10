@@ -181,3 +181,43 @@ comparators didn't read a mod's containers (the port now counts the slots itself
    a click (a tick has them).
 4. **The mod's own hooks** (events and Mixins the bundle stubs): as `Hooks` methods.
 5. **`--api` in the app**, and a build that installs `api/` with the fork's launcher.
+
+## Catching up with the fork (2026-11-10)
+
+The fork's tracker ([playsunrise.net/api-gaps](https://playsunrise.net/api-gaps)) lists 38
+capabilities covered, 32 partial and 5 missing against NeoForge, and the API itself moved from
+`horizon-mod-api` into `horizon-mod-vocab` (one file a hook: 637 hooks, 37 host files). The glue
+`port --api` writes is still pinned to `62c91f4`. Type-checked against the fork's main
+(`c7c49ff`), Farmer's Delight's glue needs seven edits and nothing else:
+
+- `NativeBlockClick`, `NativeBlockUpdateFlags`, `NativeInteractionResult`, `NativeBlockFace`,
+  `NativeSupportType`, `NativeItemDisplayContext` and `NativeScreen` lost their `Native`.
+- `Screen` has two more fields (`recipe_book`, `recipe_book_toggle`): build it with
+  `..Default::default()`.
+- `level_tick_post` takes a `HostSide` and its event a `LevelRef` (`event.level.dimension_id()`).
+- `LevelRef::game_event` takes a `GameEventContext`.
+
+What the fork's API has that ported code still asks for, by the note ports leave:
+
+| Ports say they miss | In the fork's API |
+| --- | --- |
+| Mobs near a block (`getEntitiesOfClass`) | `level_entities_in`, `mob`, `living_baby`, `mob_set_baby` |
+| A grave's "player died, here are the drops" | the `living_drops` hook (drops can be taken), `player_clone`, `player_died` |
+| Villager trades for a trading post | `merchant`, `merchant_offers`, `player_open_menu` |
+| Status effects on a player or mob | `living_add_effect`, `living_remove_effect` |
+| Stats and item cooldowns | `player_award_stat`, `player_set_item_cooldown` |
+| A ray from the player's eyes (`getPlayerPOVHitResult`) | `level_clip`, `entity_pick` |
+| Whether the player can eat | `player_can_eat`, `player_food` |
+| Item particles (`ItemParticleOption`) | `item_particle_options` |
+| A mod's own screens and widgets | typed widgets, menu Parts, `screen_draw`, GUI layers |
+
+Still open there too: general mod entities (#792: mobs are copies of a vanilla one), non-mob
+entity renderers (#860), typed network payloads (#813).
+
+Regular Horizon has none of the left column for hook code except `living_death` and
+`player_died`, which only listen. So these come to ports through `--api` first.
+
+What moving to the fork's main takes: a game built from its source at that commit for the launcher
+to build ports against (the prebuilt one crashed on this machine last time, and the source build
+needed the fork's own `horizon-prepare` and a hand-added fluid table), then the seven edits above
+in `api.rs`, then giving `World` and `Machine` the calls in the table.

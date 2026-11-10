@@ -16,6 +16,15 @@ pub fn menu(class: &str, source: &str) -> MenuInfo {
         ..Default::default()
     };
     let mut inventory: Option<[i32; 2]> = None;
+    // `addStandardInventorySlots(inventory, 8, 84)`: vanilla's own helper says where.
+    let standard: Option<[i32; 2]> =
+        calls(source, "addStandardInventorySlots")
+            .iter()
+            .find_map(|args| {
+                let parts = split_top(args);
+                let n = parts.len();
+                (n >= 3).then(|| Some([first_int(&parts[n - 2])?, first_int(&parts[n - 1])?]))?
+            });
     // The player's inventory, by the constructor's `Inventory` parameter's name.
     let player_names = inventory_params(source);
     let is_player = |container: &str| {
@@ -35,6 +44,10 @@ pub fn menu(class: &str, source: &str) -> MenuInfo {
     if !evaluated.is_empty() {
         for (ty, container, index, x, y) in evaluated {
             if is_player(&container) {
+                // Armour (36 to 39) and the off hand (40) sit apart from the inventory.
+                if index.is_some_and(|i| i >= 36) {
+                    continue;
+                }
                 inventory = Some(match inventory {
                     Some([ix, iy]) if iy <= y => [ix.min(x), iy],
                     _ => [x, y],
@@ -48,7 +61,7 @@ pub fn menu(class: &str, source: &str) -> MenuInfo {
                 result: is_result(&ty, source),
             });
         }
-        info.inventory = inventory;
+        info.inventory = standard.or(inventory);
         if !calls(source, "addDataSlots").is_empty() {
             info.data_slots = calls(source, "SimpleContainerData")
                 .iter()
@@ -77,6 +90,9 @@ pub fn menu(class: &str, source: &str) -> MenuInfo {
         let (container, index, x, y) = (&parts[0], &parts[n - 3], &parts[n - 2], &parts[n - 1]);
         // The player's own inventory: only where it starts matters.
         if is_player_inventory(container) {
+            if int(index).is_some_and(|i| i >= 36) {
+                continue;
+            }
             if let (Some(x), Some(y)) = (first_int(x), first_int(y)) {
                 inventory = Some(match inventory {
                     Some([ix, iy]) if iy <= y => [ix.min(x), iy],
@@ -105,7 +121,7 @@ pub fn menu(class: &str, source: &str) -> MenuInfo {
             result: is_result(ty, source),
         });
     }
-    info.inventory = inventory;
+    info.inventory = standard.or(inventory);
     if !calls(source, "addDataSlots").is_empty() {
         info.data_slots = calls(source, "SimpleContainerData")
             .iter()
@@ -132,6 +148,34 @@ pub fn screen(class: &str, source: &str) -> ScreenInfo {
             .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '.')
             .collect();
         (!name.is_empty()).then(|| name.rsplit('.').next().unwrap_or(&name).to_string())
+    })
+    // A library's own base (`AbstractWidgetsContainerScreen<InfuserMenu>`): the menu is
+    // the first type its `extends` names.
+    .or_else(|| {
+        let simple = class.rsplit(['.', '$']).next().unwrap_or(class);
+        let at = source.find(&format!("class {simple} extends "))?;
+        let rest = &source[at..];
+        let open = rest.find('<')?;
+        // Only within the declaration's own line.
+        if rest[..open].contains('{') {
+            return None;
+        }
+        let name: String = rest[open + 1..]
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '.')
+            .collect();
+        (!name.is_empty() && name != "T")
+            .then(|| name.rsplit('.').next().unwrap_or(&name).to_string())
+    });
+    // `super(menu, inventory, title, 220, 185)`: a base that takes the size.
+    let from_super: Option<[i32; 2]> = calls(source, "super").iter().find_map(|args| {
+        let parts = split_top(args);
+        let n = parts.len();
+        if n < 5 {
+            return None;
+        }
+        let (w, h) = (int(&parts[n - 2])?, int(&parts[n - 1])?);
+        ((100..=512).contains(&w) && (60..=512).contains(&h)).then_some([w, h])
     });
     let assigned = |names: &[&str]| {
         names.iter().find_map(|name| {
@@ -162,8 +206,8 @@ pub fn screen(class: &str, source: &str) -> ScreenInfo {
     ScreenInfo {
         class: class.to_string(),
         menu,
-        width: assigned(&["imageWidth", "backgroundWidth"]),
-        height: assigned(&["imageHeight", "backgroundHeight"]),
+        width: assigned(&["imageWidth", "backgroundWidth"]).or(from_super.map(|s| s[0])),
+        height: assigned(&["imageHeight", "backgroundHeight"]).or(from_super.map(|s| s[1])),
         texture,
     }
 }
@@ -343,6 +387,12 @@ fn statement_len(text: &str) -> usize {
 /// An int expression: literals, names in `env`, `+ - * /`, parentheses.
 fn eval(text: &str, env: &std::collections::HashMap<String, i64>) -> Option<i64> {
     let t = text.trim();
+    // `config.allowRepairing ? 23 : 34`: which holds isn't known here; the first.
+    if let Some((_, choice)) = t.split_once('?')
+        && let Some((first, second)) = choice.rsplit_once(':')
+    {
+        return eval(first, env).or_else(|| eval(second, env));
+    }
     let tokens: Vec<String> = {
         let mut v = Vec::new();
         let mut cur = String::new();
@@ -406,6 +456,11 @@ fn term(
                 *pos += 1;
                 let d = atom(t, pos, env)?;
                 v = v.checked_div(d)?;
+            }
+            "%" => {
+                *pos += 1;
+                let d = atom(t, pos, env)?;
+                v = v.checked_rem(d)?;
             }
             _ => break,
         }
@@ -1036,6 +1091,45 @@ fn first_int(text: &str) -> Option<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_a_librarys_screen_and_a_menu_with_armour_slots() {
+        let menu_src = r#"
+public class InfuserMenu extends AbstractContainerMenu {
+   public InfuserMenu(int containerId, final Inventory inventory, Container container) {
+      super(TYPE, containerId);
+      this.addSlot(new Slot(container, 0, 8, this.getConfig().allowRepairing.isActive() ? 23 : 34) {
+      });
+      for (int k = 0; k < 4; k++) {
+         this.addSlot(new ArmorSlot(inventory, inventory.player, slot, 39 - k, 8 + 188 * (k / 2), 103 + k % 2 * 18, identifier));
+      }
+      this.addStandardInventorySlots(inventory, 30, 103);
+      this.addSlot(new Slot(inventory, 40, 8, 161) {
+      });
+   }
+}
+"#;
+        let m = menu("a.InfuserMenu", menu_src);
+        assert_eq!(m.inventory, Some([30, 103]), "{m:?}");
+        assert_eq!(m.slots.len(), 1, "{m:?}");
+        assert_eq!((m.slots[0].x, m.slots[0].y), (8, 23));
+        let screen_src = r#"
+public class InfuserScreen extends AbstractWidgetsContainerScreen<InfuserMenu> implements ContainerListener {
+   public static final Identifier TEXTURE_LOCATION = EnchantingInfuser.id("textures/gui/container/infuser.png");
+   public InfuserScreen(InfuserMenu infuserMenu, Inventory inventory, Component title) {
+      super(infuserMenu, inventory, title, 220, 185);
+      this.inventoryLabelX = 30;
+   }
+}
+"#;
+        let s = screen("a.InfuserScreen", screen_src);
+        assert_eq!(s.menu.as_deref(), Some("InfuserMenu"));
+        assert_eq!((s.width, s.height), (Some(220), Some(185)));
+        assert_eq!(
+            s.texture.as_deref(),
+            Some("textures/gui/container/infuser.png")
+        );
+    }
 
     #[test]
     fn reads_a_blocks_state_definition() {

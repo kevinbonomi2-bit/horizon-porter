@@ -1051,6 +1051,11 @@ const PART_PLACE: &str = r#"    fn state_for_placement(
         if set.iter().any(|(k, _)| k == runtime::CANCEL) {
             return Some(None);
         }
+        // On top of the template's own placement (`super.getStateForPlacement`): the
+        // template places it.
+        if set.iter().any(|(k, _)| k == runtime::SUPER) {
+            return None;
+        }
         // A waterlogged block is so only where it is placed in water
         // (`SimpleWaterloggedBlock`), unless its Java says otherwise.
         if !set.iter().any(|(k, _)| k == "waterlogged")

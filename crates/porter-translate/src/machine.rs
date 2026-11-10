@@ -106,10 +106,17 @@ pub fn find(scan: &ModScan, ns: &str, id: &str, entities: &[BlockEntity]) -> Vec
             data_slots: menu.data_slots,
             layout,
             inventory: menu.inventory.unwrap_or([8, 84]),
-            size: [
-                screen.and_then(|s| s.width).unwrap_or(176),
-                screen.and_then(|s| s.height).unwrap_or(166),
-            ],
+            // Not known: what its inventory needs, as vanilla lays a screen out (the
+            // inventory 8 in from each side, its hotbar's foot 7 above the bottom).
+            size: {
+                let [ix, iy] = menu.inventory.unwrap_or([8, 84]);
+                [
+                    screen
+                        .and_then(|s| s.width)
+                        .unwrap_or((ix * 2 + 160).max(176)),
+                    screen.and_then(|s| s.height).unwrap_or((iy + 82).max(166)),
+                ]
+            },
             texture: screen.and_then(|s| texture(s, ns)),
             approximate: menu.approximate,
             quick_move: quick_move_owner(scan, &menu.class),

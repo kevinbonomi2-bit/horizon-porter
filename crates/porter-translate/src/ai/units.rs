@@ -535,14 +535,38 @@ pub fn keep_ported(fresh: &str, existing: &str) -> String {
                 .collect()
         };
         let was_ported = prev_comment.contains(PORTED);
+        // What it is to be ported from now, against what it was ported from: a screen
+        // that wasn't found then (`its Java screen (not found)`) and is now.
+        let from_now = fresh_comment
+            .lines()
+            .find_map(|l| l.find(TODO).map(|i| l[i..].trim().to_string()));
+        let from_then = prev_comment
+            .lines()
+            .find_map(|l| l.find(PORTED).map(|i| todo_of(&l[i..]).trim().to_string()));
+        let source_changed = matches!(
+            (&from_then, &from_now),
+            (Some(a), Some(b)) if a.contains("(not found)") && !b.contains("(not found)")
+        );
         let stale = prev_comment.contains(OUTDATED)
-            || (was_ported && described(prev_comment) != described(fresh_comment));
+            || (was_ported
+                && (source_changed || described(prev_comment) != described(fresh_comment)));
         let comment = if stale && was_ported {
             let note = prev_comment
                 .lines()
                 .find(|l| l.contains(PORTED))
                 .unwrap_or("");
             let prefix = &note[..note.find(PORTED).unwrap_or(0)];
+            // Ported again, it is from what `port` names now (the screen it has found).
+            let renamed;
+            let note = match (&from_now, note.find(')')) {
+                (Some(now), Some(model_end)) if source_changed => {
+                    let rest = now[TODO.len()..].trim();
+                    let joint = if rest.starts_with("from ") { " " } else { ": " };
+                    renamed = format!("{}{joint}{rest} Review it.", &note[..=model_end]);
+                    renamed.as_str()
+                }
+                _ => note,
+            };
             let mut c = String::new();
             for line in fresh_comment.split_inclusive('\n') {
                 if line.contains(TODO) {
@@ -767,6 +791,27 @@ pub fn tick_b(pos: [i32; 3]) {
             units[0].comment
         );
         assert!(!units[0].comment.contains(OUTDATED));
+        // Ported when its Java wasn't found, and found now: marked.
+        let lost = existing.replace(
+            "the tick of `a.B`",
+            "`renderBg` of `its Java screen (not found)`",
+        );
+        let found = keep_ported(
+            &existing.replace(
+                "Ported by horizon-porter translate (m): the tick of `a.B`. Review it.",
+                "TODO: port `renderBg` of `a.BScreen`.",
+            ),
+            &lost,
+        );
+        assert!(found.contains(OUTDATED), "{found}");
+        let again = find_again("mixins/m/runtime.rs", &found, false);
+        assert!(
+            again[0]
+                .comment
+                .contains("TODO: port `renderBg` of `a.BScreen`."),
+            "{}",
+            again[0].comment
+        );
         // The same description: kept as it was, and found only by what it says is missing.
         let same = keep_ported(
             &existing.replace("Ported by horizon-porter translate (m):", "TODO: port"),

@@ -283,6 +283,12 @@ pub fn generate_with(
         let class = reg.creates.as_deref().and_then(class_of);
         let (mut template, mut template_from) = block_template(scan, reg, class.as_deref());
         let mut properties = block_properties(&reg.args);
+        // `.lightLevel(GlowGoopBlock.LIGHT_EMISSION)`: the level its function gives.
+        if !properties.contains_key("light")
+            && let Some(level) = light_from_field(scan, &reg.args)
+        {
+            properties.insert("light".into(), level.into());
+        }
         // The state properties its blockstate file draws it by.
         let blockstate_path = format!("assets/{ns}/blockstates/{block_name}.json");
         let blockstate = resource_json(&content, &blockstate_path);
@@ -648,6 +654,21 @@ pub fn generate_with(
                     pretty(&json),
                 );
             }
+        }
+        // `.noCollision()`: nothing bumps into it, whatever its template is (a copy of
+        // stone would be solid).
+        if (reg.args.contains(".noCollision()") || reg.args.contains(".noCollission()"))
+            && json.get("collision_shapes").is_none()
+        {
+            json["collision_shapes"] = serde_json::json!({ "default": [] });
+            if !properties.contains_key("occludes") {
+                properties.insert("occludes".into(), false.into());
+            }
+            json["properties"] = serde_json::Value::Object(properties.clone());
+            content.files.insert(
+                format!("data/{ns}/horizon/block/{block_name}.json"),
+                pretty(&json),
+            );
         }
         content.blocks.push(Block {
             name: block_name.to_string(),
@@ -2414,6 +2435,8 @@ fn superclass_template(simple: &str) -> Option<&'static str> {
         "CarpetBlock" => "minecraft:white_carpet",
         "LadderBlock" => "minecraft:ladder",
         "HorizontalDirectionalBlock" => "minecraft:carved_pumpkin",
+        // Clings to the faces around it, one property a face.
+        "MultifaceBlock" | "MultifaceSpreadeableBlock" => "minecraft:glow_lichen",
         "DropExperienceBlock" => "minecraft:diamond_ore",
         "ChestBlock" => "minecraft:chest",
         "BarrelBlock" => "minecraft:barrel",
@@ -2438,6 +2461,7 @@ fn superclass_template(simple: &str) -> Option<&'static str> {
                 ("PinkPetalsBlock", "minecraft:pink_petals"),
                 ("LeafLitterBlock", "minecraft:leaf_litter"),
                 ("WebBlock", "minecraft:cobweb"),
+                ("MultifaceBlock", "minecraft:glow_lichen"),
                 ("WaterlilyBlock", "minecraft:lily_pad"),
                 ("FlowerPotBlock", "minecraft:flower_pot"),
                 ("HugeMushroomBlock", "minecraft:brown_mushroom_block"),
@@ -2754,6 +2778,36 @@ fn thrown_item(
         .find(|(_, creates)| creates.is_some_and(|c| names(c.rsplit('.').next().unwrap_or(c))))
         .or_else(|| items().find(|(id, _)| *id == name))
         .map(|(id, _)| id.to_string())
+}
+
+/// The light of `.lightLevel(SomeBlock.LIGHT_EMISSION)`, a function kept in a field
+/// (`state -> state.getValue(GOOP) * 5`, `state -> 12`): the level it gives, for the
+/// lowest state when it grows with a property. Content takes one level a block; a level
+/// that is on or off by state (`getValue(LIT) ? 13 : 0`) is left out.
+fn light_from_field(scan: &ModScan, args: &str) -> Option<u8> {
+    let rest = &args[args.find(".lightLevel(")? + ".lightLevel(".len()..];
+    let arg = rest[..rest.find(')')?].trim();
+    if arg.contains("->") || arg.is_empty() {
+        return None;
+    }
+    let mut path = arg.rsplit('.');
+    let field = path.next()?;
+    let owner = path.next();
+    let init = scan
+        .classes
+        .iter()
+        .filter(|c| owner.is_none_or(|o| c.name.rsplit(['.', '$']).next() == Some(o)))
+        .flat_map(|c| c.fields.iter())
+        .find(|f| f.name == field && f.init.as_deref().is_some_and(|i| i.contains("->")))?
+        .init
+        .as_deref()?;
+    let body = init.split_once("->")?.1.trim();
+    if body.contains('?') {
+        return None;
+    }
+    // `.. * 5`, or the number alone.
+    let number = body.rsplit('*').next()?.trim().trim_end_matches(';');
+    number.parse::<u8>().ok().map(|n| n.min(15))
 }
 
 /// `Blocks.IRON_BLOCK` in `text` → `iron_block` (the first one).

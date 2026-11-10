@@ -183,10 +183,20 @@ const REACHES: &[(u32, &[&str])] = &[
     ),
     // Whether a spot gives way to a placed block.
     (6, &["canbereplaced", "replaceable"]),
+    // A placement on top of the template's own.
+    (
+        7,
+        &[
+            "super.getstateforplacement",
+            "super method",
+            "super placement",
+            "multiface",
+        ],
+    ),
 ];
 
 /// The newest line of `REACHES`.
-pub const REACH: u32 = 6;
+pub const REACH: u32 = 7;
 
 /// Whether a function ported at reach `at`, whose port says `notes` were out of reach,
 /// is worth porting again now.
