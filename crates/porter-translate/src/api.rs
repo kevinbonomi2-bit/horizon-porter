@@ -421,20 +421,26 @@ static ITEM_IDS: std::sync::Mutex<Vec<(mod_api::ItemKey, String)>> = std::sync::
 fn stack_of(host: &dyn mod_api::Host, stack: &mod_api::ItemStack) -> Option<(String, u32)> {
     let key = stack.item();
     let id = key.id(host);
+    remember_item(key, &id);
+    Some((id, stack.count()))
+}
+
+fn remember_item(key: mod_api::ItemKey, id: &str) {
     if let Ok(mut ids) = ITEM_IDS.lock() {
         if !ids.iter().any(|(k, _)| *k == key) {
-            ids.push((key, id.clone()));
+            ids.push((key, id.to_string()));
         }
     }
-    Some((id, stack.count()))
 }
 
 /// A stack's item and count, by an id a host named before.
 fn stack_known(stack: &mod_api::ItemStack) -> Option<(String, u32)> {
     let key = stack.item();
-    let ids = ITEM_IDS.lock().ok()?;
-    let (_, id) = ids.iter().find(|(k, _)| *k == key)?;
-    Some((id.clone(), stack.count()))
+    let known = ITEM_IDS.lock().ok().and_then(|ids| ids.iter().find(|(k, _)| *k == key).map(|(_, id)| id.clone()));
+    // An item no host named yet (a chunk sent as the world loads): the API's own table,
+    // a game-side helper.
+    let id = known.or_else(|| mod_api::__private::item_key_id(key).map(str::to_string))?;
+    Some((id, stack.count()))
 }
 
 /// The particle keys the mod may send, requested at registration: vanilla's plain ones
@@ -449,6 +455,8 @@ fn particle(kind: &str) -> Option<mod_api::ParticleKey> {
 /// A stack of `count` `item`, as the game makes one.
 fn item_stack(host: &dyn mod_api::Host, item: &str, count: u32) -> Option<mod_api::ItemStack> {
     let key = host.item_key(&mod_api::Identifier::parse(item).ok()?)?;
+    // What the block entity's clients are sent names it by this id.
+    remember_item(key, item);
     mod_api::ItemStack::new(key, count)
 }
 

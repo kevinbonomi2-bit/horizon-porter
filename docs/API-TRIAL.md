@@ -110,10 +110,21 @@ and results (the glue reads them from the recipe's JSON, as the bundle does), an
 client gets has no host to name items with (the glue keeps the ids its ticks and clicks named).
 A player's hands go through `LivingRef::new`, a game-side helper.
 
+## Renderers, screens and shift-clicks
+
+A block entity draws through `block_entity_submit`: runtime.rs's renderer gets the items the update
+tag carries and the block's facing, and its pushes, turns, cubes, blocks and items go to the API's
+draw context. A machine's menu lays its slots out where the Java menu does (`screen`) and draws the
+mod's texture and progress sprites under them (`screen_draw`). A shift-click runs the Java menu's
+`quickMoveStack` (`menu_quick_move`), except when it moves the whole stack: the API's stacks are
+never empty, so that one goes the game's way (Horizon request 15). What a client gets of a block entity names its
+items through the API's own item table (`__private::item_key_id`, a game-side helper), since that
+hook has no host. Items a block drops get Java's
+pickup delay, so they pop out before the player picks them up.
+
 ## Next
 
-1. **The rest of block entities:** renderers (`block_entity_submit`), screens (`screen`,
-   `screen_draw`) and shift-clicks (`menu_quick_move`); tanks, energy and hopper transfers.
+1. **The rest of block entities:** tanks, energy and hopper transfers.
 2. **Placed and broken by a player** (`onPlace`/`setPlacedBy`, `playerWillDestroy`): global
    hooks on `Hooks`, filtered to the mod's blocks.
 3. **The rest of `World`**: giving and dropping items, the hand, particles, tags and schedules on
