@@ -164,6 +164,13 @@ scenarios we check.
   entities and 13 mobs carry over from 12 content mods. A second batch of 50 also all
   port: 150 mods, 7,761 blocks, 545 items and 72 mobs in all. The fixes it led to
   and what to target next are in [SURVEY.md](SURVEY.md).
+- **Played mods (0.9.0, 2026-11-09):** eight real mods ported, translated on Claude Haiku
+  5.5, built and played; every fault went back into the porter. The census
+  ([CENSUS.md](CENSUS.md)) compares 150 mods' Java with what carries over, and its
+  Tier 1 (ticks, random ticks, survival, comparators, placement, tooltips, shift-clicks)
+  is done. Farmer's Delight's cooking pot and cutting board play as in Java. `port --api`
+  writes mods for Horizon's new mod API too ([API-TRIAL.md](API-TRIAL.md)). Next: Tier 2
+  of the census, `--api` in the app, and placement and breaking on the API.
 
 ## Working with Horizon
 
