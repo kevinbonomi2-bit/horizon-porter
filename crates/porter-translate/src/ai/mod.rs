@@ -88,7 +88,8 @@ const REACHES: &[(u32, &[&str])] = &[
     // Tags, water, light, dropped items, redstone and a block's state in a tick, slots'
     // stack sizes: broad enough that every port with a gap is worth another go.
     (1, &[]),
-    // Sturdy faces, the held item in a placement, the action bar, breaking a block.
+    // Sturdy faces, the held item in a placement, the action bar, breaking a block,
+    // and the mod's config where it is a class of plain fields.
     (
         2,
         &[
@@ -106,6 +107,8 @@ const REACHES: &[(u32, &[&str])] = &[
             "destroyblock",
             "destroy the block",
             "break the block",
+            // Plain-field config classes are read now (`config()`).
+            "config",
         ],
     ),
 ];

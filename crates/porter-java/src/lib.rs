@@ -277,6 +277,7 @@ fn network_and_config(root: &Path, scan: &mut ModScan) {
     }
     for (name, text) in &sources {
         scan.config.extend(netconf::config(name, text, &enums));
+        scan.config.extend(netconf::field_config(name, text));
         if let Some(r) = machines::renderer(name, text) {
             scan.renderers.push(r);
         }

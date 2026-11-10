@@ -360,6 +360,166 @@ pub fn config(class: &str, source: &str, enums: &dyn Fn(&str) -> Vec<String>) ->
     out
 }
 
+/// The config values of a class that keeps them as plain fields with defaults: a
+/// Cloth/AutoConfig `ConfigData` (`@Config(name = "x")`), an OmegaConfig `Config`, a
+/// MidnightLib `MidnightConfig` (`@Entry public static int x = 5;`), or any class named
+/// `...Config` made of such fields. A nested settings object (`public Blinds blinds =
+/// new Blinds();` with `public static class Blinds { .. }`) is a section: `blinds.x`.
+pub fn field_config(class: &str, source: &str) -> Vec<ConfigEntry> {
+    let simple = class.rsplit(['.', '$']).next().unwrap_or(class);
+    let marked = source.contains("ConfigData")
+        || source.contains("@Config(")
+        || source.contains("MidnightConfig")
+        || source.contains(&format!("class {simple} implements Config"));
+    let named =
+        simple.ends_with("Config") || simple.ends_with("Configs") || simple.ends_with("Settings");
+    if source.contains("ConfigSpec") || !(marked || named) {
+        return Vec::new();
+    }
+    // Nested settings objects: the field that holds each (`blinds` for `Blinds`).
+    let mut sections: Vec<(String, String)> = Vec::new();
+    for line in source.lines() {
+        let t = line.trim();
+        if let Some((decl, init)) = t.strip_suffix(';').and_then(|t| t.split_once(" = new "))
+            && decl.starts_with("public ")
+        {
+            let words: Vec<&str> = decl.split_whitespace().collect();
+            let ty = init
+                .split('(')
+                .next()
+                .unwrap_or("")
+                .rsplit('.')
+                .next()
+                .unwrap_or("");
+            if let Some(name) = words.last()
+                && !ty.is_empty()
+                && source.contains(&format!("class {ty} "))
+            {
+                sections.push((ty.to_string(), name.to_string()));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    // The class each line is in: the innermost `class X {` whose braces are open.
+    let mut open: Vec<(String, i32)> = Vec::new();
+    let mut depth = 0i32;
+    let mut comment: Option<String> = None;
+    let mut bounds: (Option<String>, Option<String>) = (None, None);
+    for line in source.lines() {
+        let t = line.trim();
+        if let Some(i) = t.find("class ").filter(|_| t.ends_with('{')) {
+            let name: String = t[i + 6..]
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect();
+            open.push((name, depth));
+        }
+        // An annotation's text: `@Comment("..")`, `@Description("..")`; its bounds.
+        if t.starts_with('@') {
+            if (t.starts_with("@Comment") || t.starts_with("@Description"))
+                && let (Some(i), Some(j)) = (t.find('"'), t.rfind('"'))
+                && j > i
+            {
+                comment = Some(t[i + 1..j].replace("\\\"", "\""));
+            }
+            for (key, slot) in [("min = ", &mut bounds.0), ("max = ", &mut bounds.1)] {
+                if let Some(v) = t.split_once(key).map(|(_, r)| r) {
+                    let v: String = v
+                        .chars()
+                        .take_while(|c| c.is_ascii_digit() || *c == '.' || *c == '-')
+                        .collect();
+                    if !v.is_empty() {
+                        *slot = Some(v);
+                    }
+                }
+            }
+        }
+        if let Some(entry) = field_entry(class, t) {
+            let owner = open.last().map_or("", |(n, _)| n.as_str());
+            let section = sections
+                .iter()
+                .find(|(ty, _)| ty == owner)
+                .map(|(_, f)| f.as_str());
+            // A field of a nested class no field holds isn't a setting of this config.
+            if owner == simple || section.is_some() {
+                let mut entry = entry;
+                if let Some(section) = section {
+                    entry.path = format!("{section}.{}", entry.path);
+                }
+                entry.comment = comment.take();
+                if matches!(
+                    entry.kind,
+                    ConfigKind::Int | ConfigKind::Long | ConfigKind::Double
+                ) {
+                    entry.min = bounds.0.take();
+                    entry.max = bounds.1.take();
+                }
+                out.push(entry);
+            }
+        }
+        if !t.starts_with('@') {
+            comment = None;
+            bounds = (None, None);
+        }
+        depth += t.matches('{').count() as i32 - t.matches('}').count() as i32;
+        while open.last().is_some_and(|(_, d)| depth <= *d) {
+            open.pop();
+        }
+    }
+    // A class with one stray public field isn't a config.
+    if !marked && out.len() < 2 {
+        return Vec::new();
+    }
+    out
+}
+
+/// `public int searchRadius = 6;` as a config value: a public, non-final field of a
+/// plain type with a literal default.
+fn field_entry(class: &str, line: &str) -> Option<ConfigEntry> {
+    let decl = line.strip_suffix(';')?;
+    let (head, default) = decl.split_once(" = ")?;
+    let words: Vec<&str> = head.split_whitespace().collect();
+    if words.first() != Some(&"public") || words.contains(&"final") {
+        return None;
+    }
+    let [.., ty, name] = words.as_slice() else {
+        return None;
+    };
+    if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return None;
+    }
+    let default = default.trim();
+    let (kind, default) = match *ty {
+        "boolean" if default == "true" || default == "false" => {
+            (ConfigKind::Bool, default.to_string())
+        }
+        "int" | "long" | "float" | "double" => {
+            let (kind, text, _) = number(default)?;
+            let kind = match *ty {
+                "int" => ConfigKind::Int,
+                "long" => ConfigKind::Long,
+                _ => match kind {
+                    ConfigKind::Int | ConfigKind::Long | ConfigKind::Double => ConfigKind::Double,
+                    other => other,
+                },
+            };
+            (kind, text)
+        }
+        "String" => (ConfigKind::String, string_literal(default)?),
+        _ => return None,
+    };
+    Some(ConfigEntry {
+        class: class.to_string(),
+        path: name.to_string(),
+        kind,
+        default,
+        min: None,
+        max: None,
+        values: Vec::new(),
+        comment: None,
+    })
+}
+
 /// The constants of `enum name { A, B(1), C; ... }` in `source`.
 pub fn enum_constants(name: &str, source: &str) -> Vec<String> {
     let Some(i) = find_word(source, &format!("enum {name}")) else {
@@ -445,6 +605,39 @@ public record SetSpeed(BlockPos pos, int speed, @NotNull String note) implements
         new Type<>(ResourceLocation.fromNamespaceAndPath(Grind.MODID, "set_speed"));
 }
 "#;
+
+    #[test]
+    fn reads_a_field_config_with_sections() {
+        let src = r#"
+@Config(name = "beautify")
+public class BeautifyConfig implements ConfigData {
+   @CollapsibleObject
+   public BeautifyConfig.Blinds blinds = new BeautifyConfig.Blinds();
+   public static int searchRadius() {
+      return Beautify.CONFIG.blinds.searchRadius;
+   }
+   public static class Blinds {
+      @Tooltip
+      @BoundedDiscrete(min = 0L, max = 100L)
+      @Comment("Searches below")
+      public int searchRadius = 6;
+      public boolean opensFromRoot = true;
+   }
+}
+"#;
+        let c = field_config("a.BeautifyConfig", src);
+        assert_eq!(c.len(), 2, "{c:?}");
+        assert_eq!(c[0].path, "blinds.searchRadius");
+        assert_eq!(c[0].default, "6");
+        assert_eq!(c[0].max.as_deref(), Some("100"));
+        assert_eq!(c[0].comment.as_deref(), Some("Searches below"));
+        assert_eq!(c[1].path, "blinds.opensFromRoot");
+        assert!(matches!(c[1].kind, ConfigKind::Bool));
+        // Not a config: no marker, one field.
+        assert!(
+            field_config("a.Thing", "public class Thing {\n   public int x = 1;\n}").is_empty()
+        );
+    }
 
     #[test]
     fn finds_creative_tabs() {
