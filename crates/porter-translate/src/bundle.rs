@@ -2204,7 +2204,7 @@ fn {id}_block_entity_tick(
             }};
         }}
     }}
-    if done.data != data {{
+{container_signal}    if done.data != data {{
         entity.data = done.data.clone();
     }}
     if storage.is_some() && done.tanks != tanks {{
@@ -2229,6 +2229,11 @@ fn {id}_block_entity_tick(
 }}
 "##,
                     tag_fn = crate::blocks::TAG_FN,
+                    container_signal = if self.uses("analog_output") {
+                        CONTAINER_SIGNAL
+                    } else {
+                        ""
+                    },
                     from_tag = block_entity::FROM_TAG,
                     to_tag = block_entity::TO_TAG,
                 ),
@@ -3897,6 +3902,30 @@ fn block_tags(scan: &ModScan, content: &content::Content) -> Vec<(String, Vec<St
         .filter(|(_, blocks)| blocks.len() <= 400)
         .collect()
 }
+
+/// In the tick helper: a container whose comparator signal changed tells the
+/// comparators beside it (`Level.updateNeighbourForOutputSignal`).
+const CONTAINER_SIGNAL: &str = r#"    if m::has_comparator_output(m::BLOCK_ENTITIES.iter().find(|(_, e, _)| *e == entity.id).map_or("", |(b, _, _)| *b))
+        && !done.slots.is_empty()
+    {
+        // `AbstractContainerMenu.getRedstoneSignalFromContainer`.
+        let mut fullness = 0.0_f32;
+        let mut any = false;
+        for stack in done.slots.iter().flatten() {
+            let max = game.items().get(&stack.item).map_or(64, |i| i.max_stack).max(1);
+            fullness += stack.count as f32 / max as f32;
+            any = true;
+        }
+        let signal = if any {
+            (fullness / done.slots.len() as f32 * 14.0).floor() as i32 + 1
+        } else {
+            0
+        };
+        if m::note_container_signal(pos, signal) {
+            let _ = game.native_update_output_neighbors(&dimension_here, pos);
+        }
+    }
+"#;
 
 /// Whether Horizon's `Game::native_level_play_sound` and `native_level_send_particles`
 /// take the level first (`level: LevelRef`, since late 2026) or play in the level in

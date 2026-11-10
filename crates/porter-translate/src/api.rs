@@ -1093,16 +1093,16 @@ fn plant(host: &mut dyn ServerHost, event: &mod_api::UseOnEvent<'_>, block: &str
         "water" => here == "minecraft:water",
         _ => below != "minecraft:air",
     };
-    if !(room && stands) {
-        return false;
-    }
-    // `BlockItem.canPlace`: where its Java decides it, the block must be able to stay.
-    if runtime::decides_survival(block) {
+    // Where its Java decides whether it can stay (`canSurvive`), that decides.
+    let stands = if runtime::decides_survival(block) {
         let at = runtime::BlockAt { block: block.to_string(), pos: target, face: None };
         let here = Here { host: &mut *host, level: Some(level), dimension: "", player: Some(player), hand: event.hand, seed: 0 };
-        if runtime::can_survive(&at, &here) == Some(false) {
-            return false;
-        }
+        runtime::can_survive(&at, &here).unwrap_or(stands)
+    } else {
+        stands
+    };
+    if !(room && stands) {
+        return false;
     }
     let Some(state) = host.block_state_id(block) else {
         return false;

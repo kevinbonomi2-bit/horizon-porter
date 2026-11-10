@@ -684,6 +684,7 @@ __LEVEL_HOOKS__
             pub fn native_raycast(&self, distance: f32) -> Option<NativeHit> { None }
             pub fn native_summon(&mut self, dimension: &str, kind: &str, pos: [f64; 3], nbt: Compound) -> Option<u32> { None }
             pub fn native_neighbor_signal(&mut self, dimension: &str, pos: [i32; 3]) -> i32 { 0 }
+            pub fn native_update_output_neighbors(&mut self, dimension: &str, pos: [i32; 3]) -> bool { false }
             pub fn native_item_entities(&self, dimension: &str, min: [f64; 3], max: [f64; 3]) -> Vec<NativeItemEntity> { Vec::new() }
             pub fn native_set_item_entity(&mut self, dimension: &str, id: u32, stack: ItemStack) -> bool { false }
             pub fn native_light(&self, pos: [i32; 3]) -> (u8, u8) { (0, 0) }

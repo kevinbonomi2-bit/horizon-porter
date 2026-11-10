@@ -833,7 +833,7 @@ pub fn generate_with(
         let item_class = reg.creates.as_deref().and_then(class_of);
         let block_item =
             reg.args.contains("BlockItem") || extends(scan, item_class.as_deref(), "BlockItem");
-        if blocks.contains(item_name) || !block_item {
+        if !block_item {
             continue;
         }
         let key = reg.args.split(',').next().unwrap_or("").trim();
@@ -884,6 +884,11 @@ pub fn generate_with(
             }
             _ => "any",
         };
+        // An item named as its block places it itself, except a crop's (rice): a crop's
+        // template has no item that places it, so the port plants it.
+        if blocks.contains(item_name) && !(in_water || rule == "farmland") {
+            continue;
+        }
         content
             .places
             .push((item_name.to_string(), block, rule.to_string()));

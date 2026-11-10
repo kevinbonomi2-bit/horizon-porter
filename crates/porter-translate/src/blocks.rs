@@ -968,6 +968,10 @@ fn {id}_analog_output({params}) {
     };
     if let Some(signal) = m::comparator_output(&at, &Read { game }) {
         *output = signal.clamp(0, 15);
+    } else if let Some(signal) = m::container_signal([pos.x, pos.y, pos.z]) {
+        // Its Java leaves it to the container's fullness
+        // (`getRedstoneSignalFromBlockEntity`): what its tick last counted.
+        *output = signal.clamp(0, 15);
     }
 }
 "#;
@@ -1612,14 +1616,35 @@ fn {id}_use_item_on({params}) {
         let below = game.native_block([target[0], target[1] - 1, target[2]]);
         let room = here == "minecraft:air" || (*rule == "water" && here == "minecraft:water");
         let stands = match *rule {
-            "farmland" => below == "minecraft:farmland",
+            "farmland" => below == "minecraft:farmland" || below.ends_with("_farmland"),
             "soil" => matches!(
                 below.as_str(),
                 "minecraft:grass_block" | "minecraft:dirt" | "minecraft:coarse_dirt" | "minecraft:podzol"
                     | "minecraft:rooted_dirt" | "minecraft:moss_block" | "minecraft:mud" | "minecraft:farmland"
-            ),
+            ) || below.ends_with("_farmland") || below.ends_with("soil"),
             "water" => here == "minecraft:water",
             _ => below != "minecraft:air",
+        };
+        // Where its Java decides whether it can stay (`canSurvive`), that decides.
+        let stands = if m::decides_survival(block) {
+            struct PlantRead<'g, 'a> {
+                game: &'g crate::game::Game<'a>,
+            }
+            impl m::Blocks for PlantRead<'_, '_> {
+                fn block(&self, pos: [i32; 3]) -> String {
+                    self.game.native_block(pos)
+                }
+                fn property(&self, pos: [i32; 3], key: &str) -> Option<String> {
+                    self.game.native_block_property(pos, key)
+                }
+                fn in_tag(&self, pos: [i32; 3], tag: &str) -> bool {
+                    in_tag(self.game, "block", tag, &self.game.native_block(pos))
+                }
+            }
+            let at = m::BlockAt { block: block.to_string(), pos: target, face: None };
+            m::can_survive(&at, &PlantRead { game: &*game }).unwrap_or(stands)
+        } else {
+            stands
         };
         if room && stands {
             let state = game.pack.assets.registry.default_state(block);
@@ -1952,6 +1977,38 @@ pub trait Blocks {
             _ => 0,
         }
     }
+}
+
+/// The comparator signal of each of the mod's containers, as its tick last counted its
+/// slots (`AbstractContainerMenu.getRedstoneSignalFromContainer`): Horizon asks the mod for
+/// a mod block's signal, where its block entity isn't at hand.
+static CONTAINER_SIGNALS: std::sync::Mutex<Vec<([i32; 3], i32)>> = std::sync::Mutex::new(Vec::new());
+
+/// Notes the comparator signal of the container at `pos`; true when it changed.
+pub fn note_container_signal(pos: [i32; 3], signal: i32) -> bool {
+    let Ok(mut signals) = CONTAINER_SIGNALS.lock() else {
+        return false;
+    };
+    match signals.iter_mut().find(|(p, _)| *p == pos) {
+        Some((_, s)) if *s == signal => false,
+        Some((_, s)) => {
+            *s = signal;
+            true
+        }
+        None => {
+            if signals.len() > 4096 {
+                signals.clear();
+            }
+            signals.push((pos, signal));
+            signal != 0
+        }
+    }
+}
+
+/// The comparator signal last noted for the container at `pos`.
+pub fn container_signal(pos: [i32; 3]) -> Option<i32> {
+    let signals = CONTAINER_SIGNALS.lock().ok()?;
+    signals.iter().find(|(p, _)| *p == pos).map(|(_, s)| *s)
 }
 
 /// Whether `block` is in block tag `tag`, by `BLOCK_TAGS`.
