@@ -98,6 +98,12 @@ A block entity that opens a **vanilla menu** over its own slots (a cabinet's
 `ChestMenu.threeRows`, a hopper's or a dispenser's) is declared to Horizon as a container
 of that size, so it opens the chest's screen and hoppers reach it.
 
+Ported block code asks the world what Java asks it: a block and its state, whether it is
+in a tag (`world.in_tag(pos, "minecraft:dirt")`; where Horizon gives no tag query, from a
+table of the vanilla tags the mod's Java names and the mod's own), the water and the light
+at a spot, and whether redstone powers it. A block that always holds water in Java (rice,
+a `LiquidBlockContainer`) keeps its water.
+
 Each **block entity** becomes a state struct in `runtime.rs`, saved with its block
 under the keys `saveAdditional` writes, plus a `tick_<name>` stub for its Java tick.
 Horizon's `native_block_entity` hooks give the blocks their block entity and run the
@@ -188,6 +194,20 @@ it.
 It only touches functions that still carry their TODO, so it never overwrites one you
 wrote, and it saves each result as it comes (`.porter/translate.json`), so it can stop
 and resume. `port --force` keeps ported functions too.
+
+**Porting again with a newer horizon-porter.** Each version gives ported code more to work
+with (a block's tags, the water and light at a spot, dropped items, redstone). A function
+ported before keeps its old port: `port --force` marks the ones it now describes
+differently (`Outdated:` above them) and says how many could be ported better.
+
+```
+horizon-porter translate my-mod-horizon --refresh --dry-run   # which ones, and the cost
+horizon-porter translate my-mod-horizon --refresh             # port them again
+```
+
+`--refresh` ports those again from the Java alone, and also the functions whose port said
+something was out of reach (`// Missing: ...`) when an older version made it. One that
+fails keeps its old port. The app does this when you port a mod again.
 
 **What it costs.** `--dry-run` prints an estimate before anything is spent, and more
 than five functions need `--yes`. Claude Haiku 5.5 is the default: about $2 for

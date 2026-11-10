@@ -708,6 +708,24 @@ fn module_context(module: &str, stub: &str, function: &str, java: &str) -> Strin
         if other_state || other_tick || unused_statics {
             continue;
         }
+        // The tag table: its tags' names say what `in_tag` knows; their blocks would
+        // only fill the prompt.
+        if first_code.starts_with("pub const BLOCK_TAGS:") {
+            let names: Vec<&str> = chunk
+                .lines()
+                .filter_map(|l| l.trim().strip_prefix("(\"")?.split('"').next())
+                .collect();
+            for line in chunk.lines().take_while(|l| l.starts_with("///")) {
+                out.push_str(line);
+                out.push('\n');
+            }
+            let _ = writeln!(
+                out,
+                "pub const BLOCK_TAGS: &[(&str, &[&str])] = &[/* {} */];\n",
+                names.join(", ")
+            );
+            continue;
+        }
         out.push_str(chunk.trim_end_matches('\n'));
         out.push_str("\n\n");
     }

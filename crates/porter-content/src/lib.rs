@@ -2748,7 +2748,95 @@ fn block_properties(args: &str) -> serde_json::Map<String, serde_json::Value> {
     if let Some(sound) = vanilla_constant(args, "SoundType.").and_then(|s| sound_block(&s)) {
         p.insert("sounds".into(), sound.into());
     }
+    // `.instabreak()`: broken at a touch (a flower, a torch).
+    if args.contains(".instabreak()") {
+        p.insert("hardness".into(), 0.into());
+        p.insert("explosion_resistance".into(), 0.into());
+    }
+    // `.mapColor(MapColor.WOOD)`, `.mapColor(DyeColor.RED)`: its color on maps.
+    if let Some(id) = vanilla_constant(args, "MapColor.")
+        .and_then(|c| map_color(&c))
+        .or_else(|| {
+            let dye = vanilla_constant(args, "DyeColor.")?;
+            map_color(match dye.as_str() {
+                "white" => "snow",
+                "lime" => "color_light_green",
+                other => return map_color(&format!("color_{other}")),
+            })
+        })
+    {
+        p.insert("map_color".into(), id.into());
+    }
     p
+}
+
+/// A `MapColor` constant's id (`MapColor.WOOD` is 13), as 26.3 numbers them.
+fn map_color(name: &str) -> Option<u8> {
+    const NAMES: [&str; 62] = [
+        "none",
+        "grass",
+        "sand",
+        "wool",
+        "fire",
+        "ice",
+        "metal",
+        "plant",
+        "snow",
+        "clay",
+        "dirt",
+        "stone",
+        "water",
+        "wood",
+        "quartz",
+        "color_orange",
+        "color_magenta",
+        "color_light_blue",
+        "color_yellow",
+        "color_light_green",
+        "color_pink",
+        "color_gray",
+        "color_light_gray",
+        "color_cyan",
+        "color_purple",
+        "color_blue",
+        "color_brown",
+        "color_green",
+        "color_red",
+        "color_black",
+        "gold",
+        "diamond",
+        "lapis",
+        "emerald",
+        "podzol",
+        "nether",
+        "terracotta_white",
+        "terracotta_orange",
+        "terracotta_magenta",
+        "terracotta_light_blue",
+        "terracotta_yellow",
+        "terracotta_light_green",
+        "terracotta_pink",
+        "terracotta_gray",
+        "terracotta_light_gray",
+        "terracotta_cyan",
+        "terracotta_purple",
+        "terracotta_blue",
+        "terracotta_brown",
+        "terracotta_green",
+        "terracotta_red",
+        "terracotta_black",
+        "crimson_nylium",
+        "crimson_stem",
+        "crimson_hyphae",
+        "warped_nylium",
+        "warped_stem",
+        "warped_hyphae",
+        "warped_wart_block",
+        "deepslate",
+        "raw_iron",
+        "glow_lichen",
+    ];
+    NAMES.iter().position(|n| *n == name).map(|i| i as u8)
 }
 
 /// A vanilla block that makes each `SoundType`'s sounds.
@@ -2941,6 +3029,18 @@ fn holds_water(scan: &ModScan, class: Option<&str>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn map_color_and_instabreak() {
+        let p = block_properties(
+            "Properties.of().mapColor(MapColor.WOOD).instabreak().sound(SoundType.WOOD)",
+        );
+        assert_eq!(p["map_color"], 13);
+        assert_eq!(p["hardness"], 0);
+        let p = block_properties("Properties.of().mapColor(DyeColor.RED).strength(2.0F)");
+        assert_eq!(p["map_color"], 28);
+        assert_eq!(map_color("glow_lichen"), Some(61));
+    }
 
     #[test]
     fn reads_block_properties() {

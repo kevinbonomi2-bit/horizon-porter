@@ -333,6 +333,14 @@ fn run(cli: Cli) -> Result<ExitCode> {
                         .join(", ")
                 );
             }
+            // Functions ported before that this version would give more to work with.
+            let again = porter_translate::ai::outdated(&out).map_or(0, |u| u.len());
+            if again > 0 {
+                println!(
+                    "{again} functions ported earlier could be ported better now (horizon-porter gives them more to work with, or describes them differently): `horizon-porter translate {} --refresh --dry-run` lists them and what it costs.",
+                    out.display()
+                );
+            }
             println!(
                 "Next: port the Java logic into mixins/{}/ (runtime.rs and the hook helpers); PORTING.md lists every class and Mixin.",
                 bundle.id

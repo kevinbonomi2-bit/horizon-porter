@@ -3877,6 +3877,15 @@ fn block_tags(scan: &ModScan, content: &content::Content) -> Vec<(String, Vec<St
             }
         }
     }
+    // Vanilla's small tags, whatever the Java names: the classes a mod's blocks are
+    // built on ask about them (`VegetationBlock.mayPlaceOn`: `supports_vegetation`).
+    for (id, blocks) in &vanilla {
+        if blocks.len() <= 40 {
+            let tag = format!("minecraft:{id}");
+            out.entry(tag.clone())
+                .or_insert_with(|| resolve(&tag, &own, &vanilla_blocks, 0));
+        }
+    }
     out.into_iter()
         .map(|(tag, mut blocks)| {
             blocks.sort();

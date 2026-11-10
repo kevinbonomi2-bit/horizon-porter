@@ -73,14 +73,24 @@ pub fn find(file: &str, source: &str) -> Vec<Unit> {
 pub const OUTDATED: &str = "Outdated:";
 
 /// What a translation writes where the function it was given couldn't reach something.
-const GAPS: [&str; 9] = [
+const GAPS: [&str; 19] = [
     "Missing:",
     "not reachable",
     "isn't reachable",
     "no way to",
-    "cannot be ",
+    "cannot ",
+    "can't ",
     "is not exposed",
     "does not expose",
+    "doesn't expose",
+    "does not offer",
+    "doesn't offer",
+    "does not carry",
+    "doesn't carry",
+    "not available",
+    "isn't given",
+    "is not given",
+    "no tag query",
     "not ported",
     "stands in",
 ];
