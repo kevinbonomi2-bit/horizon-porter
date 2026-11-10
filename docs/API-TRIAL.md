@@ -122,6 +122,20 @@ items through the API's own item table (`__private::item_key_id`, a game-side he
 hook has no host. Items a block drops get Java's
 pickup delay, so they pop out before the player picks them up.
 
+## Clicks, drops and tools
+
+Horizon's client can't run a mod block's `use_item_on` (it is server-only), so it sends the off
+hand's use of a click the main hand already took; Java's client never does. A cutting board read
+that as an empty hand and took back what it had just been given. The glue answers the off hand's
+follow-up as the main hand did (Horizon request 16). Broken, a block entity that isn't a container
+drops what it holds (`pre_remove_side_effects`), as Java's `preRemoveSideEffects` does. A tool
+whose settings spell its material out (`.durability(FLINT.durability()).attributes(..)`, Farmer's
+Delight's knives) gets its durability, a stack of one, its attack, repair item, enchantability and
+mining rules. Translation is told that a slot holds at most the item's own stack size.
+
+Checked in survival: a knife lies on an empty board and comes back to an empty hand, a cabbage
+stack stays on the board, each cut takes one, and a broken board drops what was on it.
+
 ## Next
 
 1. **The rest of block entities:** tanks, energy and hopper transfers.

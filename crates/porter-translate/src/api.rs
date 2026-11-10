@@ -901,6 +901,18 @@ fn click(host: &mut dyn ServerHost, state: BlockState, click: &BlockClick<'_>) -
         Some(stack) => (stack.item().id(&*host).to_string(), stack.count()),
         None => ("minecraft:air".to_string(), 0),
     };
+    // Java's client runs the block's `useItemOn` too, and never sends the off hand's use
+    // once the main hand's took the click. Horizon's client can't run it, so the off hand's
+    // use of the same click arrives here after the main hand's: it answers as that did.
+    if click.hand == mod_api::Hand::Off
+        && MAIN_HAND_TOOK
+            .lock()
+            .ok()
+            .and_then(|mut took| took.take())
+            .is_some_and(|(player, pos)| player == click.player && pos == click.pos)
+    {
+        return Some(InteractionResult::Consume);
+    }
     let player = host.entity(click.player_entity_id as u32);
     let yaw = player.and_then(|p| p.rotation(&*host)).map_or(0.0, |r| r[0]);
     let sneaking = player.and_then(|p| p.is_crouching(&*host)).unwrap_or(false);
@@ -923,8 +935,18 @@ fn click(host: &mut dyn ServerHost, state: BlockState, click: &BlockClick<'_>) -
     let level = host.level(dimension);
     let player = host.player(click.player);
     let mut here = Here { host, level, dimension, player, hand: click.hand, seed: seed_of(click.pos) };
-    runtime::use_block(&used, &mut here).then_some(InteractionResult::Success)
+    let took = runtime::use_block(&used, &mut here);
+    if click.hand == mod_api::Hand::Main
+        && let Ok(mut last) = MAIN_HAND_TOOK.lock()
+    {
+        *last = took.then_some((click.player, click.pos));
+    }
+    took.then_some(InteractionResult::Success)
 }
+
+/// The player and block whose click the main hand took last, until the off hand's use of
+/// that click comes.
+static MAIN_HAND_TOOK: std::sync::Mutex<Option<(u128, [i32; 3])>> = std::sync::Mutex::new(None);
 "#;
 
 const PART_USE_ON: &str = r#"    fn use_on(&self, host: &mut dyn ServerHost, event: &mut mod_api::UseOnEvent<'_>) -> Flow {
@@ -1343,6 +1365,20 @@ impl mod_api::BlockEntityPart for PortedEntity {
             nbt.insert(format!("count.{i}").as_str().into(), Tag::Int(count));
         }
         Some(nbt)
+    }
+
+    // Broken, a block entity's items scatter (`Containers.dropItemStack`, as Java's
+    // `preRemoveSideEffects` drops them); the game drops a container's itself.
+    fn pre_remove_side_effects(
+        &self,
+        level: &mut dyn mod_api::LevelRandomHost,
+        event: &mut mod_api::PreRemoveSideEffectsEvent<'_>,
+    ) {
+        let block = level.state_block(event.state).map(str::to_string).unwrap_or_default();
+        if container_of(&block).is_some() {
+            return;
+        }
+        event.drops.extend(event.entity.items.iter().flatten().cloned());
     }
 __SUBMIT____SCREENS__}
 "##;

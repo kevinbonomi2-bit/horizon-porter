@@ -101,6 +101,9 @@ pub(crate) fn equipment(scan: &ModScan, ns: &str, args: &str) -> Option<(String,
         fire_resistance(&mut c, fire);
         return Some((format!("minecraft:iron_{kind}"), Value::Object(c)));
     }
+    if let Some(c) = from_settings(scan, ns, args) {
+        return Some(("minecraft:iron_ingot".into(), Value::Object(c)));
+    }
     // Armor: `humanoidArmor(material, ArmorType.HELMET)`, or a class of the mod's
     // that takes the two.
     let piece = ["HELMET", "CHESTPLATE", "LEGGINGS", "BOOTS"]
@@ -149,6 +152,102 @@ pub(crate) fn equipment(scan: &ModScan, ns: &str, args: &str) -> Option<(String,
 }
 
 /// `Item.Properties.fireResistant()`: it doesn't burn (the iron template does).
+/// A tool or weapon whose settings spell its material's stats out instead of calling a
+/// builder (Farmer's Delight's knives: `new Properties().durability(FLINT.durability())
+/// .repairable(FLINT.repairItems()).enchantable(..).attributes(KnifeItem.createAttributes(
+/// FLINT, 0.5F, -2.0F)).component(DataComponents.TOOL, new Tool(..))`): what each of those
+/// sets, as `Item.Properties` does. A damageable item never stacks.
+fn from_settings(
+    scan: &ModScan,
+    ns: &str,
+    args: &str,
+) -> Option<serde_json::Map<String, Value>> {
+    let durability = builder_call(args, "durability")?;
+    // Only a tool material's: an item of the mod's own kind keeps its template.
+    let material = durability
+        .trim()
+        .strip_suffix(".durability()")
+        .and_then(|m| tool_material(scan, m))?;
+    let mut c = serde_json::Map::new();
+    c.insert("minecraft:max_damage".into(), material.durability.into());
+    if let Some(m) = Some(&material) {
+        if args.contains(".enchantable(") {
+            c.insert(
+                "minecraft:enchantable".into(),
+                json!({ "value": m.enchantment }),
+            );
+        }
+        if args.contains(".repairable(")
+            && let Some(repair) = &m.repair
+        {
+            c.insert(
+                "minecraft:repairable".into(),
+                json!({ "items": format!("#{}", id(ns, repair)) }),
+            );
+        }
+        // `.attributes(X.createAttributes(material, damage, speed))`: the material's bonus
+        // on the damage, as vanilla's and the mods' `createAttributes` add it.
+        if let Some(attrs) = builder_call(args, "attributes")
+            && let Some(at) = attrs.find("createAttributes(")
+        {
+            let inner = &attrs[at + "createAttributes".len()..];
+            let nums: Vec<f32> = split(inner.trim_start_matches('(').trim_end_matches(')'))
+                .iter()
+                .filter_map(|p| number(p))
+                .collect();
+            if let [damage, speed] = nums[..] {
+                c.insert(
+                    "minecraft:attribute_modifiers".into(),
+                    attack(damage + m.damage_bonus, speed),
+                );
+            }
+        }
+        // `new Tool(List.of(Rule.deniesDrops(incorrect), Rule.minesAndDrops(TAG, speed)))`:
+        // `MINEABLE_WITH_KNIFE` is `mineable/knife`, as vanilla's `BlockTags` name theirs.
+        if let Some(at) = args.find("new Tool(") {
+            let tool = &args[at..];
+            let mut rules = Vec::new();
+            if tool.contains("Rule.deniesDrops(")
+                && let Some(incorrect) = &m.incorrect
+            {
+                rules.push(json!({ "blocks": format!("#{}", id(ns, incorrect)), "correct_for_drops": false }));
+            }
+            if let Some(i) = tool.find("MINEABLE_WITH_") {
+                let kind: String = tool[i + "MINEABLE_WITH_".len()..]
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                    .collect::<String>()
+                    .to_ascii_lowercase();
+                let owner = tool[..i].rsplit(['(', ' ', ',']).next().unwrap_or("");
+                let space = if owner.starts_with("BlockTags.") { "minecraft" } else { ns };
+                rules.push(json!({
+                    "blocks": format!("#{space}:mineable/{kind}"),
+                    "correct_for_drops": true,
+                    "speed": m.speed,
+                }));
+            }
+            if !rules.is_empty() {
+                c.insert("minecraft:tool".into(), json!({ "rules": rules }));
+            }
+        }
+    }
+    // `new Weapon(n)`: what a hit wears.
+    if let Some(at) = args.find("new Weapon(") {
+        let n = args[at + "new Weapon(".len()..]
+            .split(')')
+            .next()
+            .and_then(|n| split(n).first().and_then(|n| number(n)));
+        if let Some(n) = n {
+            c.insert(
+                "minecraft:weapon".into(),
+                json!({ "item_damage_per_attack": n as u32 }),
+            );
+        }
+    }
+    fire_resistance(&mut c, args.contains("fireResistant()"));
+    Some(c)
+}
+
 fn fire_resistance(c: &mut serde_json::Map<String, Value>, fire: bool) {
     if fire {
         c.insert(
@@ -351,6 +450,27 @@ mod tests {
         );
         // `.axe(` isn't `.pickaxe(`'s tail.
         assert_eq!(builder_call(args, "axe"), None);
+    }
+
+    #[test]
+    fn a_knife_from_its_settings() {
+        // Farmer's Delight's `knifeItem(ToolMaterial.IRON)`, inlined.
+        let args = "ModItemIds.IRON_KNIFE, KnifeItem::new, knifeItem(ToolMaterial.IRON), key
+/* knifeItem */ new Properties()
+ .durability(ToolMaterial.IRON.durability())
+ .repairable(ToolMaterial.IRON.repairItems())
+ .enchantable(ToolMaterial.IRON.enchantmentValue())
+ .attributes(KnifeItem.createAttributes(ToolMaterial.IRON, 0.5F, -2.0F))
+ .component(DataComponents.TOOL, new Tool(List.of(Rule.deniesDrops(holderGetter.getOrThrow(ToolMaterial.IRON.incorrectBlocksForDrops())), Rule.minesAndDrops(holderGetter.getOrThrow(ModTags.Blocks.MINEABLE_WITH_KNIFE), ToolMaterial.IRON.speed())), 1.0F, 1, false))
+ .component(DataComponents.WEAPON, new Weapon(1))";
+        let (template, c) = equipment(&ModScan::default(), "farmersdelight", args).unwrap();
+        assert_eq!(template, "minecraft:iron_ingot");
+        assert_eq!(c["minecraft:max_damage"], 250);
+        assert_eq!(c["minecraft:enchantable"]["value"], 14);
+        assert_eq!(c["minecraft:repairable"]["items"], "#minecraft:iron_tool_materials");
+        assert_eq!(c["minecraft:attribute_modifiers"][0]["amount"], 2.5);
+        assert_eq!(c["minecraft:tool"]["rules"][1]["blocks"], "#farmersdelight:mineable/knife");
+        assert_eq!(c["minecraft:weapon"]["item_damage_per_attack"], 1);
     }
 
     #[test]

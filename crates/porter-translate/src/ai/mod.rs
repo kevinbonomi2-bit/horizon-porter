@@ -567,7 +567,10 @@ fn prompt(dir: &Path, scan: &ModScan, unit: &Unit) -> Result<Prompt> {
                 "This module is plain Rust: it compiles on its own with only `std` (no crates), and `cargo test` runs its tests. \
                  Hook helpers in the game call it. The Java's static fields are already here, as Rust: a `pub mod` per \
                  Java class (`SteadyView.pickups` is `steady_view::PICKUPS`); use them for the state the Java keeps \
-                 there, and the struct the function is given for the rest."
+                 there, and the struct the function is given for the rest. A slot holds at most the item's own \
+                 stack size: an `ItemStackHandler`'s `insertItem`/`extractItem` and a `Container` cap a slot at \
+                 `min(getSlotLimit(slot), stack.getMaxStackSize())`, which is `world.max_stack(item)` (1 for a tool), \
+                 not 64."
             );
         }
         Kind::Helper => {

@@ -857,6 +857,11 @@ pub fn generate_with(
         // A tool, weapon or armor piece: its material's stats.
         if let Some((template, components)) = equipment::equipment(scan, ns, &reg.args) {
             json["template"] = template.into();
+            // A damageable item never stacks (`Item.Properties.durability`); Horizon takes
+            // the size beside the components.
+            if components.get("minecraft:max_damage").is_some() {
+                json["max_stack_size"] = 1.into();
+            }
             json["components"] = components;
         } else if let Some(mob) = item_name.strip_suffix("_spawn_egg") {
             // A spawn egg (`SpawnEggItem`): vanilla's, spawning the mod's mob, or the
