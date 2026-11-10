@@ -554,6 +554,12 @@ fn run(cli: Cli) -> Result<ExitCode> {
             if let Some(id) = info["id"].as_str() {
                 porter_translate::bundle::sync_api_runtime(&path, id)?;
             }
+            let left_out = porter_translate::ai::write_notes(&path)?;
+            if left_out > 0 {
+                println!(
+                    "{left_out} ported functions have notes on what they couldn't do: TRANSLATION-NOTES.md lists them."
+                );
+            }
             println!(
                 "Next: read what changed (each ported function says so above it), then build: horizon-porter build {} --trust-native-code",
                 path.display()

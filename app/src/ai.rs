@@ -334,6 +334,8 @@ pub async fn translate(
     .map_err(message)?
     .map_err(|e| format!("{e:#}"))?;
     let left = ai::pending(&dir_after).map(|p| p.len()).unwrap_or(0);
+    // What the ports say they couldn't do, as a file beside the port.
+    let _ = ai::write_notes(&dir_after);
     Ok(TranslateView {
         stopped: out.iter().find_map(|o| match &o.status {
             Status::NoAnswer(why) => Some(why.clone()),

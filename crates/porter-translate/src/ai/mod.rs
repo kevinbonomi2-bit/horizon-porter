@@ -154,6 +154,59 @@ pub fn outdated(dir: &Path) -> Result<Vec<Unit>> {
     Ok(out)
 }
 
+/// What the ported functions of a mod folder say they couldn't do: (file, function, its
+/// notes), for each function whose port has a note.
+pub fn notes(dir: &Path) -> Result<Vec<(String, String, String)>> {
+    let mut out = Vec::new();
+    for file in rust_files(dir)? {
+        let rel = file
+            .strip_prefix(dir)
+            .unwrap_or(&file)
+            .to_string_lossy()
+            .replace('\\', "/");
+        let source = fs::read_to_string(&file)?;
+        for name in units::ported_functions(&source) {
+            let body = units::function_source(&source, &name).unwrap_or_default();
+            let notes = units::gap_notes(&body);
+            if !notes.is_empty() {
+                out.push((rel.clone(), name, notes));
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Writes `TRANSLATION-NOTES.md` in a mod folder: what each ported function says it
+/// couldn't do, so nobody has to read the code to learn what didn't come over. Removes
+/// it when there is nothing to say. How many functions it lists.
+pub fn write_notes(dir: &Path) -> Result<usize> {
+    let notes = notes(dir)?;
+    let path = dir.join("TRANSLATION-NOTES.md");
+    if notes.is_empty() {
+        let _ = fs::remove_file(&path);
+        return Ok(0);
+    }
+    let mut text = String::from(
+        "# What the translation left out\n\nEach function below was ported, with a note where it couldn't do what the Java does\n(the function wasn't given a way to). The rest of each function is ported. A newer\nhorizon-porter may reach more: `horizon-porter translate <this folder> --refresh`.\n",
+    );
+    let mut file = "";
+    for (rel, function, notes) in &notes {
+        if rel != file {
+            let _ = write!(text, "\n## {rel}\n");
+            file = rel;
+        }
+        let _ = write!(text, "\n### `{function}`\n\n");
+        for line in notes.lines() {
+            let line = line.trim_start_matches('/').trim();
+            if !line.is_empty() {
+                let _ = writeln!(text, "{line}");
+            }
+        }
+    }
+    fs::write(&path, text)?;
+    Ok(notes.len())
+}
+
 /// The functions left to port in a mod folder `port` wrote.
 pub fn pending(dir: &Path) -> Result<Vec<Unit>> {
     let mut out = Vec::new();
@@ -877,6 +930,26 @@ impl State {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn notes_list_what_ports_left_out() {
+        let dir = std::env::temp_dir().join(format!("porter-notes-{}", std::process::id()));
+        let mixins = dir.join("mixins/m");
+        fs::create_dir_all(&mixins).unwrap();
+        fs::write(
+            mixins.join("runtime.rs"),
+            "/// Ported by horizon-porter translate (m) from a.B. Review it.\npub fn a(x: i32) -> i32 {\n    // Missing: the stat award.\n    x\n}\n\n/// Ported by horizon-porter translate (m) from a.C. Review it.\npub fn b() {}\n",
+        )
+        .unwrap();
+        assert_eq!(write_notes(&dir).unwrap(), 1);
+        let text = fs::read_to_string(dir.join("TRANSLATION-NOTES.md")).unwrap();
+        assert!(
+            text.contains("### `a`") && text.contains("Missing: the stat award."),
+            "{text}"
+        );
+        assert!(!text.contains("### `b`"));
+        fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn refresh_is_for_what_a_newer_reach_gives() {
