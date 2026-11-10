@@ -136,6 +136,18 @@ mining rules. Translation is told that a slot holds at most the item's own stack
 Checked in survival: a knife lies on an empty board and comes back to an empty hand, a cabbage
 stack stays on the board, each cut takes one, and a broken board drops what was on it.
 
+## A fresh port gets the same
+
+To check that these results come from the porter and not from hand work on one port, Farmer's
+Delight was ported again into an empty folder with `port --api` and translated from scratch on
+Claude Haiku 5.5 (117 functions, all ported; about $1.85). Built and played on its own, it did
+what the trial port does: a knife lies on an empty board and comes back to an empty hand, a
+cabbage stack stays on the board and each cut takes one, a broken board drops what was on it, the
+pot cooks beef stew into a bowl, the skillet cooks one beef every few seconds, and a feast serves
+into a bowl. Neither translation ports the stove's own six-slot grill yet (it heats what's on it,
+but doesn't cook food put straight on it), and a whole-stack shift-click goes the game's way
+(Horizon request 15).
+
 ## Next
 
 1. **The rest of block entities:** tanks, energy and hopper transfers.
