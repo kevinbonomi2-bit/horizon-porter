@@ -241,7 +241,9 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
     let prefix = format!("{ns}:");
     for (block, menu, _) in &vanilla_containers {
         if let Some(name) = block.strip_prefix(&prefix) {
-            menu_blocks.entry(name.to_string()).or_insert_with(|| menu.clone());
+            menu_blocks
+                .entry(name.to_string())
+                .or_insert_with(|| menu.clone());
         }
     }
     let mut content = content::generate_with(
@@ -341,7 +343,10 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
     // A vanilla menu's block entity holds that menu's slots (a basket's 27), for its tick
     // and clicks, whatever its Java keeps them in.
     for be in block_entities.iter_mut().filter(|be| be.items == 0) {
-        if let Some((_, _, n)) = vanilla_containers.iter().find(|(b, _, _)| be.blocks.contains(b)) {
+        if let Some((_, _, n)) = vanilla_containers
+            .iter()
+            .find(|(b, _, _)| be.blocks.contains(b))
+        {
             be.items = *n;
         }
     }
@@ -395,7 +400,10 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
         wired.insert("screen", screens.clone());
         wired.insert("screen_draw", screens);
         // Shift-clicks the menu's Java decides (`quickMoveStack`).
-        let movers: BTreeSet<String> = machines.iter().filter_map(|m| m.quick_move.clone()).collect();
+        let movers: BTreeSet<String> = machines
+            .iter()
+            .filter_map(|m| m.quick_move.clone())
+            .collect();
         if !movers.is_empty() {
             wired.insert("menu_quick_move", movers);
         }
@@ -542,11 +550,15 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
     let api_files = if native && crate::api::wanted(&behaviours, !block_entities.is_empty()) {
         crate::api::files(
             &id,
-            content.files.get("horizon-mod.toml").map_or("", String::as_str),
+            content
+                .files
+                .get("horizon-mod.toml")
+                .map_or("", String::as_str),
             &behaviours,
             !block_entities.is_empty(),
             !machines.is_empty(),
             wired.contains_key("block_entity_submit"),
+            !places.is_empty(),
             &mod_particles(&content),
         )
     } else {
@@ -691,7 +703,9 @@ fn mod_particles(content: &porter_content::Content) -> Vec<String> {
         .filter_map(|rel| {
             let parts: Vec<&str> = rel.split('/').collect();
             match parts.as_slice() {
-                ["assets", ns, "particles", file] => Some(format!("{ns}:{}", file.strip_suffix(".json")?)),
+                ["assets", ns, "particles", file] => {
+                    Some(format!("{ns}:{}", file.strip_suffix(".json")?))
+                }
                 _ => None,
             }
         })
@@ -711,8 +725,8 @@ pub fn sync_api_runtime(out: &Path, id: &str) -> Result<()> {
     }
     let from = out.join("mixins").join(id).join("runtime.rs");
     if from.is_file() {
-        let text = fs::read_to_string(&from)
-            .with_context(|| format!("reading {}", from.display()))?;
+        let text =
+            fs::read_to_string(&from).with_context(|| format!("reading {}", from.display()))?;
         // Its own items by `crate::` path (`crate::cutting_board::MAX`), as the trait
         // mod's crate has them: under `runtime`.
         fs::write(api.join("runtime.rs"), api_paths(&text))

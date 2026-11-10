@@ -1006,7 +1006,12 @@ pub const MACHINES: &[MachineMenu] = &[
     r.push_str(")\n}\n");
     r.push_str("\n/// A shift-click in menu type `menu`, run by its menu class's function. True when\n/// the Java decided it: the game's own routing is skipped then.\npub fn quick_move(menu: &str, q: &QuickMove, stack: &mut Stack, slots: &mut MenuSlots<'_>) -> bool {\n    match menu {\n");
     for m in &movers {
-        let _ = writeln!(r, "        \"{}\" => {}(q, stack, slots),", m.menu_type, quick_move_name(m));
+        let _ = writeln!(
+            r,
+            "        \"{}\" => {}(q, stack, slots),",
+            m.menu_type,
+            quick_move_name(m)
+        );
     }
     r.push_str("        _ => {\n            let _ = (q, stack, slots);\n            false\n        }\n    }\n}\n");
     for m in &movers {

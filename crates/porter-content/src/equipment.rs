@@ -157,11 +157,7 @@ pub(crate) fn equipment(scan: &ModScan, ns: &str, args: &str) -> Option<(String,
 /// .repairable(FLINT.repairItems()).enchantable(..).attributes(KnifeItem.createAttributes(
 /// FLINT, 0.5F, -2.0F)).component(DataComponents.TOOL, new Tool(..))`): what each of those
 /// sets, as `Item.Properties` does. A damageable item never stacks.
-fn from_settings(
-    scan: &ModScan,
-    ns: &str,
-    args: &str,
-) -> Option<serde_json::Map<String, Value>> {
+fn from_settings(scan: &ModScan, ns: &str, args: &str) -> Option<serde_json::Map<String, Value>> {
     let durability = builder_call(args, "durability")?;
     // Only a tool material's: an item of the mod's own kind keeps its template.
     let material = durability
@@ -219,7 +215,11 @@ fn from_settings(
                     .collect::<String>()
                     .to_ascii_lowercase();
                 let owner = tool[..i].rsplit(['(', ' ', ',']).next().unwrap_or("");
-                let space = if owner.starts_with("BlockTags.") { "minecraft" } else { ns };
+                let space = if owner.starts_with("BlockTags.") {
+                    "minecraft"
+                } else {
+                    ns
+                };
                 rules.push(json!({
                     "blocks": format!("#{space}:mineable/{kind}"),
                     "correct_for_drops": true,
@@ -467,9 +467,15 @@ mod tests {
         assert_eq!(template, "minecraft:iron_ingot");
         assert_eq!(c["minecraft:max_damage"], 250);
         assert_eq!(c["minecraft:enchantable"]["value"], 14);
-        assert_eq!(c["minecraft:repairable"]["items"], "#minecraft:iron_tool_materials");
+        assert_eq!(
+            c["minecraft:repairable"]["items"],
+            "#minecraft:iron_tool_materials"
+        );
         assert_eq!(c["minecraft:attribute_modifiers"][0]["amount"], 2.5);
-        assert_eq!(c["minecraft:tool"]["rules"][1]["blocks"], "#farmersdelight:mineable/knife");
+        assert_eq!(
+            c["minecraft:tool"]["rules"][1]["blocks"],
+            "#farmersdelight:mineable/knife"
+        );
         assert_eq!(c["minecraft:weapon"]["item_damage_per_attack"], 1);
     }
 

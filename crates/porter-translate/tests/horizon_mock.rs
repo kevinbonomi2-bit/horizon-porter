@@ -794,7 +794,10 @@ fn machine_helpers_compile_against_horizon_api() {
         assert!(b.wired.contains_key(hook), "{hook}");
     }
     // The crusher's menu decides its shift-clicks.
-    assert!(b.files[&format!("mixins/{}/runtime.rs", b.id)].contains("TODO: port `quickMoveStack` of net.grind.machine.CrusherMenu."));
+    assert!(
+        b.files[&format!("mixins/{}/runtime.rs", b.id)]
+            .contains("TODO: port `quickMoveStack` of net.grind.machine.CrusherMenu.")
+    );
     // The cabinet opens a chest's menu over its own slots.
     let runtime = &b.files[&format!("mixins/{}/runtime.rs", b.id)];
     assert!(
@@ -861,7 +864,10 @@ fn block_behaviour_helpers_compile_against_horizon_api() {
         "(`playerWillDestroy`)",
         "(`appendHoverText`)",
     ] {
-        assert!(runtime.contains(&format!("TODO: port from net.shutters.Shutter {what}")), "{what}");
+        assert!(
+            runtime.contains(&format!("TODO: port from net.shutters.Shutter {what}")),
+            "{what}"
+        );
     }
     // The wrench turns what it is used on; the whistle blows in the air.
     assert!(
@@ -948,7 +954,13 @@ fn splice(hooks_list: &[(&str, &str)], manifest: &toml::Table, mixins: &Path) ->
                 .as_array()
                 .unwrap()
                 .iter()
-                .map(|b| format!("{}: {}", b["name"].as_str().unwrap(), b["ty"].as_str().unwrap()))
+                .map(|b| {
+                    format!(
+                        "{}: {}",
+                        b["name"].as_str().unwrap(),
+                        b["ty"].as_str().unwrap()
+                    )
+                })
                 .collect();
             let after = source.split(&format!("fn {fn_name}(")).nth(1).unwrap();
             let mut depth = 0;

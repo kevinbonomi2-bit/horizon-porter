@@ -27,6 +27,7 @@ pub const API_MIXINS: &str = "5a64af938ec86b00d53d16a408aabc0038fb3e57";
 /// `content_manifest` is the content mod's `horizon-mod.toml`; `entities`, whether
 /// runtime.rs has block entities (its `World` needs `BlockEntities` then); `machines`,
 /// whether it has machines (`MACHINES`).
+#[allow(clippy::too_many_arguments)]
 pub fn files(
     id: &str,
     content_manifest: &str,
@@ -34,6 +35,7 @@ pub fn files(
     entities: bool,
     machines: bool,
     renderers: bool,
+    plants: bool,
     particles: &[String],
 ) -> BTreeMap<String, String> {
     let mut out = BTreeMap::new();
@@ -50,7 +52,10 @@ pub fn files(
             "[package]\nname = \"mod-{id}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\n# The launcher points this at the Horizon source it builds the game from.\nhorizon-mod-api = {{ git = \"https://github.com/arismoko/horizon\", rev = \"{API_HORIZON}\" }}\n"
         ),
     );
-    out.insert("api/src/lib.rs".into(), lib_rs(behaviours, entities, machines, renderers, particles));
+    out.insert(
+        "api/src/lib.rs".into(),
+        lib_rs(behaviours, entities, machines, renderers, plants, particles),
+    );
     out
 }
 
@@ -69,6 +74,7 @@ fn lib_rs(
     entities: bool,
     machines: bool,
     renderers: bool,
+    plants: bool,
     particles: &[String],
 ) -> String {
     let has = |k: Kind| behaviours.iter().any(|b| b.kind == k);
@@ -101,9 +107,8 @@ fn lib_rs(
     items.dedup();
 
     let mut r = String::from(HEADER);
-    let list = |names: &[&str]| -> String {
-        names.iter().map(|n| format!("    {n:?},\n")).collect()
-    };
+    let list =
+        |names: &[&str]| -> String { names.iter().map(|n| format!("    {n:?},\n")).collect() };
     let _ = write!(
         r,
         "\n/// The mod's blocks whose Java has code the port runs.\nconst BLOCKS: &[&str] = &[\n{}];\n\n/// The mod's items whose Java has code the port runs.\nconst ITEMS: &[&str] = &[\n{}];\n",
@@ -114,14 +119,23 @@ fn lib_rs(
     if entities {
         r.push_str(
             &ENTITIES
-                .replace("__FROM_TAG__", &crate::block_entity::FROM_TAG.replace("m::", "runtime::"))
-                .replace("__TO_TAG__", &crate::block_entity::TO_TAG.replace("m::", "runtime::"))
-                .replace("__MACHINE_CONTAINER__", if machines { MACHINE_CONTAINER } else { "" })
+                .replace(
+                    "__FROM_TAG__",
+                    &crate::block_entity::FROM_TAG.replace("m::", "runtime::"),
+                )
+                .replace(
+                    "__TO_TAG__",
+                    &crate::block_entity::TO_TAG.replace("m::", "runtime::"),
+                )
+                .replace(
+                    "__MACHINE_CONTAINER__",
+                    if machines { MACHINE_CONTAINER } else { "" },
+                )
                 .replace("__SUBMIT__", if renderers { SUBMIT } else { "" })
                 .replace("__SCREENS__", if machines { SCREENS } else { "" }),
         );
     }
-    if has(Kind::Use) || has(Kind::ItemUseOn) || has(Kind::ItemUse) {
+    if has(Kind::Use) || has(Kind::ItemUseOn) || has(Kind::ItemUse) || plants {
         r.push_str(HERE);
         if entities {
             r.push_str(HERE_ENTITIES);
@@ -150,7 +164,11 @@ fn lib_rs(
     if has(Kind::Tick) || has(Kind::Neighbour) {
         r.push_str(&PART_TICK.replace(
             "__NEIGHBOUR__",
-            if has(Kind::Neighbour) { NEIGHBOUR_IN_TICK } else { "" },
+            if has(Kind::Neighbour) {
+                NEIGHBOUR_IN_TICK
+            } else {
+                ""
+            },
         ));
     }
     if has(Kind::Neighbour) {
@@ -171,8 +189,16 @@ fn lib_rs(
     }
 
     r.push_str("\n/// The port's code for one of the mod's items.\nstruct PortedItem;\n\n#[mod_api::horizon_part]\nimpl ItemPart for PortedItem {\n");
-    if has(Kind::ItemUseOn) {
-        r.push_str(PART_USE_ON);
+    if has(Kind::ItemUseOn) || plants {
+        r.push_str(USE_ON_HEAD);
+        if plants {
+            r.push_str(USE_ON_PLANT);
+        }
+        r.push_str(if has(Kind::ItemUseOn) {
+            PART_USE_ON
+        } else {
+            "        Flow::Continue\n    }\n\n"
+        });
     }
     if has(Kind::ItemUse) {
         r.push_str(PART_USE_ITEM);
@@ -184,13 +210,16 @@ fn lib_rs(
     if has(Kind::ItemUseOn) || has(Kind::ItemUse) {
         r.push_str(ITEM_USE_FN);
     }
-    r.push_str(&register(entities, particles));
+    if plants {
+        r.push_str(PLANT_FN);
+    }
+    r.push_str(&register(entities, plants, particles));
     r
 }
 
 /// The mod's `Hooks`: its parts attached at registration, its block entity types
 /// declared with their blocks, and their containers.
-fn register(entities: bool, particles: &[String]) -> String {
+fn register(entities: bool, plants: bool, particles: &[String]) -> String {
     let mut r = String::from(
         "
 #[derive(Default)]
@@ -209,9 +238,24 @@ impl Hooks for Mod {
         }
 ",
     );
+    if plants {
+        r.push_str(
+            "        // Items that plant a block of another name (seeds).
+        for (item, _, _) in runtime::PLACES {
+            if !ITEMS.contains(item) {
+                let key = registrar.item_key(item);
+                registrar.item_part(key, PortedItem);
+            }
+        }
+",
+        );
+    }
     {
         // The particles its code may send: vanilla's plain ones and the mod's own.
-        let mut names: Vec<String> = VANILLA_PARTICLES.iter().map(|p| format!("minecraft:{p}")).collect();
+        let mut names: Vec<String> = VANILLA_PARTICLES
+            .iter()
+            .map(|p| format!("minecraft:{p}"))
+            .collect();
         names.extend(particles.iter().cloned());
         let _ = write!(
             r,
@@ -221,7 +265,11 @@ impl Hooks for Mod {
         }}
         let _ = PARTICLES.set(keys);
 ",
-            names.iter().map(|n| format!("{n:?}")).collect::<Vec<_>>().join(", ")
+            names
+                .iter()
+                .map(|n| format!("{n:?}"))
+                .collect::<Vec<_>>()
+                .join(", ")
         );
     }
     if entities {
@@ -242,8 +290,10 @@ impl Hooks for Mod {
 ",
         );
     }
-    r.push_str("    }
-");
+    r.push_str(
+        "    }
+",
+    );
     if entities {
         r.push_str(
             "
@@ -257,8 +307,10 @@ impl Hooks for Mod {
 ",
         );
     }
-    r.push_str("}
-");
+    r.push_str(
+        "}
+",
+    );
     r
 }
 
@@ -965,9 +1017,88 @@ fn click(host: &mut dyn ServerHost, state: BlockState, click: &BlockClick<'_>) -
 static MAIN_HAND_TOOK: std::sync::Mutex<Option<(u128, [i32; 3])>> = std::sync::Mutex::new(None);
 "#;
 
-const PART_USE_ON: &str = r#"    fn use_on(&self, host: &mut dyn ServerHost, event: &mut mod_api::UseOnEvent<'_>) -> Flow {
+const USE_ON_HEAD: &str = r#"    fn use_on(&self, host: &mut dyn ServerHost, event: &mut mod_api::UseOnEvent<'_>) -> Flow {
         let item = event.stack.item().id(&*host).to_string();
-        if !runtime::item_acts_on_block(&item) {
+"#;
+
+const USE_ON_PLANT: &str = r#"        if let Some((_, block, rule)) = runtime::PLACES.iter().find(|(i, _, _)| *i == item) {
+            return if plant(host, event, block, rule) { Flow::Cancel } else { Flow::Continue };
+        }
+"#;
+
+const PLANT_FN: &str = r#"
+/// An item that plants a block of another name (seeds) used on a block: the block is
+/// placed as Java's `BlockItem.place` does, where it can stand (`rule`: `farmland`,
+/// `soil`, `water` or `any`), and one seed is used up.
+fn plant(host: &mut dyn ServerHost, event: &mod_api::UseOnEvent<'_>, block: &str, rule: &str) -> bool {
+    fn name(host: &dyn mod_api::Host, level: mod_api::LevelRef, pos: [i32; 3]) -> String {
+        level
+            .block_state(host, pos)
+            .and_then(|s| host.block_state_string(s))
+            .map_or_else(|| "minecraft:air".to_string(), |t| parse_state(&t).0)
+    }
+    let Some(player) = host.player(event.player) else {
+        return false;
+    };
+    let Some(level) = player.entity().level(&*host) else {
+        return false;
+    };
+    let pos = event.pos;
+    let clicked = name(&*host, level, pos);
+    // Grass and ferns are replaced; anything else gets the block on its clicked face.
+    let replaced = matches!(clicked.as_str(), "minecraft:short_grass" | "minecraft:tall_grass" | "minecraft:fern");
+    let face = event.face;
+    let target = if replaced { pos } else { [pos[0] + face[0], pos[1] + face[1], pos[2] + face[2]] };
+    let here = name(&*host, level, target);
+    let below = name(&*host, level, [target[0], target[1] - 1, target[2]]);
+    let room = here == "minecraft:air" || (rule == "water" && here == "minecraft:water");
+    let stands = match rule {
+        "farmland" => below == "minecraft:farmland" || below.ends_with("_farmland"),
+        "soil" => matches!(
+            below.as_str(),
+            "minecraft:grass_block" | "minecraft:dirt" | "minecraft:coarse_dirt" | "minecraft:podzol"
+                | "minecraft:rooted_dirt" | "minecraft:moss_block" | "minecraft:mud" | "minecraft:farmland"
+        ) || below.ends_with("_farmland") || below.ends_with("soil"),
+        "water" => here == "minecraft:water",
+        _ => below != "minecraft:air",
+    };
+    if !(room && stands) {
+        return false;
+    }
+    // `BlockItem.canPlace`: where its Java decides it, the block must be able to stay.
+    if runtime::decides_survival(block) {
+        let at = runtime::BlockAt { block: block.to_string(), pos: target, face: None };
+        let here = Here { host: &mut *host, level: Some(level), dimension: "", player: Some(player), hand: event.hand, seed: 0 };
+        if runtime::can_survive(&at, &here) == Some(false) {
+            return false;
+        }
+    }
+    let Some(state) = host.block_state_id(block) else {
+        return false;
+    };
+    if !level.set_block(host, target, state, flags(3)).unwrap_or(false) {
+        return false;
+    }
+    if !player.is_creative(&*host).unwrap_or(false) {
+        let living = mod_api::LivingRef::new(player.entity());
+        if let Some(mut stack) = living.hand_item(&*host, event.hand) {
+            let left = stack.count().saturating_sub(1);
+            let next = if left == 0 {
+                None
+            } else {
+                let _ = stack.set_count(left);
+                Some(stack)
+            };
+            let _ = living.set_hand_item(host, event.hand, next);
+        }
+    }
+    let at = [f64::from(target[0]) + 0.5, f64::from(target[1]) + 0.5, f64::from(target[2]) + 0.5];
+    let _ = level.play_sound(host, "minecraft:item.crop.plant", at, mod_api::SoundSource::Blocks, 1.0, 1.0);
+    true
+}
+"#;
+
+const PART_USE_ON: &str = r#"        if !runtime::item_acts_on_block(&item) {
             return Flow::Continue;
         }
         let block = host
@@ -1535,15 +1666,64 @@ impl runtime::BlockEntities for Here<'_> {
 
 /// Vanilla's particles that need no options, which a tick may send by name.
 const VANILLA_PARTICLES: &[&str] = &[
-    "smoke", "large_smoke", "white_smoke", "flame", "soul_fire_flame", "small_flame",
-    "campfire_cosy_smoke", "campfire_signal_smoke", "bubble", "bubble_pop", "bubble_column_up",
-    "splash", "cloud", "poof", "happy_villager", "angry_villager", "heart", "crit", "enchanted_hit",
-    "enchant", "portal", "reverse_portal", "lava", "note", "witch", "effect", "instant_effect",
-    "ash", "white_ash", "crimson_spore", "warped_spore", "spore_blossom_air", "falling_water",
-    "dripping_water", "dripping_lava", "falling_lava", "dripping_honey", "falling_honey",
-    "landing_honey", "composter", "electric_spark", "scrape", "wax_on", "wax_off", "glow",
-    "end_rod", "totem_of_undying", "sneeze", "dolphin", "fishing", "underwater", "mycelium",
-    "snowflake", "sculk_soul", "soul", "egg_crack", "cherry_leaves", "firefly",
+    "smoke",
+    "large_smoke",
+    "white_smoke",
+    "flame",
+    "soul_fire_flame",
+    "small_flame",
+    "campfire_cosy_smoke",
+    "campfire_signal_smoke",
+    "bubble",
+    "bubble_pop",
+    "bubble_column_up",
+    "splash",
+    "cloud",
+    "poof",
+    "happy_villager",
+    "angry_villager",
+    "heart",
+    "crit",
+    "enchanted_hit",
+    "enchant",
+    "portal",
+    "reverse_portal",
+    "lava",
+    "note",
+    "witch",
+    "effect",
+    "instant_effect",
+    "ash",
+    "white_ash",
+    "crimson_spore",
+    "warped_spore",
+    "spore_blossom_air",
+    "falling_water",
+    "dripping_water",
+    "dripping_lava",
+    "falling_lava",
+    "dripping_honey",
+    "falling_honey",
+    "landing_honey",
+    "composter",
+    "electric_spark",
+    "scrape",
+    "wax_on",
+    "wax_off",
+    "glow",
+    "end_rod",
+    "totem_of_undying",
+    "sneeze",
+    "dolphin",
+    "fishing",
+    "underwater",
+    "mycelium",
+    "snowflake",
+    "sculk_soul",
+    "soul",
+    "egg_crack",
+    "cherry_leaves",
+    "firefly",
 ];
 
 const SUBMIT: &str = r#"

@@ -68,7 +68,10 @@ pub(crate) fn resolve(sources: &[(String, String)], scan: &mut ModScan) {
                     continue;
                 };
                 inlined.push((name.clone(), args.len()));
-                added.push_str(&format!("\n/* {name} */ {}", substitute(&ret, &params, &args)));
+                added.push_str(&format!(
+                    "\n/* {name} */ {}",
+                    substitute(&ret, &params, &args)
+                ));
             }
             if added.is_empty() {
                 break;
@@ -471,10 +474,12 @@ fn helper_calls(text: &str) -> Vec<(String, Vec<String>)> {
     let mut i = 0;
     while i < bytes.len() {
         let c = bytes[i] as char;
-        if !(c.is_ascii_lowercase() || c == '_') || (i > 0 && {
-            let b = bytes[i - 1] as char;
-            b.is_ascii_alphanumeric() || b == '_' || b == '.' || b == ':'
-        }) {
+        if !(c.is_ascii_lowercase() || c == '_')
+            || (i > 0 && {
+                let b = bytes[i - 1] as char;
+                b.is_ascii_alphanumeric() || b == '_' || b == '.' || b == ':'
+            })
+        {
             i += 1;
             continue;
         }
@@ -484,14 +489,17 @@ fn helper_calls(text: &str) -> Vec<(String, Vec<String>)> {
             .collect();
         let after = i + name.len();
         let preceded_by_new = text[..i].trim_end().ends_with("new");
-        if text[after..].starts_with('(') && !preceded_by_new && name != "new" && name != "super" {
-            if let Some(args) = balanced(&text[after..]) {
-                let args: Vec<String> = split_args(args)
-                    .into_iter()
-                    .filter(|a| !a.trim().is_empty())
-                    .collect();
-                out.push((name.clone(), args));
-            }
+        if text[after..].starts_with('(')
+            && !preceded_by_new
+            && name != "new"
+            && name != "super"
+            && let Some(args) = balanced(&text[after..])
+        {
+            let args: Vec<String> = split_args(args)
+                .into_iter()
+                .filter(|a| !a.trim().is_empty())
+                .collect();
+            out.push((name.clone(), args));
         }
         i = after.max(i + 1);
     }
@@ -517,7 +525,9 @@ fn properties_helper(src: &str, name: &str, arity: usize) -> Option<(Vec<String>
         if params.len() != arity {
             continue;
         }
-        let ret = body.find("return ").map(|r| until_semicolon(&body[r + 7..]))?;
+        let ret = body
+            .find("return ")
+            .map(|r| until_semicolon(&body[r + 7..]))?;
         return Some((params, ret.trim().to_string()));
     }
     None

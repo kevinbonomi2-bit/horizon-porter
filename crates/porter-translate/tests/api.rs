@@ -74,7 +74,12 @@ fn compiles_against_the_mod_api() {
         "horizon-mod-api = {{ path = {:?} }}",
         Path::new(&api).to_string_lossy()
     );
-    let cargo = format!("{}{}{}\n[workspace]\n", &cargo[..start], local, &cargo[end..]);
+    let cargo = format!(
+        "{}{}{}\n[workspace]\n",
+        &cargo[..start],
+        local,
+        &cargo[end..]
+    );
     std::fs::write(crate_dir.join("Cargo.toml"), cargo).unwrap();
     let out = std::process::Command::new("cargo")
         .args(["check", "--message-format", "short"])

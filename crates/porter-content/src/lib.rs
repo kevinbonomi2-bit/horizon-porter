@@ -125,10 +125,10 @@ pub fn generate_with(
     for res in &scan.resources.roots {
         for (rel, _) in walk(&root.join(res)) {
             let parts: Vec<&str> = rel.split('/').collect();
-            if let ["assets", n, category, ..] = parts.as_slice() {
-                if OWN_ASSETS.contains(category) {
-                    own.insert(n.to_string());
-                }
+            if let ["assets", n, category, ..] = parts.as_slice()
+                && OWN_ASSETS.contains(category)
+            {
+                own.insert(n.to_string());
             }
         }
     }
@@ -818,7 +818,10 @@ pub fn generate_with(
         let Some(item_name) = reg.id.as_deref().filter(|n| valid_name(n)) else {
             continue;
         };
-        if blocks.contains(item_name) || !reg.args.contains("BlockItem") {
+        // A `BlockItem`, or a class of the mod's built on one (Farmer's Delight's `RiceItem`).
+        let block_item =
+            reg.args.contains("BlockItem") || extends(scan, reg.creates.as_deref(), "BlockItem");
+        if blocks.contains(item_name) || !block_item {
             continue;
         }
         let key = reg.args.split(',').next().unwrap_or("").trim();
@@ -840,7 +843,25 @@ pub fn generate_with(
             .iter()
             .find(|b| b.name == block)
             .map_or("", |b| b.template.as_str());
+        // A crop whose Java checks the water it stands in (`fluid.is(FluidTags.WATER)` in
+        // its `canSurvive`: rice) is planted in water.
+        let in_water = scan
+            .registrations
+            .iter()
+            .find(|r| r.registry == "block" && r.id.as_deref() == Some(block.as_str()))
+            .and_then(|r| r.creates.as_deref())
+            .and_then(|c| {
+                scan.classes
+                    .iter()
+                    .find(|k| k.name == c || k.name.ends_with(&format!(".{c}")))
+            })
+            .is_some_and(|k| {
+                k.references
+                    .iter()
+                    .any(|r| r == "net.minecraft.tags.FluidTags")
+            });
         let rule = match template {
+            _ if in_water => "water",
             "minecraft:wheat"
             | "minecraft:carrots"
             | "minecraft:potatoes"
@@ -978,7 +999,8 @@ pub fn generate_with(
         // A bowl food (`bowlFoodItem(..)`, `usingConvertsTo(Items.BOWL)`): the bowl comes
         // back, and it stacks to 16.
         if remainder.is_none()
-            && (reg.args.contains("bowlFoodItem(") || reg.args.contains("usingConvertsTo(Items.BOWL)"))
+            && (reg.args.contains("bowlFoodItem(")
+                || reg.args.contains("usingConvertsTo(Items.BOWL)"))
         {
             let mut components = json["components"].as_object().cloned().unwrap_or_default();
             components.insert(

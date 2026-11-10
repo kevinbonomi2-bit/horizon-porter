@@ -92,7 +92,11 @@ impl Kind {
             Kind::Survive => &["canSurvive"],
             Kind::Analog => &["getAnalogOutputSignal", "hasAnalogOutputSignal"],
             Kind::Placed => &["onPlace", "setPlacedBy"],
-            Kind::Destroyed => &["playerWillDestroy", "playerDestroy", "affectNeighborsAfterRemoval"],
+            Kind::Destroyed => &[
+                "playerWillDestroy",
+                "playerDestroy",
+                "affectNeighborsAfterRemoval",
+            ],
             Kind::Tooltip => &["appendHoverText"],
             Kind::Neighbour => &["neighborChanged"],
         }
@@ -677,7 +681,13 @@ pub fn helper(
     };
     // What differs between the helpers that share a body.
     let (java, check, dispatch, what, guard) = match hook {
-        "random_tick" => ("randomTick", "random_ticks_its_own_way", "random_tick", "", ""),
+        "random_tick" => (
+            "randomTick",
+            "random_ticks_its_own_way",
+            "random_tick",
+            "",
+            "",
+        ),
         "tick_block" => ("tick", "ticks_its_own_way", "scheduled_tick", "", ""),
         "place_block" => (
             "`onPlace`, `setPlacedBy`",
@@ -698,7 +708,10 @@ pub fn helper(
     let level_entities = if entities { LEVEL_ENTITIES } else { "" };
     let body = body
         .replace("{level_read}", LEVEL_READ)
-        .replace("{level_world}", &LEVEL_WORLD.replace("{level_entities}", level_entities))
+        .replace(
+            "{level_world}",
+            &LEVEL_WORLD.replace("{level_entities}", level_entities),
+        )
         .replace("{java}", java)
         .replace("{check}", check)
         .replace("{dispatch}", dispatch)
