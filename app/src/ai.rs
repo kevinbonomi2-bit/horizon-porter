@@ -226,7 +226,14 @@ pub async fn translate_estimate(
     let scan = ported_scan(&dir, &current)?;
     let choice = load_choice(&app);
     let plan = tauri::async_runtime::spawn_blocking(move || {
-        ai::plan(&dir, &scan, &ai::Options::default())
+        ai::plan(
+            &dir,
+            &scan,
+            &ai::Options {
+                refresh: true,
+                ..ai::Options::default()
+            },
+        )
     })
     .await
     .map_err(message)?
@@ -314,7 +321,10 @@ pub async fn translate(
             &dir,
             &scan,
             model.as_ref(),
-            &ai::Options::default(),
+            &ai::Options {
+                refresh: true,
+                ..ai::Options::default()
+            },
             |line| {
                 let _ = events.emit("translate-progress", line.to_string());
             },

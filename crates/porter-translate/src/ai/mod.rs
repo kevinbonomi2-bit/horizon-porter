@@ -38,6 +38,9 @@ pub struct Options {
     pub attempts: usize,
     /// List the work and the prompt sizes, call no model.
     pub dry_run: bool,
+    /// Also port again the functions `port --force` marked outdated, and those whose
+    /// port said something was out of reach with an older horizon-porter.
+    pub refresh: bool,
 }
 
 impl Default for Options {
@@ -47,6 +50,7 @@ impl Default for Options {
             limit: None,
             attempts: 3,
             dry_run: false,
+            refresh: false,
         }
     }
 }
@@ -74,6 +78,36 @@ pub struct Outcome {
     pub attempts: usize,
     pub input_tokens: u64,
     pub output_tokens: u64,
+}
+
+/// What a ported function can reach has grown since translations of this number: a
+/// function ported before it that said something was out of reach is ported again by
+/// `translate --refresh`. Raise it when runtime.rs gives ported code more.
+pub const REACH: u32 = 1;
+
+/// The ported functions `translate --refresh` ports again: those `port --force` marked
+/// outdated, and those that said something was out of reach when ported with an older
+/// horizon-porter.
+pub fn outdated(dir: &Path) -> Result<Vec<Unit>> {
+    let state = State::load(dir);
+    let mut out = Vec::new();
+    for file in rust_files(dir)? {
+        let rel = file
+            .strip_prefix(dir)
+            .unwrap_or(&file)
+            .to_string_lossy()
+            .replace('\\', "/");
+        let source = fs::read_to_string(&file)?;
+        for unit in units::find_again(&rel, &source, true) {
+            let marked = units::function_comment(&source, &unit.function)
+                .is_some_and(|c| c.contains(units::OUTDATED));
+            let reach = state.units.get(&unit.key()).map_or(0, |r| r.reach);
+            if marked || reach < REACH {
+                out.push(unit);
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// The functions left to port in a mod folder `port` wrote.
@@ -157,6 +191,9 @@ pub fn translate(
     mut progress: impl FnMut(&str),
 ) -> Result<Vec<Outcome>> {
     let mut work = pending(dir)?;
+    if opts.refresh {
+        work.extend(outdated(dir)?);
+    }
     if let Some(only) = &opts.only {
         work.retain(|u| u.function.contains(only.as_str()));
     }
@@ -438,7 +475,11 @@ fn prompt(dir: &Path, scan: &ModScan, unit: &Unit) -> Result<Prompt> {
     let mut out = Prompt::default();
     let file = fs::read_to_string(dir.join(&unit.file))
         .with_context(|| format!("reading {}", unit.file))?;
-    let stub = units::function_source(&file, &unit.function).unwrap_or_default();
+    let mut stub = units::function_source(&file, &unit.function).unwrap_or_default();
+    if unit.again {
+        // Ported again from the Java alone: its last port isn't shown.
+        stub = units::stub_of(&stub);
+    }
 
     // What every hook helper prompt shares: what a helper is, and the game's functions.
     if unit.kind == Kind::Helper {
@@ -709,7 +750,7 @@ A tool generated the Rust function you are given: its signature, its parameters 
 right. Write its body so it does what the Java code it names does, through what the function is given.\n\n\
 Answer with the whole function, its signature unchanged, in one ```rust block, and nothing else in code blocks. \
 Keep the Java's behaviour: its numbers, its order, its edge cases. Where the Java uses something this function \
-has no way to reach, do the part you can and say what is missing in a short `//` comment in the body; never invent \
+has no way to reach, do the part you can and say what is missing in a short `// Missing: ...` comment in the body; never invent \
 APIs that are not in what you are shown. No `unsafe`, no `unwrap` on values that can be absent, no new crates.";
 
 /// The translation state: what happened to each function, for `status` and resuming.
@@ -726,6 +767,9 @@ struct Record {
     input_tokens: u64,
     output_tokens: u64,
     at: u64,
+    /// `REACH` when it was translated.
+    #[serde(default)]
+    reach: u32,
 }
 
 impl State {
@@ -762,6 +806,7 @@ impl State {
                 input_tokens: o.input_tokens,
                 output_tokens: o.output_tokens,
                 at,
+                reach: REACH,
             },
         );
     }

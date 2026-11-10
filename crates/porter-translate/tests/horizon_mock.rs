@@ -294,7 +294,9 @@ pub mod containers {
 // horizon-items' ItemStack (items.rs, item_data.rs).
 pub mod items {
     use std::sync::Arc;
+    #[derive(Clone)]
     pub struct StackData;
+    #[derive(Clone)]
     pub struct ItemStack {
         pub item: Arc<str>,
         pub count: u32,
@@ -609,6 +611,12 @@ __LEVEL_HOOKS__
         }
 
         // native_claimed_items.rs: the block a ray along the view meets.
+        pub struct NativeItemEntity {
+            pub id: u32,
+            pub position: [f64; 3],
+            pub stack: ItemStack,
+            pub pickup_delay: u32,
+        }
         pub struct NativeHit {
             pub block_x: i32,
             pub block_y: i32,
@@ -673,6 +681,10 @@ __LEVEL_HOOKS__
             pub fn native_give_items(&mut self, item: &str, count: u32) -> u32 { 0 }
             pub fn native_raycast(&self, distance: f32) -> Option<NativeHit> { None }
             pub fn native_summon(&mut self, dimension: &str, kind: &str, pos: [f64; 3], nbt: Compound) -> Option<u32> { None }
+            pub fn native_neighbor_signal(&mut self, dimension: &str, pos: [i32; 3]) -> i32 { 0 }
+            pub fn native_item_entities(&self, dimension: &str, min: [f64; 3], max: [f64; 3]) -> Vec<NativeItemEntity> { Vec::new() }
+            pub fn native_set_item_entity(&mut self, dimension: &str, id: u32, stack: ItemStack) -> bool { false }
+            pub fn native_light(&self, pos: [i32; 3]) -> (u8, u8) { (0, 0) }
             pub fn native_data(&self, path: &str) -> Option<Vec<u8>> { None }
             pub fn native_level_send_particles(&mut self, options: &ParticleOptions, state: Option<BlockStateId>, at: [f64; 3], spread: [f64; 3], speed: f64, count: i32) -> bool { false }
             pub fn native_set_block(&mut self, dimension: &str, pos: [i32; 3], state: BlockStateId, flags: i32) -> bool { false }

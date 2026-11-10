@@ -412,6 +412,17 @@ pub fn generate_with(
                 java_defaults.insert(name.clone(), "true".into());
             }
         }
+        let mut java_values = java_values;
+        // A block that always holds water (Java's `LiquidBlockContainer` with no
+        // `waterlogged` of its own: rice, a mod's seagrass). Horizon reads a block's
+        // water from `waterlogged`, so it gets one, and starts with it.
+        if holds_water(scan, class.as_deref()) && !java_values.contains_key("waterlogged") {
+            java_values.insert(
+                "waterlogged".into(),
+                ["false", "true"].map(String::from).into(),
+            );
+            java_defaults.insert("waterlogged".into(), "true".into());
+        }
         let mut all_states = states.clone();
         let own = template_properties(&template).unwrap_or_default();
         for (name, values) in java_values {
@@ -819,8 +830,9 @@ pub fn generate_with(
             continue;
         };
         // A `BlockItem`, or a class of the mod's built on one (Farmer's Delight's `RiceItem`).
+        let item_class = reg.creates.as_deref().and_then(class_of);
         let block_item =
-            reg.args.contains("BlockItem") || extends(scan, reg.creates.as_deref(), "BlockItem");
+            reg.args.contains("BlockItem") || extends(scan, item_class.as_deref(), "BlockItem");
         if blocks.contains(item_name) || !block_item {
             continue;
         }
@@ -845,21 +857,13 @@ pub fn generate_with(
             .map_or("", |b| b.template.as_str());
         // A crop whose Java checks the water it stands in (`fluid.is(FluidTags.WATER)` in
         // its `canSurvive`: rice) is planted in water.
-        let in_water = scan
+        let block_class = scan
             .registrations
             .iter()
             .find(|r| r.registry == "block" && r.id.as_deref() == Some(block.as_str()))
             .and_then(|r| r.creates.as_deref())
-            .and_then(|c| {
-                scan.classes
-                    .iter()
-                    .find(|k| k.name == c || k.name.ends_with(&format!(".{c}")))
-            })
-            .is_some_and(|k| {
-                k.references
-                    .iter()
-                    .any(|r| r == "net.minecraft.tags.FluidTags")
-            });
+            .and_then(class_of);
+        let in_water = holds_water(scan, block_class.as_deref());
         let rule = match template {
             _ if in_water => "water",
             "minecraft:wheat"
@@ -2903,6 +2907,35 @@ fn toml_text(s: &str) -> String {
         }
     }
     out
+}
+
+/// Whether a block of `class` (fully qualified) always holds water: its class, or one it
+/// is built on, is a `LiquidBlockContainer` (rice) or one of vanilla's water plants.
+fn holds_water(scan: &ModScan, class: Option<&str>) -> bool {
+    let mut name = class.map(str::to_string);
+    for _ in 0..16 {
+        let Some(n) = name.take() else {
+            return false;
+        };
+        let simple = n.rsplit('.').next().unwrap_or(&n);
+        if matches!(
+            simple,
+            "SeagrassBlock" | "TallSeagrassBlock" | "KelpBlock" | "KelpPlantBlock"
+        ) {
+            return true;
+        }
+        let Some(c) = scan.classes.iter().find(|c| c.name == n) else {
+            return false;
+        };
+        if c.interfaces
+            .iter()
+            .any(|i| i.rsplit('.').next() == Some("LiquidBlockContainer"))
+        {
+            return true;
+        }
+        name = c.superclass.clone();
+    }
+    false
 }
 
 #[cfg(test)]

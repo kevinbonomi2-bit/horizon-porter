@@ -291,6 +291,7 @@ pub fn runtime(
     blocks: &[(String, porter_content::Block)],
     entities: bool,
     places: &[(String, String, String)],
+    tags: &[(String, Vec<String>)],
 ) -> String {
     if behaviours.is_empty() && places.is_empty() {
         return String::new();
@@ -346,6 +347,12 @@ pub fn runtime(
     }
     r.push_str("];\n");
 
+    r.push_str("\n/// Block tags, with the blocks in each: the vanilla tags the mod's Java names\n/// (`BlockTags.DIRT`, from horizon-porter's table of 26.3's) and the mod's own, for\n/// `Blocks::in_tag` where Horizon gives no tag query.\npub const BLOCK_TAGS: &[(&str, &[&str])] = &[\n");
+    for (tag, blocks) in tags {
+        let list: Vec<String> = blocks.iter().map(|b| format!("{b:?}")).collect();
+        let _ = writeln!(r, "    ({tag:?}, &[{}]),", list.join(", "));
+    }
+    r.push_str("];\n");
     r.push_str("\n/// Items that plant a block of another name (`cabbage_seeds` plants `cabbages`):\n/// (item, block, what it stands on: `farmland`, `soil`, `water` or `any`).\npub const PLACES: &[(&str, &str, &str)] = &[\n");
     for (item, block, rule) in places {
         let _ = writeln!(r, "    ({item:?}, {block:?}, {rule:?}),");
@@ -1125,8 +1132,29 @@ const ITEM_WORLD: &str = r#"{tags}    struct Here<'g, 'a> {
                 value
             })
         }
+        fn in_tag(&self, pos: [i32; 3], tag: &str) -> bool {
+            in_tag(&*self.game, "block", tag, &self.game.native_block(pos))
+        }
+        fn light(&self, pos: [i32; 3]) -> u8 {
+            let (a, b) = self.game.native_light(pos);
+            a.max(b)
+        }
     }
     impl m::World for Here<'_, '_> {
+        fn xp(&mut self, at: [f64; 3], amount: u32) {
+            use horizon_world::nbt::{Compound, JavaString, Tag};
+            if amount == 0 {
+                return;
+            }
+            let mut nbt = Compound::new();
+            nbt.insert(JavaString::from("Value"), Tag::Short(amount.min(32767) as i16));
+            let dimension = self.game.native_dimension();
+            let _ = self.game.native_summon(dimension, "minecraft:experience_orb", at, nbt);
+        }
+        fn powered(&mut self, pos: [i32; 3]) -> bool {
+            let dimension = self.game.native_dimension();
+            self.game.native_neighbor_signal(dimension, pos) > 0
+        }
         fn set_block_flags(
             &mut self,
             pos: [i32; 3],
@@ -1893,6 +1921,52 @@ pub trait Blocks {
     /// Property `key` of the block at `pos` (`level.getBlockState(pos).getValue(..)`):
     /// one of the properties the mod's blocks have, `facing` as Java names it.
     fn property(&self, pos: [i32; 3], key: &str) -> Option<String>;
+    /// Whether the block at `pos` is in block tag `tag`
+    /// (`level.getBlockState(pos).is(BlockTags.DIRT)`: `minecraft:dirt`; a mod's
+    /// `TagKey<Block>`: `farmersdelight:heat_sources`). Where Horizon gives no tag query
+    /// it is answered from `BLOCK_TAGS`: the tags the mod's Java names, and its own.
+    fn in_tag(&self, pos: [i32; 3], tag: &str) -> bool {
+        block_in_tag(&self.block(pos), tag)
+    }
+    /// The light at `pos`, 0 to 15 (`level.getRawBrightness(pos, 0)`,
+    /// `getMaxLocalRawBrightness(pos)`): the brighter of the sky's and the blocks'. 15
+    /// where Horizon gives no light query.
+    fn light(&self, pos: [i32; 3]) -> u8 {
+        let _ = pos;
+        15
+    }
+    /// How much water the spot at `pos` holds, 0 to 8 (`level.getFluidState(pos)`):
+    /// `.is(FluidTags.WATER)` is more than 0, and `getAmount() == 8` is 8, a source or a
+    /// waterlogged block.
+    fn water(&self, pos: [i32; 3]) -> u8 {
+        if self.property(pos, "waterlogged").as_deref() == Some("true") {
+            return 8;
+        }
+        match self.block(pos).as_str() {
+            "minecraft:water" => match self.property(pos, "level").and_then(|l| l.parse::<u8>().ok()) {
+                Some(l) if (1..8).contains(&l) => 8 - l,
+                _ => 8,
+            },
+            "minecraft:kelp" | "minecraft:kelp_plant" | "minecraft:seagrass" | "minecraft:tall_seagrass"
+            | "minecraft:bubble_column" => 8,
+            _ => 0,
+        }
+    }
+}
+
+/// Whether `block` is in block tag `tag`, by `BLOCK_TAGS`.
+pub fn block_in_tag(block: &str, tag: &str) -> bool {
+    let tag = tag.trim_start_matches('#');
+    let full;
+    let tag = if tag.contains(':') {
+        tag
+    } else {
+        full = format!("minecraft:{tag}");
+        full.as_str()
+    };
+    BLOCK_TAGS
+        .iter()
+        .any(|(t, blocks)| *t == tag && blocks.contains(&block))
 }
 
 /// The world as a block's code reads and changes it on a right click (Java's
@@ -1998,6 +2072,11 @@ pub trait World: Blocks {
     fn powered(&mut self, pos: [i32; 3]) -> bool {
         let _ = pos;
         false
+    }
+    /// Drops `amount` experience at `at` (world coordinates) as orbs
+    /// (`ExperienceOrb.award(level, pos, amount)`, `popExperience`).
+    fn xp(&mut self, at: [f64; 3], amount: u32) {
+        let _ = (at, amount);
     }
 }
 

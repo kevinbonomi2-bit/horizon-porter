@@ -43,6 +43,8 @@ pub struct BlockEntity {
     /// Whether its Java code looks at the blocks beside it (it uses `Direction`):
     /// its tick then gets them (`machine.neighbour(side)`).
     pub neighbours: bool,
+    /// Its blocks' class with a `neighborChanged` (redstone turning it on or off).
+    pub redstone: Option<String>,
     /// Java fields the state leaves out, with why.
     pub left_out: Vec<String>,
 }
@@ -229,6 +231,7 @@ pub fn find(scan: &ModScan, ns: &str) -> Vec<BlockEntity> {
                 None
             });
         let snake = rust_ident(name);
+        let redstone = block_class_with(scan, &its_blocks, "neighborChanged");
         let mut be = BlockEntity {
             id: format!("{ns}:{name}"),
             blocks: its_blocks,
@@ -241,6 +244,7 @@ pub fn find(scan: &ModScan, ns: &str) -> Vec<BlockEntity> {
             tanks: Vec::new(),
             energy: None,
             items: 0,
+            redstone,
             animate,
             neighbours: false,
             left_out: Vec::new(),
@@ -506,8 +510,8 @@ pub const BLOCK_ENTITIES: &[(&str, &str, bool)] = &[
                     } else {
                         ""
                     },
-                    animate = animate_doc(be),
-                    animate_todo = animate_todo(be),
+                    animate = animate_doc(be) + &redstone_doc(be),
+                    animate_todo = animate_todo(be) + &redstone_todo(be),
                     snake = be.snake,
                     ty = be.rust
                 );
@@ -663,6 +667,52 @@ fn animate_doc(be: &BlockEntity) -> String {
             "\n/// Its block's `animateTick` ({}) plays effects on the client in Java (steam,\n/// bubbles, a sizzle): port them here, sent by the server to the players near with\n/// `machine.particles(..)` and `machine.sound(..)`, with Java's random chances\n/// (`machine.random()`).",
             class.rsplit('.').next().unwrap_or(class)
         ),
+        None => String::new(),
+    }
+}
+
+/// The class of one of `blocks` (or one it is built on, of the mod's) that has `method`.
+fn block_class_with(scan: &ModScan, blocks: &[String], method: &str) -> Option<String> {
+    scan.registrations
+        .iter()
+        .filter(|r| r.registry == "block")
+        .filter(|r| {
+            r.id.as_deref()
+                .is_some_and(|id| blocks.iter().any(|b| b.ends_with(&format!(":{id}"))))
+        })
+        .filter_map(|r| r.creates.as_deref())
+        .find_map(|simple| {
+            let mut c = scan
+                .classes
+                .iter()
+                .find(|c| c.name.rsplit('.').next() == Some(simple))?;
+            for _ in 0..8 {
+                if c.method_names.iter().any(|m| m == method) {
+                    return Some(c.name.clone());
+                }
+                let sup = c.superclass.as_deref()?;
+                c = scan.classes.iter().find(|k| k.name == sup)?;
+            }
+            None
+        })
+}
+
+/// The tick's word on its block's `neighborChanged`: Horizon's neighbour hook can't
+/// change blocks everywhere, so the tick keeps the block in step with redstone.
+fn redstone_doc(be: &BlockEntity) -> String {
+    match &be.redstone {
+        Some(class) => format!(
+            "\n/// Its block's `neighborChanged` ({}) keeps a state property in step with redstone in\n/// Java (`level.hasNeighborSignal(pos)` is `machine.powered`): do the same at the start of\n/// this tick, comparing `machine.state(..)` and changing it with `machine.set_state(..)`.",
+            class.rsplit('.').next().unwrap_or(class)
+        ),
+        None => String::new(),
+    }
+}
+
+/// The TODO's mention of its block's `neighborChanged`, so translate reads that class.
+fn redstone_todo(be: &BlockEntity) -> String {
+    match &be.redstone {
+        Some(class) => format!(", and what `{class}`'s `neighborChanged` does"),
         None => String::new(),
     }
 }

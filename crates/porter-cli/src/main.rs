@@ -105,6 +105,10 @@ enum Command {
         /// List what would be translated and how big each prompt is; call no model
         #[arg(long)]
         dry_run: bool,
+        /// Also port again the functions `port --force` marked outdated, and those that
+        /// said something was out of reach when an older horizon-porter ported them
+        #[arg(long)]
+        refresh: bool,
         /// Go ahead without the estimate (it asks when there are more than 5 functions)
         #[arg(long)]
         yes: bool,
@@ -406,6 +410,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             limit,
             attempts,
             dry_run,
+            refresh,
             yes,
         } => {
             let info: serde_json::Value = serde_json::from_str(
@@ -429,6 +434,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 limit,
                 attempts,
                 dry_run: true,
+                refresh,
             };
             // What it would send, first.
             let plan = porter_translate::ai::translate(

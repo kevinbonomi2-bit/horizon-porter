@@ -478,6 +478,8 @@ pub enum Effect {
     /// Its block's state property `key` set to `value` (`level.setBlock(pos,
     /// state.setValue(..), 3)`).
     SetState { key: String, value: String },
+    /// `ExperienceOrb.award(level, pos, amount)`.
+    Xp { at: [f64; 3], amount: u32 },
 }
 
 /// A dropped item in the world (`ItemEntity`), as `machine.dropped_in` finds it.
@@ -723,6 +725,14 @@ impl<'a> Machine<'a> {
             at,
             motion,
         });
+    }
+
+    /// Drops `amount` experience at `at` as orbs after the tick
+    /// (`ExperienceOrb.award(level, pos, amount)`, a furnace's stored experience).
+    pub fn xp(&mut self, at: [f64; 3], amount: u32) {
+        if amount > 0 {
+            self.effects.push(Effect::Xp { at, amount });
+        }
     }
 
     /// Plays `sound` at `at` for the players near it after the tick (`level.playSound`,

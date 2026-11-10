@@ -22,6 +22,9 @@ pub struct Unit {
     pub java: Vec<String>,
     /// Mixin members it names: (Mixin class, member).
     pub members: Vec<(String, String)>,
+    /// Already ported, and to port again (`translate --refresh`): its comment here is
+    /// back to the TODO it was.
+    pub again: bool,
 }
 
 impl Unit {
@@ -59,9 +62,116 @@ pub fn find(file: &str, source: &str) -> Vec<Unit> {
             comment: comment.to_string(),
             java: java_classes(comment),
             members: mixin_members(comment),
+            again: false,
         });
     }
     out
+}
+
+/// What `port --force` writes above a ported function it kept whose description
+/// changed since: `translate --refresh` ports it again.
+pub const OUTDATED: &str = "Outdated:";
+
+/// What a translation writes where the function it was given couldn't reach something.
+const GAPS: [&str; 9] = [
+    "Missing:",
+    "not reachable",
+    "isn't reachable",
+    "no way to",
+    "cannot be ",
+    "is not exposed",
+    "does not expose",
+    "not ported",
+    "stands in",
+];
+
+/// The ported functions of a file worth porting again: those `port --force` marked
+/// outdated, and, with `gaps`, those whose port says it couldn't reach something (what
+/// a newer horizon-porter may now give them). Each with its comment back to its TODO.
+pub fn find_again(file: &str, source: &str, gaps: bool) -> Vec<Unit> {
+    let kind = if file.ends_with("runtime.rs") {
+        Kind::Runtime
+    } else {
+        Kind::Helper
+    };
+    let mut out = Vec::new();
+    for item in items(source) {
+        let comment = &source[item.comment_start..item.fn_start];
+        if !comment.contains(PORTED) {
+            continue;
+        }
+        let body = &source[item.fn_start..item.end];
+        let admits = gaps && GAPS.iter().any(|g| body.contains(g));
+        if !comment.contains(OUTDATED) && !admits {
+            continue;
+        }
+        let comment = todo_comment(comment);
+        out.push(Unit {
+            file: file.to_string(),
+            function: item.name.clone(),
+            kind,
+            java: java_classes(&comment),
+            members: mixin_members(&comment),
+            comment,
+            again: true,
+        });
+    }
+    out
+}
+
+/// Whether a ported function's body says it couldn't reach something.
+pub fn admits_gap(function: &str) -> bool {
+    GAPS.iter().any(|g| function.contains(g))
+}
+
+/// A ported function's comment back to the TODO `port` wrote: its "Ported by" note a
+/// TODO again, its outdated note gone.
+pub fn todo_comment(comment: &str) -> String {
+    let mut out = String::new();
+    for line in comment.split_inclusive('\n') {
+        if line.contains(OUTDATED) {
+            continue;
+        }
+        match line.find(PORTED) {
+            Some(i) => {
+                let _ = writeln!(out, "{}{}", &line[..i], todo_of(&line[i..]));
+            }
+            None => out.push_str(line),
+        }
+    }
+    out
+}
+
+/// "Ported by horizon-porter translate (model) from a.B. Review it." as the TODO it
+/// was: "TODO: port from a.B.".
+fn todo_of(note: &str) -> String {
+    // "(claude-haiku-5-5) from these; review it:", "(model) from a.B. Review it.",
+    // "(model): the tick of `a.B`. Review it."
+    let rest = note[PORTED.len()..].trim();
+    let rest = rest
+        .strip_prefix('(')
+        .and_then(|r| r.split_once(')'))
+        .map_or(rest, |(_, r)| r)
+        .trim_start_matches(':')
+        .trim();
+    let rest = rest.trim_end_matches("Review it.").trim();
+    if rest == "from these; review it:" {
+        format!("{TODO} into this function:")
+    } else {
+        format!("{TODO} {rest}")
+    }
+}
+
+/// A function as `port` leaves it to port: its head, and a body that answers nothing.
+pub fn stub_of(function: &str) -> String {
+    let head = function.split('{').next().unwrap_or(function).trim_end();
+    let args = parameter_names(head);
+    let used = match args.len() {
+        0 => String::new(),
+        1 => format!("    let _ = {};\n", args[0]),
+        _ => format!("    let _ = ({});\n", args.join(", ")),
+    };
+    format!("{head} {{\n{used}    todo!()\n}}\n")
 }
 
 /// A function item: its comment block, its `fn` line and its end.
@@ -253,6 +363,12 @@ pub fn replace_function(source: &str, name: &str, comment: &str, function: &str)
     ))
 }
 
+/// The comment block above function `name`.
+pub fn function_comment(source: &str, name: &str) -> Option<String> {
+    let item = items(source).into_iter().find(|i| i.name == name)?;
+    Some(source[item.comment_start..item.fn_start].to_string())
+}
+
 /// The top-level functions of `source` that `translate` ported (a "Ported by
 /// horizon-porter translate" note above each): their names.
 pub fn ported_functions(source: &str) -> Vec<String> {
@@ -287,21 +403,7 @@ pub fn unport(source: &str, name: &str, why: &str) -> Option<String> {
             continue;
         };
         let prefix = &line[..i];
-        // "(claude-haiku-5-5) from these; review it:", "(model) from a.B. Review it.",
-        // "(model): the tick of `a.B`. Review it."
-        let rest = line[i + PORTED.len()..].trim();
-        let rest = rest
-            .strip_prefix('(')
-            .and_then(|r| r.split_once(')'))
-            .map_or(rest, |(_, r)| r)
-            .trim_start_matches(':')
-            .trim();
-        let rest = rest.trim_end_matches("Review it.").trim();
-        let todo = if rest == "from these; review it:" {
-            format!("{TODO} into this function:")
-        } else {
-            format!("{TODO} {rest}")
-        };
+        let todo = todo_of(&line[i..]);
         let why = why.lines().next().unwrap_or(why);
         let _ = writeln!(out, "{prefix}{todo}");
         let _ = writeln!(
@@ -395,7 +497,41 @@ pub fn keep_ported(fresh: &str, existing: &str) -> String {
         if !fresh_comment.contains(TODO) {
             continue;
         }
-        if let Some(merged) = replace_item(&out, &item.name, prev_comment, prev_fn) {
+        // What `port` says of the function now, against what it said when it was ported:
+        // a kept port that was given less (no item slots, no tag query) is marked, on
+        // the new description, for `translate --refresh`.
+        let described = |c: &str| -> Vec<String> {
+            c.lines()
+                .filter(|l| !l.contains(TODO) && !l.contains(PORTED) && !l.contains(OUTDATED))
+                .map(|l| l.trim().to_string())
+                .collect()
+        };
+        let was_ported = prev_comment.contains(PORTED);
+        let stale = prev_comment.contains(OUTDATED)
+            || (was_ported && described(prev_comment) != described(fresh_comment));
+        let comment = if stale && was_ported {
+            let note = prev_comment
+                .lines()
+                .find(|l| l.contains(PORTED))
+                .unwrap_or("");
+            let prefix = &note[..note.find(PORTED).unwrap_or(0)];
+            let mut c = String::new();
+            for line in fresh_comment.split_inclusive('\n') {
+                if line.contains(TODO) {
+                    let _ = writeln!(c, "{note}");
+                    let _ = writeln!(
+                        c,
+                        "{prefix}{OUTDATED} horizon-porter describes this function differently now (it may give it more to work with); `horizon-porter translate --refresh` ports it again."
+                    );
+                } else {
+                    c.push_str(line);
+                }
+            }
+            c
+        } else {
+            prev_comment.to_string()
+        };
+        if let Some(merged) = replace_item(&out, &item.name, &comment, prev_fn) {
             out = merged;
         }
     }
@@ -568,6 +704,57 @@ mod tests {
         assert!(
             kept.contains("pub struct Fixed {\n    pub a: i32,\n}"),
             "{kept}"
+        );
+    }
+
+    #[test]
+    fn a_kept_port_described_differently_is_marked_and_found_again() {
+        let existing = "/// A tick. `machine` has nothing (it has no item slots).
+///
+/// Ported by horizon-porter translate (m): the tick of `a.B`. Review it.
+pub fn tick_b(pos: [i32; 3]) {
+    // Missing: its slots.
+    let _ = pos;
+}
+";
+        let fresh = "/// A tick. `machine` has its 27 item slots.
+///
+/// TODO: port the tick of `a.B`.
+pub fn tick_b(pos: [i32; 3]) {
+    let _ = pos;
+}
+";
+        let kept = keep_ported(fresh, existing);
+        assert!(kept.contains("its 27 item slots"), "{kept}");
+        assert!(kept.contains("// Missing: its slots."), "{kept}");
+        assert!(kept.contains(OUTDATED), "{kept}");
+        // Written again, it stays marked and isn't marked twice.
+        let again = keep_ported(fresh, &kept);
+        assert_eq!(again.matches(OUTDATED).count(), 1, "{again}");
+        let units = find_again("mixins/m/runtime.rs", &again, false);
+        assert_eq!(units.len(), 1);
+        assert!(
+            units[0].comment.contains("TODO: port the tick of `a.B`."),
+            "{}",
+            units[0].comment
+        );
+        assert!(!units[0].comment.contains(OUTDATED));
+        // The same description: kept as it was, and found only by what it says is missing.
+        let same = keep_ported(
+            &existing.replace("Ported by horizon-porter translate (m):", "TODO: port"),
+            existing,
+        );
+        assert!(!same.contains(OUTDATED), "{same}");
+        assert!(find_again("mixins/m/runtime.rs", &same, false).is_empty());
+        assert_eq!(find_again("mixins/m/runtime.rs", &same, true).len(), 1);
+        assert!(
+            stub_of(
+                "pub fn tick_b(pos: [i32; 3]) {
+    1;
+}
+"
+            )
+            .contains("todo!()")
         );
     }
 

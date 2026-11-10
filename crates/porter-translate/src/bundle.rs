@@ -275,6 +275,7 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
             )
         })
         .collect();
+    let block_tags = block_tags(scan, &content);
     if !places.is_empty() {
         wired.entry("use_item_on").or_default();
     }
@@ -506,6 +507,7 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
         cooking: &cooking,
         remainders: &remainders,
         places: &places,
+        block_tags: &block_tags,
         statics: &java_statics,
         ledger: horizon.map(|src| (src.to_path_buf(), unmapped_ports(scan, src))),
     };
@@ -1057,6 +1059,8 @@ struct Ctx<'a> {
     remainders: &'a [(String, String)],
     /// Items that plant a block of another name: (item, block, what it stands on).
     places: &'a [(String, String, String)],
+    /// Block tags the ported code may ask about, with their blocks.
+    block_tags: &'a [(String, Vec<String>)],
     /// The Java statics the mod's code shares.
     statics: &'a [crate::statics::Module],
     /// The Horizon checkout read, and the functions that port each unmapped
@@ -1468,6 +1472,34 @@ pub const DESCRIPTION: &str = "{description}";
             }
             r.push_str("];\n");
         }
+        if !self.block_entities.is_empty() {
+            // The state properties a block entity's tick may read of its own block.
+            let mut keys: BTreeSet<&str> = [
+                "age",
+                "axis",
+                "enabled",
+                "facing",
+                "half",
+                "level",
+                "lit",
+                "open",
+                "powered",
+                "triggered",
+                "waterlogged",
+            ]
+            .into();
+            for (_, b) in self.behaviour_blocks {
+                keys.extend(b.states.keys().map(String::as_str));
+            }
+            let list: Vec<String> = keys.iter().map(|k| format!("{k:?}")).collect();
+            let _ = writeln!(
+                r,
+                "
+/// The state properties a tick reads of its own block (`machine.state`).
+pub const STATE_KEYS: &[&str] = &[{}];",
+                list.join(", ")
+            );
+        }
         r.push_str(&netconf::net_runtime(self.messages));
         r.push_str(&screens::runtime(self.screens, self.overlays));
         r.push_str(&blocks::runtime(
@@ -1475,6 +1507,7 @@ pub const DESCRIPTION: &str = "{description}";
             self.behaviour_blocks,
             !self.block_entities.is_empty(),
             self.places,
+            self.block_tags,
         ));
         if !self.behaviours.is_empty() || !self.places.is_empty() {
             // Which blocks open a menu when used: a machine's, a chest-like one's.
@@ -1810,6 +1843,9 @@ fn {id}_block_entity_tick(
             other => one(other).map(Value::String),
         }}
     }}
+    let dimension_here = game.native_dimension().to_string();
+    // Whether a block beside it powers it, read before the tick borrows the game.
+    let powered = game.native_neighbor_signal(&dimension_here, pos) > 0;
     let recipes = |kind: &str| -> Vec<m::Recipe> {{
         // Cooking types (a skillet's campfire recipes): vanilla's and the mod's own, from
         // the table the porter wrote; Horizon's lookup serves the mods' own types.
@@ -1898,6 +1934,25 @@ fn {id}_block_entity_tick(
         .map(|s| s.as_ref().map(|s| m::Stack::new(&s.item, s.count)))
         .collect();
     let data = entity.data.clone();
+    // The dropped items its tick looked at, by the id it was given.
+    let seen: std::cell::RefCell<Vec<(u32, horizon_client::items::ItemStack)>> = std::cell::RefCell::new(Vec::new());
+    let dropped = |min: [f64; 3], max: [f64; 3]| -> Vec<m::Dropped> {{
+        let mut seen = seen.borrow_mut();
+        game.native_item_entities(&dimension_here, min, max)
+            .into_iter()
+            .filter(|e| e.stack.count > 0)
+            .map(|e| {{
+                let d = m::Dropped {{
+                    id: seen.len() as u32,
+                    item: e.stack.item.to_string(),
+                    count: e.stack.count,
+                    at: e.position,
+                }};
+                seen.push((e.id, e.stack));
+                d
+            }})
+            .collect()
+    }};
 {tag_fn}    let tags = |kind: &str, tag: &str, id: &str| in_tag(&*game, kind, tag, id);
     let items = |id: &str| {{
         let info = game.items().get(id);
@@ -1928,8 +1983,14 @@ fn {id}_block_entity_tick(
     }}
     machine.neighbours = neighbours;
     machine.block = block_here;
-    // Its `facing`, as the block stores it.
+    // Its `facing`, as the block stores it, its state, its power and the items near.
     machine.facing = game.native_block_property(pos, "facing");
+    machine.properties = m::STATE_KEYS
+        .iter()
+        .filter_map(|key| Some((key.to_string(), game.native_block_property(pos, key)?)))
+        .collect();
+    machine.powered = powered;
+    machine.dropped = Some(&dropped);
     // Its tanks and energy, as Horizon keeps them: `fluids` (a list of
     // `{{Fluid, Amount}}`) and the int `energy`.
     let storage = m::STORAGE.iter().find(|(id, _, _)| *id == entity.id);
@@ -2099,8 +2160,20 @@ fn {id}_block_entity_tick(
             m::Effect::SetState {{ key, value }} => {{
                 let _ = game.native_set_block_property_with(pos, &key, &value, 2);
             }}
-            // This bundle tells the tick of no dropped items (`machine.dropped` stays unset).
-            m::Effect::TakeDropped {{ .. }} => {{}}
+            m::Effect::TakeDropped {{ id, count }} => {{
+                let found = seen.borrow().get(id as usize).cloned();
+                if let Some((entity_id, mut stack)) = found {{
+                    // An empty stack removes the item entity.
+                    stack.count = stack.count.saturating_sub(count);
+                    let _ = game.native_set_item_entity(&dimension_here, entity_id, stack);
+                }}
+            }}
+            m::Effect::Xp {{ at, amount }} => {{
+                use horizon_world::nbt::{{Compound, Tag}};
+                let mut nbt = Compound::new();
+                nbt.insert(JavaString::from("Value"), Tag::Short(amount.min(32767) as i16));
+                let _ = game.native_summon(&dimension_here, "minecraft:experience_orb", at, nbt);
+            }}
         }}
     }}
     // Only a change touches the entity: each write marks it for saving and sending.
@@ -3707,6 +3780,112 @@ fn rust_str(s: &str) -> String {
 /// Text for a TOML basic string.
 fn toml_str(s: &str) -> String {
     rust_str(s)
+}
+
+/// The block tags a port's code may ask about where Horizon gives no tag query: the
+/// vanilla ones its Java names (`BlockTags.SUPPORTS_VEGETATION`), from horizon-porter's
+/// table of 26.3's tags (`tools/vanilla_tags.py`), and the mod's own, tags inside them
+/// followed. Each with its blocks, by full id.
+fn block_tags(scan: &ModScan, content: &content::Content) -> Vec<(String, Vec<String>)> {
+    const VANILLA: &str = include_str!("../data/vanilla-block-tags.json");
+    let vanilla: BTreeMap<String, Vec<String>> = serde_json::from_str(VANILLA).unwrap_or_default();
+    let vanilla_blocks = |tag: &str| -> Vec<String> {
+        vanilla
+            .get(tag)
+            .map(|v| v.iter().map(|b| format!("minecraft:{b}")).collect())
+            .unwrap_or_default()
+    };
+    let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    // The mod's own block tags, and those it adds to (`data/<ns>/tags/block/..`).
+    let mut own: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for (path, from) in &content.copies {
+        let parts: Vec<&str> = path.split('/').collect();
+        let ["data", ns, "tags", "block", rest @ ..] = parts.as_slice() else {
+            continue;
+        };
+        let Some(name) = rest.join("/").strip_suffix(".json").map(str::to_string) else {
+            continue;
+        };
+        let Some(json) = fs::read_to_string(from).ok().and_then(|t| {
+            serde_json::from_str::<serde_json::Value>(t.trim_start_matches('\u{feff}')).ok()
+        }) else {
+            continue;
+        };
+        let values = json["values"].as_array().cloned().unwrap_or_default();
+        own.entry(format!("{ns}:{name}")).or_default().extend(
+            values
+                .iter()
+                .filter_map(|v| v.as_str().or_else(|| v["id"].as_str()).map(str::to_string)),
+        );
+    }
+    fn resolve(
+        tag: &str,
+        own: &BTreeMap<String, Vec<String>>,
+        vanilla_blocks: &dyn Fn(&str) -> Vec<String>,
+        depth: usize,
+    ) -> Vec<String> {
+        let mut out = tag
+            .strip_prefix("minecraft:")
+            .map(vanilla_blocks)
+            .unwrap_or_default();
+        if depth > 8 {
+            return out;
+        }
+        for v in own.get(tag).into_iter().flatten() {
+            match v.strip_prefix('#') {
+                Some(inner) => out.extend(resolve(inner, own, vanilla_blocks, depth + 1)),
+                None => out.push(v.clone()),
+            }
+        }
+        out
+    }
+    for tag in own.keys() {
+        out.insert(tag.clone(), resolve(tag, &own, &vanilla_blocks, 0));
+    }
+    // Vanilla's, where the Java names them: `BlockTags.SUPPORTS_CROPS`,
+    // `BlockTags.MINEABLE_WITH_AXE` (`mineable/axe`).
+    let constants: BTreeMap<String, &String> = vanilla
+        .keys()
+        .flat_map(|id| {
+            let plain = id.replace('/', "_").to_ascii_uppercase();
+            let with = id
+                .strip_prefix("mineable/")
+                .map(|t| format!("MINEABLE_WITH_{}", t.to_ascii_uppercase()));
+            std::iter::once((plain, id)).chain(with.map(|w| (w, id)))
+        })
+        .collect();
+    for class in &scan.classes {
+        if !class
+            .references
+            .iter()
+            .any(|r| r == "net.minecraft.tags.BlockTags")
+        {
+            continue;
+        }
+        let Ok(source) = fs::read_to_string(Path::new(&scan.input).join(&class.path)) else {
+            continue;
+        };
+        for (i, _) in source.match_indices("BlockTags.") {
+            let name: String = source[i + "BlockTags.".len()..]
+                .chars()
+                .take_while(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || *c == '_')
+                .collect();
+            if let Some(id) = constants.get(&name) {
+                let tag = format!("minecraft:{id}");
+                out.entry(tag.clone())
+                    .or_insert_with(|| resolve(&tag, &own, &vanilla_blocks, 0));
+            }
+        }
+    }
+    out.into_iter()
+        .map(|(tag, mut blocks)| {
+            blocks.sort();
+            blocks.dedup();
+            (tag, blocks)
+        })
+        // A tag of thousands of blocks (`mineable/pickaxe`) would swamp the module.
+        .filter(|(_, blocks)| blocks.len() <= 400)
+        .collect()
 }
 
 #[cfg(test)]

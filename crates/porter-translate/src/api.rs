@@ -572,6 +572,16 @@ impl runtime::Blocks for Read<'_> {
         let (_, props) = java_properties(self.level, state);
         props.into_iter().find(|(k, _)| k == key).map(|(_, v)| v)
     }
+    fn in_tag(&self, pos: [i32; 3], tag: &str) -> bool {
+        let tag = tag.trim_start_matches('#');
+        self.level
+            .block_state(pos)
+            .and_then(|s| self.level.block_in_tag(s.block(), tag))
+            .unwrap_or_else(|| runtime::block_in_tag(&runtime::Blocks::block(self, pos), tag))
+    }
+    fn light(&self, pos: [i32; 3]) -> u8 {
+        self.level.raw_brightness(pos, 0).clamp(0, 15) as u8
+    }
 }
 "#;
 
@@ -611,6 +621,16 @@ impl runtime::Blocks for Here<'_> {
         let (block, props) = self.state(pos)?;
         let v = props.into_iter().find(|(k, _)| k == key)?.1;
         Some(if key == "facing" { runtime::java_facing(&block, &v) } else { v })
+    }
+    fn in_tag(&self, pos: [i32; 3], tag: &str) -> bool {
+        in_tag(&*self.host, "block", tag, &runtime::Blocks::block(self, pos))
+    }
+    fn light(&self, pos: [i32; 3]) -> u8 {
+        let Some(level) = self.level else {
+            return 15;
+        };
+        let of = |layer| level.brightness(&*self.host, layer, pos).unwrap_or(0);
+        of(mod_api::LightLayer::Sky).max(of(mod_api::LightLayer::Block)).clamp(0, 15) as u8
     }
 }
 
@@ -743,6 +763,11 @@ impl runtime::World for Here<'_> {
     fn powered(&mut self, pos: [i32; 3]) -> bool {
         self.level.is_some_and(|l| l.has_neighbor_signal(&*self.host, pos))
     }
+    fn xp(&mut self, at: [f64; 3], amount: u32) {
+        if let Some(level) = self.level {
+            let _ = level.award_experience(self.host, at[0], at[1], at[2], amount);
+        }
+    }
 }
 "#;
 
@@ -759,6 +784,12 @@ impl runtime::Blocks for Level<'_> {
     }
     fn property(&self, pos: [i32; 3], key: &str) -> Option<String> {
         runtime::Blocks::property(&Read { level: &*self.level }, pos, key)
+    }
+    fn in_tag(&self, pos: [i32; 3], tag: &str) -> bool {
+        runtime::Blocks::in_tag(&Read { level: &*self.level }, pos, tag)
+    }
+    fn light(&self, pos: [i32; 3]) -> u8 {
+        runtime::Blocks::light(&Read { level: &*self.level }, pos)
     }
 }
 
@@ -1511,6 +1542,11 @@ impl mod_api::BlockEntityPart for PortedEntity {
                         let _ = entity.discard(host);
                     } else if stack.set_count(stack.count() - count).is_ok() {
                         let _ = item.set_stack(host, stack);
+                    }
+                }
+                runtime::Effect::Xp { at, amount } => {
+                    if let Some(level) = level {
+                        let _ = level.award_experience(host, at[0], at[1], at[2], amount);
                     }
                 }
                 runtime::Effect::SetState { key, value } => {
