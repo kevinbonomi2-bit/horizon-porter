@@ -173,8 +173,31 @@ pub fn find(scan: &ModScan, ns: &str) -> Vec<BlockEntity> {
             })
             .map(|b| format!("{ns}:{b}"))
             .collect();
-        if its_blocks.is_empty() && blocks.contains(&name) {
+        // No constant of the call is named after a block: the block of the type's own name.
+        let by_name = its_blocks.is_empty() && blocks.contains(&name);
+        if by_name {
             its_blocks.push(format!("{ns}:{name}"));
+        }
+        // Then the blocks of that block's Java class make the same block entity
+        // (`newBlockEntity`): an infuser and its advanced kind, named `INFUSER_BLOCK` and
+        // `ADVANCED_INFUSER_BLOCK` where their ids are `enchanting_infuser` and
+        // `advanced_enchanting_infuser`.
+        let class_of_block = |id: &str| {
+            scan.registrations
+                .iter()
+                .find(|r| r.registry == "block" && r.id.as_deref() == Some(id))
+                .and_then(|r| r.creates.clone())
+        };
+        let classes: BTreeSet<String> = its_blocks
+            .iter()
+            .filter_map(|b| class_of_block(b.split_once(':').map_or(b.as_str(), |(_, n)| n)))
+            .collect();
+        for b in blocks.iter().filter(|_| by_name) {
+            let id = format!("{ns}:{b}");
+            if !its_blocks.contains(&id) && class_of_block(b).is_some_and(|c| classes.contains(&c))
+            {
+                its_blocks.push(id);
+            }
         }
         // `new BlockEntityType(HorticulturistTableBlockEntity::new, ..)` creates the
         // type: the block entity is the class whose constructor it takes.

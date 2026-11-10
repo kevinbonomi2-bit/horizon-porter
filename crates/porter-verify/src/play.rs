@@ -26,6 +26,9 @@ use crate::Instance;
 /// click it, so the next row must be farther than that or it takes the click.
 const ROW: i32 = 4;
 
+/// At most this many blocks are placed by hand: each takes a second or two.
+const HAND_LIMIT: usize = 60;
+
 /// What a play check found.
 #[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -36,6 +39,10 @@ pub struct PlayReport {
     /// Its blocks that act on a right click, and how many changed when clicked.
     pub acting: usize,
     pub responded: usize,
+    /// Its blocks whose placement is their own ported code, tried by hand (with the
+    /// block's item, as a player places it), and how many stood afterwards.
+    pub hand_tried: usize,
+    pub hand_placed: usize,
     /// What is broken: a block the game refuses, a game that stops, content Horizon
     /// didn't load.
     pub faults: Vec<String>,
@@ -52,6 +59,12 @@ impl PlayReport {
             s.push_str(&format!(
                 ", {} of {} respond to a click",
                 self.responded, self.acting
+            ));
+        }
+        if self.hand_tried > 0 {
+            s.push_str(&format!(
+                ", {} of {} place by hand",
+                self.hand_placed, self.hand_tried
             ));
         }
         s
@@ -219,6 +232,53 @@ pub fn play_check(
                 return Ok(report);
             }
         }
+    }
+
+    // Blocks whose placement is their own ported code (`getStateForPlacement`): `/setblock`
+    // above never runs it, so each is also placed as a player places it, with its item,
+    // on the floor beside where the player stands.
+    let own_way = listed(port_dir, "_PLACE");
+    let by_hand: Vec<&String> = blocks
+        .iter()
+        .filter(|b| own_way.contains(b))
+        .take(HAND_LIMIT)
+        .collect();
+    let hand = [px + 1, py, pz + 2];
+    for (n, block) in by_hand.iter().enumerate() {
+        progress(&format!(
+            "Placing by hand {} of {}: {block}",
+            n + 1,
+            by_hand.len()
+        ));
+        game.run(&["command", "clear @s"], 30);
+        // No item of its name (a crop its seeds plant, a sign's wall form): not one a
+        // player places.
+        if !succeeded(&game.run(&["give", block.as_str()], 30)) {
+            continue;
+        }
+        let [x, y, z] = hand;
+        let (xs, ys, zs) = (x.to_string(), y.to_string(), z.to_string());
+        game.run(&["place", &xs, &ys, &zs, "--item", block.as_str()], 30);
+        let mut got = game.state(hand);
+        if !is_block(&got, block) {
+            std::thread::sleep(Duration::from_millis(500));
+            got = game.state(hand);
+        }
+        report.hand_tried += 1;
+        if is_block(&got, block) {
+            report.hand_placed += 1;
+        } else {
+            report.notes.push(format!(
+                "{block}: placed by hand, nothing stood there (its ported placement refused it; some blocks need water, a wall or a ceiling)"
+            ));
+        }
+        game.run(
+            &["fill", &xs, &ys, &zs, &xs, &(y + 2).to_string(), &zs, "air"],
+            30,
+        );
+    }
+    if !by_hand.is_empty() {
+        game.run(&["command", "clear @s"], 30);
     }
 
     let clicks: Vec<_> = spots.iter().filter(|(b, _)| acting.contains(b)).collect();
@@ -582,7 +642,14 @@ pub fn mod_blocks(port_dir: &Path) -> (Vec<String>, Vec<String>) {
         }
     }
     blocks.sort();
-    let mut acting = Vec::new();
+    (blocks, listed(port_dir, "_USE"))
+}
+
+/// The blocks runtime.rs lists in its `<CLASS><suffix>: &[&str]` constants: `_USE` for
+/// those whose right click is ported code, `_PLACE` for those whose placement is.
+fn listed(port_dir: &Path, suffix: &str) -> Vec<String> {
+    let marker = format!("{suffix}: &[&str] = &[");
+    let mut ids = Vec::new();
     for bundle in std::fs::read_dir(port_dir.join("mixins"))
         .into_iter()
         .flatten()
@@ -594,7 +661,7 @@ pub fn mod_blocks(port_dir: &Path) -> (Vec<String>, Vec<String>) {
         let mut inside = false;
         for line in text.lines() {
             let t = line.trim();
-            if t.starts_with("const ") && t.contains("_USE: &[&str] = &[") {
+            if t.starts_with("const ") && t.contains(&marker) {
                 inside = true;
                 continue;
             }
@@ -602,14 +669,14 @@ pub fn mod_blocks(port_dir: &Path) -> (Vec<String>, Vec<String>) {
                 if t.starts_with("];") {
                     inside = false;
                 } else if let Some(id) = t.strip_prefix('"').and_then(|r| r.split('"').next()) {
-                    acting.push(id.to_string());
+                    ids.push(id.to_string());
                 }
             }
         }
     }
-    acting.sort();
-    acting.dedup();
-    (blocks, acting)
+    ids.sort();
+    ids.dedup();
+    ids
 }
 
 /// The `horizon-ctl` of the version an instance plays (its native build), else of
@@ -1046,6 +1113,12 @@ mod tests {
             r.summary(),
             "301 of 301 blocks place, 58 of 60 respond to a click"
         );
+        let r = PlayReport {
+            hand_tried: 12,
+            hand_placed: 11,
+            ..r
+        };
+        assert!(r.summary().ends_with(", 11 of 12 place by hand"));
         assert!(is_block(
             "mcwdoors:garage_white_door[open=true]",
             "mcwdoors:garage_white_door"

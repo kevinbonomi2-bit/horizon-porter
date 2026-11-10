@@ -2158,6 +2158,18 @@ pub trait Blocks {
         let _ = face;
         block_seems_solid(&self.block(pos))
     }
+    /// Whether the block at `pos` gives way to one placed there
+    /// (`level.getBlockState(pos).canBeReplaced(context)`, `canBeReplaced()`,
+    /// `isAir()` or replaceable): air, a fluid, grass and the like. What a block two
+    /// tall asks of the spot above it before it is placed. The item in the placer's hand
+    /// doesn't come into it.
+    fn replaceable(&self, pos: [i32; 3]) -> bool {
+        let block = self.block(pos);
+        matches!(
+            block.as_str(),
+            "minecraft:air" | "minecraft:cave_air" | "minecraft:void_air" | "minecraft:water" | "minecraft:lava"
+        ) || self.in_tag(pos, "minecraft:replaceable")
+    }
     /// Whether the spot at `pos` is open to the sky (`level.canSeeSky(pos)`). True where
     /// Horizon gives no answer.
     fn sees_sky(&self, pos: [i32; 3]) -> bool {
@@ -2798,12 +2810,16 @@ impl ShapeUpdate {
     }
 }
 
-/// The `facing` Java's code knows for the one `block` stores.
+/// The `facing` Java's code knows for the one `block` stores. Horizon's side of the port
+/// calls this: the block functions above already read and return `facing` as Java names
+/// it, and must not turn it themselves.
 pub fn java_facing(block: &str, stored: &str) -> String {
     turn_facing(stored, facing_turns(block))
 }
 
-/// The `facing` `block` stores for the one Java's code names.
+/// The `facing` `block` stores for the one Java's code names. Horizon's side of the port
+/// calls this on what a block function returns or sets: a block function gives `facing`
+/// as Java names it and must not call this, or the block is turned twice.
 pub fn stored_facing(block: &str, java: &str) -> String {
     turn_facing(java, (4 - facing_turns(block)) % 4)
 }

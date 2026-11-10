@@ -288,7 +288,8 @@ after a build: it opens a creative test world (`porter-check`, never one of your
 control socket of its own (a game you have open is left alone), places each of the
 mod's blocks and reads it back, right-clicks each block whose Java acts on a click
 (empty-handed, then holding what its ported code asks for: an item it compares the held
-one to, the mod's tools, shears, the block's own item), and reads the game's log. Faults (a block the game refuses or can't draw, content Horizon
+one to, the mod's tools, shears, the block's own item), places by hand, with its item, each
+block whose placement is ported code (`/setblock` doesn't run it), and reads the game's log. Faults (a block the game refuses or can't draw, content Horizon
 didn't load, a game that stops) fail it; notes (a click that changed nothing, a model or
 texture drawn as Minecraft's missing one) are for you to look at.
 

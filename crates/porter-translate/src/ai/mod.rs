@@ -181,10 +181,12 @@ const REACHES: &[(u32, &[&str])] = &[
             "registry id",
         ],
     ),
+    // Whether a spot gives way to a placed block.
+    (6, &["canbereplaced", "replaceable"]),
 ];
 
 /// The newest line of `REACHES`.
-pub const REACH: u32 = 5;
+pub const REACH: u32 = 6;
 
 /// Whether a function ported at reach `at`, whose port says `notes` were out of reach,
 /// is worth porting again now.

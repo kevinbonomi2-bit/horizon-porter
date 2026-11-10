@@ -239,7 +239,11 @@ pub fn generate_with(
                 id: Some(n.to_string()),
                 via: "resources".into(),
                 class: String::new(),
-                creates: None,
+                // Variants registered in a loop (`andesite_waystone`, `mossy_waystone`...)
+                // are named after their class: `WaystoneBlock`.
+                creates: (registry == "block")
+                    .then(|| class_named_like(n, "Block", &class_of))
+                    .flatten(),
                 args: String::new(),
             })
             .collect()
@@ -2661,6 +2665,31 @@ fn mob_template(
     creature.then_some(("minecraft:wandering_trader", OTHER))
 }
 
+/// The mod's class a block found only by its resources is most likely made by: the one
+/// named after the end of its id (`andesite_waystone` is a `WaystoneBlock`, `portstone` a
+/// `PortstoneBlock`), the longest such name first. `known` tells whether the mod has
+/// exactly one class of a simple name.
+fn class_named_like(
+    id: &str,
+    suffix: &str,
+    known: &dyn Fn(&str) -> Option<String>,
+) -> Option<String> {
+    let words: Vec<&str> = id.split('_').filter(|w| !w.is_empty()).collect();
+    (0..words.len()).find_map(|from| {
+        let mut name: String = words[from..]
+            .iter()
+            .map(|w| {
+                let mut c = w.chars();
+                c.next()
+                    .map(|f| f.to_ascii_uppercase().to_string() + c.as_str())
+                    .unwrap_or_default()
+            })
+            .collect();
+        name.push_str(suffix);
+        known(&name).map(|_| name)
+    })
+}
+
 /// An entity type's classes by simple name, from its own up to the first vanilla one.
 fn class_chain(scan: &ModScan, reg: &Registration, class: Option<&str>) -> Vec<String> {
     let mut chain: Vec<String> = Vec::new();
@@ -3109,6 +3138,24 @@ fn holds_water(scan: &ModScan, class: Option<&str>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_variant_is_named_after_its_class() {
+        let known = |n: &str| {
+            ["WaystoneBlock", "PortstoneBlock"]
+                .contains(&n)
+                .then(|| format!("m.{n}"))
+        };
+        assert_eq!(
+            class_named_like("mossy_andesite_waystone", "Block", &known).as_deref(),
+            Some("WaystoneBlock")
+        );
+        assert_eq!(
+            class_named_like("portstone", "Block", &known).as_deref(),
+            Some("PortstoneBlock")
+        );
+        assert_eq!(class_named_like("warp_plate", "Block", &known), None);
+    }
 
     #[test]
     fn map_color_and_instabreak() {
