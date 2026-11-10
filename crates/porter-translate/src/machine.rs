@@ -436,6 +436,13 @@ pub struct Machine<'a> {
     pub facing: Option<String>,
     /// An item's facts: (its stack size, its crafting remainder).
     pub items: Option<&'a dyn Fn(&str) -> Option<(u32, Option<String>)>>,
+    /// Its block's state properties (`getBlockState().getValue(..)`): `enabled`,
+    /// `lit`; see `state`.
+    pub properties: Vec<(String, String)>,
+    /// Whether a block beside it powers it (`level.hasNeighborSignal(pos)`).
+    pub powered: bool,
+    /// The dropped items in a box: see `dropped_in`.
+    pub dropped: Option<&'a dyn Fn([f64; 3], [f64; 3]) -> Vec<Dropped>>,
 }
 
 /// A particle burst or a sound a tick plays, near its block.
@@ -465,6 +472,23 @@ pub enum Effect {
         volume: f32,
         pitch: f32,
     },
+    /// `count` taken from dropped item `id` (`machine.dropped_in`): it shrinks, and goes
+    /// when it is empty (`ItemEntity.getItem().shrink(..)`, `discard()`).
+    TakeDropped { id: u32, count: u32 },
+    /// Its block's state property `key` set to `value` (`level.setBlock(pos,
+    /// state.setValue(..), 3)`).
+    SetState { key: String, value: String },
+}
+
+/// A dropped item in the world (`ItemEntity`), as `machine.dropped_in` finds it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Dropped {
+    /// Which one it is, for `machine.take_dropped`.
+    pub id: u32,
+    pub item: String,
+    pub count: u32,
+    /// Where it is (`getX()`, `getY()`, `getZ()`).
+    pub at: [f64; 3],
 }
 
 /// A block beside a block entity: its block, and its block entity's id and saved
@@ -605,7 +629,39 @@ impl<'a> Machine<'a> {
             seed: 0x9E37_79B9_7F4A_7C15,
             facing: None,
             items: None,
+            properties: Vec::new(),
+            powered: false,
+            dropped: None,
         }
+    }
+
+    /// Its block's state property `key` (`getBlockState().getValue(ENABLED)`): `"true"`.
+    pub fn state(&self, key: &str) -> Option<&str> {
+        self.properties.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
+    }
+
+    /// Sets its block's state property `key` to `value` after the tick
+    /// (`level.setBlock(pos, state.setValue(ENABLED, false), ..)`). What a block's
+    /// `neighborChanged` keeps in step with `machine.powered` (a basket's or a
+    /// hopper's `enabled`) can be done here, in its tick.
+    pub fn set_state(&mut self, key: &str, value: &str) {
+        if let Some(p) = self.properties.iter_mut().find(|(k, _)| k == key) {
+            p.1 = value.to_string();
+        }
+        self.effects.push(Effect::SetState { key: key.to_string(), value: value.to_string() });
+    }
+
+    /// The dropped items (`ItemEntity`) whose position is in the box from `min` to `max`
+    /// (world coordinates): `level.getEntitiesOfClass(ItemEntity.class, aabb,
+    /// EntitySelector.ENTITY_STILL_ALIVE)`, what a hopper or a basket sucks in.
+    pub fn dropped_in(&self, min: [f64; 3], max: [f64; 3]) -> Vec<Dropped> {
+        self.dropped.map(|f| f(min, max)).unwrap_or_default()
+    }
+
+    /// Takes `count` from dropped item `id` after the tick (it goes when it is empty):
+    /// what a hopper does once it has put the items in its slots.
+    pub fn take_dropped(&mut self, id: u32, count: u32) {
+        self.effects.push(Effect::TakeDropped { id, count });
     }
 
     /// What `item` leaves behind in a crafting grid (`stack.getCraftingRemainder()`,
@@ -762,28 +818,30 @@ impl<'a> Machine<'a> {
     }
 
     /// Whether `stack` fits into slot `slot`: it is empty, or holds the same item
-    /// with room for it.
+    /// with room for it (a slot holds at most the item's own stack size).
     pub fn fits(&self, slot: usize, stack: &Stack) -> bool {
+        let max = self.max_stack(&stack.item).min(MAX_STACK);
         match self.slots.get(slot) {
-            Some(None) => stack.count <= MAX_STACK,
-            Some(Some(s)) => s.item == stack.item && s.count + stack.count <= MAX_STACK,
+            Some(None) => stack.count <= max,
+            Some(Some(s)) => s.item == stack.item && s.count + stack.count <= max,
             None => false,
         }
     }
 
     /// Puts `stack` into slot `slot`, as much as fits; returns what did not.
     pub fn insert(&mut self, slot: usize, stack: Stack) -> Option<Stack> {
+        let max = self.max_stack(&stack.item).min(MAX_STACK);
         let Some(cell) = self.slots.get_mut(slot) else {
             return Some(stack);
         };
         match cell {
             None => {
-                let put = stack.count.min(MAX_STACK);
+                let put = stack.count.min(max);
                 *cell = Some(Stack::new(&stack.item, put));
                 (put < stack.count).then(|| Stack::new(&stack.item, stack.count - put))
             }
             Some(s) if s.item == stack.item => {
-                let put = stack.count.min(MAX_STACK.saturating_sub(s.count));
+                let put = stack.count.min(max.saturating_sub(s.count));
                 s.count += put;
                 (put < stack.count).then(|| Stack::new(&stack.item, stack.count - put))
             }

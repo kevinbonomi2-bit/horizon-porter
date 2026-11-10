@@ -136,6 +136,20 @@ mining rules. Translation is told that a slot holds at most the item's own stack
 Checked in survival: a knife lies on an empty board and comes back to an empty hand, a cabbage
 stack stays on the board, each cut takes one, and a broken board drops what was on it.
 
+## Baskets: dropped items, redstone and vanilla menus
+
+A Farmer's Delight basket is a 27-slot chest-menu container whose tick pulls in the dropped items at
+its open side, paused by redstone through `neighborChanged`. Four things were missing and are now
+in the porter: a block entity behind a vanilla menu gets that menu's slots and a template that opens
+it (a barrel, which faces six ways as a basket does); a boolean state property Java declares and
+doesn't set starts `true`, as `StateDefinition.any()` gives it; a tick can read the dropped items in
+a box and take from them (`machine.dropped_in`, `machine.take_dropped`, through the API's
+`entities_in`, `item_entity` and `discard`), read its power and its block's state; and
+`neighborChanged` is ported: Horizon's `neighbor_changed` part can't change the world, so the glue
+asks for a block tick and runs the Java's code in it. Checked in game: a basket pulls in what lands
+at its opening and nothing beside it, a hopper under it drains it, a powered lever pauses it, a
+comparator reads it, and a basket beside a cutting board catches the cut pieces.
+
 ## A fresh port gets the same
 
 To check that these results come from the porter and not from hand work on one port, Farmer's

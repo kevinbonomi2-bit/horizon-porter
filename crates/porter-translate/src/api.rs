@@ -80,6 +80,7 @@ fn lib_rs(
         Kind::Tick,
         Kind::Survive,
         Kind::Analog,
+        Kind::Neighbour,
     ];
     let item_kinds = [Kind::ItemUseOn, Kind::ItemUse, Kind::Tooltip];
     let mut blocks: Vec<&str> = Vec::new();
@@ -126,7 +127,7 @@ fn lib_rs(
             r.push_str(HERE_ENTITIES);
         }
     }
-    if has(Kind::RandomTick) || has(Kind::Tick) {
+    if has(Kind::RandomTick) || has(Kind::Tick) || has(Kind::Neighbour) {
         r.push_str(LEVEL);
         if entities {
             r.push_str(&no_entities("Level<'_>"));
@@ -146,8 +147,14 @@ fn lib_rs(
     if has(Kind::RandomTick) {
         r.push_str(PART_RANDOM_TICK);
     }
-    if has(Kind::Tick) {
-        r.push_str(PART_TICK);
+    if has(Kind::Tick) || has(Kind::Neighbour) {
+        r.push_str(&PART_TICK.replace(
+            "__NEIGHBOUR__",
+            if has(Kind::Neighbour) { NEIGHBOUR_IN_TICK } else { "" },
+        ));
+    }
+    if has(Kind::Neighbour) {
+        r.push_str(PART_NEIGHBOUR);
     }
     if has(Kind::Survive) {
         r.push_str(PART_SURVIVE);
@@ -156,6 +163,9 @@ fn lib_rs(
         r.push_str(PART_ANALOG);
     }
     r.push_str("}\n");
+    if has(Kind::Neighbour) {
+        r.push_str(NEIGHBOUR_PENDING);
+    }
     if has(Kind::Use) {
         r.push_str(CLICK_FN);
     }
@@ -678,6 +688,9 @@ impl runtime::World for Here<'_> {
     fn max_stack(&mut self, item: &str) -> u32 {
         item_facts(&*self.host, item).map_or(64, |(n, _)| n)
     }
+    fn powered(&mut self, pos: [i32; 3]) -> bool {
+        self.level.is_some_and(|l| l.has_neighbor_signal(&*self.host, pos))
+    }
 }
 "#;
 
@@ -740,6 +753,9 @@ impl runtime::World for Level<'_> {
             Some(state) => self.level.schedule_block_tick(pos, state.block(), delay),
             None => false,
         }
+    }
+    fn powered(&mut self, pos: [i32; 3]) -> bool {
+        self.level.has_neighbor_signal(pos)
     }
 }
 "#;
@@ -841,7 +857,7 @@ const PART_TICK: &str = r#"    fn tick_block(&self, level: &mut dyn mod_api::Lev
         let Some(block) = level.state_block(event.state).map(str::to_string) else {
             return Flow::Continue;
         };
-        if !runtime::ticks_its_own_way(&block) {
+__NEIGHBOUR__        if !runtime::ticks_its_own_way(&block) {
             return Flow::Continue;
         }
         let t = runtime::BlockTick { block, pos: [event.pos.x, event.pos.y, event.pos.z] };
@@ -1241,15 +1257,38 @@ impl mod_api::BlockEntityPart for PortedEntity {
         let slots: Vec<Option<runtime::Stack>> =
             event.entity.items.iter().map(|s| s.as_ref().and_then(|s| stack_of(&*host, s)).map(|(i, c)| runtime::Stack::new(&i, c))).collect();
         let data = event.entity.data.clone();
+        // The dropped items its tick looked at, by the id it was given.
+        let seen: std::cell::RefCell<Vec<mod_api::EntityRef>> = std::cell::RefCell::new(Vec::new());
         let (changed, mut done) = {
             let reader: &dyn mod_api::Host = &*host;
+            let dropped = |min: [f64; 3], max: [f64; 3]| -> Vec<runtime::Dropped> {
+                let Some(level) = level else {
+                    return Vec::new();
+                };
+                let mut out = Vec::new();
+                for entity in level.entities_in(reader, min, max).unwrap_or_default() {
+                    let Some(item) = reader.item_entity(entity) else {
+                        continue;
+                    };
+                    let (Some(stack), Some(at)) = (item.stack(reader), entity.position(reader)) else {
+                        continue;
+                    };
+                    let Some((id, count)) = stack_of(reader, &stack) else {
+                        continue;
+                    };
+                    let mut seen = seen.borrow_mut();
+                    out.push(runtime::Dropped { id: seen.len() as u32, item: id, count, at });
+                    seen.push(entity);
+                }
+                out
+            };
             let recipes_of = |kind: &str| recipes(reader, kind);
             let tags = |kind: &str, tag: &str, id: &str| in_tag(reader, kind, tag, id);
             let items = |item: &str| item_facts(reader, item);
             let mut machine = runtime::Machine::new(slots.clone(), data.clone(), &recipes_of);
             machine.tags = Some(&tags);
             machine.items = Some(&items);
-            machine.block = block;
+            machine.block = block.clone();
             // The blocks beside it, and their block entities' saved values where its tick
             // reads them (runtime.rs's `NEIGHBOURS`).
             if let Some(level) = level {
@@ -1277,8 +1316,11 @@ impl mod_api::BlockEntityPart for PortedEntity {
                     })
                     .collect();
             }
-            // Its `facing`, as the block stores it.
+            // Its `facing`, as the block stores it, its state, its power, the items near.
             machine.facing = props.iter().find(|(k, _)| k == "facing").map(|(_, v)| v.clone());
+            machine.properties = props.clone();
+            machine.powered = level.is_some_and(|l| l.has_neighbor_signal(reader, pos));
+            machine.dropped = Some(&dropped);
             // Its random: a different draw each tick and block.
             thread_local! {
                 static TICKS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
@@ -1323,6 +1365,32 @@ impl mod_api::BlockEntityPart for PortedEntity {
                         Tag::List(motion.iter().map(|v| Tag::Double(v.to_bits())).collect()),
                     );
                     let _ = host.summon(dimension, "minecraft:item", at, nbt);
+                }
+                runtime::Effect::TakeDropped { id, count } => {
+                    let Some(entity) = seen.borrow().get(id as usize).copied() else {
+                        continue;
+                    };
+                    let Some(item) = host.item_entity(entity) else {
+                        continue;
+                    };
+                    let Some(mut stack) = item.stack(&*host) else {
+                        continue;
+                    };
+                    if count >= stack.count() {
+                        let _ = entity.discard(host);
+                    } else if stack.set_count(stack.count() - count).is_ok() {
+                        let _ = item.set_stack(host, stack);
+                    }
+                }
+                runtime::Effect::SetState { key, value } => {
+                    let mut now = props.clone();
+                    if let Some(p) = now.iter_mut().find(|(k, _)| *k == key) {
+                        p.1 = value;
+                    }
+                    let (Some(level), Some(state)) = (level, host.block_state_id(&state_text(&block, &now))) else {
+                        continue;
+                    };
+                    let _ = level.set_block(host, pos, state, flags(2));
                 }
             }
         }
@@ -1658,4 +1726,47 @@ const SCREENS: &str = r#"
         let _ = event.stack.set_count(moving.count);
         Flow::Cancel
     }
+"#;
+
+/// A block tick the neighbour part asked for: the Java's `neighborChanged` runs in it.
+const NEIGHBOUR_IN_TICK: &str = r#"        let pos = [event.pos.x, event.pos.y, event.pos.z];
+        let asked = NEIGHBOUR_CHANGED
+            .lock()
+            .ok()
+            .and_then(|mut p| p.iter().position(|x| *x == pos).map(|i| p.swap_remove(i)))
+            .is_some();
+        if asked {
+            let t = runtime::BlockTick { block: block.clone(), pos };
+            let _ = runtime::neighbour_changed(&t, &mut Level { level });
+            if !runtime::ticks_its_own_way(&block) {
+                return Flow::Cancel;
+            }
+        }
+"#;
+
+/// `neighborChanged`. Horizon's neighbour hook can't change the world, so it asks for a
+/// block tick at once, and the Java's code runs in that.
+const PART_NEIGHBOUR: &str = r#"    fn neighbor_changed(&self, level: &mut dyn mod_api::LevelTicksHost, event: &mut mod_api::NeighborChangedEvent) {
+        let Some(block) = level.state_block(event.state).map(str::to_string) else {
+            return;
+        };
+        if !runtime::acts_on_neighbour_change(&block) {
+            return;
+        }
+        let pos = [event.pos.x, event.pos.y, event.pos.z];
+        if let Ok(mut pending) = NEIGHBOUR_CHANGED.lock() {
+            if pending.contains(&pos) {
+                return;
+            }
+            pending.push(pos);
+        }
+        let _ = level.schedule_block_tick(pos, event.state.block(), 1);
+    }
+
+"#;
+
+const NEIGHBOUR_PENDING: &str = r#"
+/// Blocks whose neighbours changed, until their block tick runs the Java's
+/// `neighborChanged`.
+static NEIGHBOUR_CHANGED: std::sync::Mutex<Vec<[i32; 3]>> = std::sync::Mutex::new(Vec::new());
 "#;

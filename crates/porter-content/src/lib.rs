@@ -286,7 +286,19 @@ pub fn generate_with(
             .as_ref()
             .map(blockstate_properties)
             .unwrap_or_default();
-        if let Some(menu) = machines.get(block_name) {
+        let opens_menu = [
+            "minecraft:barrel",
+            "minecraft:chest",
+            "minecraft:trapped_chest",
+            "minecraft:furnace",
+            "minecraft:blast_furnace",
+            "minecraft:smoker",
+            "minecraft:hopper",
+            "minecraft:dispenser",
+            "minecraft:dropper",
+        ]
+        .contains(&template.as_str());
+        if let Some(menu) = machines.get(block_name).filter(|_| !opens_menu) {
             let horizontal = states.get("facing").is_some_and(|v| {
                 v.iter()
                     .all(|x| ["north", "south", "east", "west"].contains(&x.as_str()))
@@ -388,7 +400,18 @@ pub fn generate_with(
         // Java's own state definition: properties its code sets that the blockstate
         // never draws by (a garage door's `powered`), and its defaults (a garage
         // door is placed `part=top`, `open=true`), which the blockstate can't say.
-        let (java_values, java_defaults) = java_states(scan, class.as_deref());
+        let (java_values, mut java_defaults) = java_states(scan, class.as_deref());
+        // A boolean the Java declares and its `registerDefaultState` doesn't set starts
+        // `true`: `StateDefinition.any()` takes each property's first value, and a
+        // boolean's are `true, false` (a basket's `enabled`).
+        for (name, values) in &java_values {
+            if !java_defaults.contains_key(name)
+                && !java_defaults.is_empty()
+                && values.iter().all(|v| v == "true" || v == "false")
+            {
+                java_defaults.insert(name.clone(), "true".into());
+            }
+        }
         let mut all_states = states.clone();
         let own = template_properties(&template).unwrap_or_default();
         for (name, values) in java_values {

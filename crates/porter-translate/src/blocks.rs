@@ -43,10 +43,13 @@ pub enum Kind {
     Destroyed,
     /// `appendHoverText`: the lines its item's tooltip adds.
     Tooltip,
+    /// `neighborChanged`: what it does when a block beside it changes (a redstone
+    /// signal turning it on or off).
+    Neighbour,
 }
 
 impl Kind {
-    const ALL: [Kind; 12] = [
+    const ALL: [Kind; 13] = [
         Kind::Place,
         Kind::Use,
         Kind::Shape,
@@ -59,8 +62,9 @@ impl Kind {
         Kind::Placed,
         Kind::Destroyed,
         Kind::Tooltip,
+        Kind::Neighbour,
     ];
-    const BLOCK: [Kind; 10] = [
+    const BLOCK: [Kind; 11] = [
         Kind::Place,
         Kind::Use,
         Kind::Shape,
@@ -71,6 +75,7 @@ impl Kind {
         Kind::Placed,
         Kind::Destroyed,
         Kind::Tooltip,
+        Kind::Neighbour,
     ];
     const ITEM: [Kind; 3] = [Kind::ItemUseOn, Kind::ItemUse, Kind::Tooltip];
 
@@ -89,6 +94,7 @@ impl Kind {
             Kind::Placed => &["onPlace", "setPlacedBy"],
             Kind::Destroyed => &["playerWillDestroy", "playerDestroy", "affectNeighborsAfterRemoval"],
             Kind::Tooltip => &["appendHoverText"],
+            Kind::Neighbour => &["neighborChanged"],
         }
     }
 
@@ -107,6 +113,7 @@ impl Kind {
             Kind::Placed => "place_block",
             Kind::Destroyed => "destroy_block",
             Kind::Tooltip => "item_tooltip",
+            Kind::Neighbour => "neighbor_changed",
         }
     }
 
@@ -124,6 +131,7 @@ impl Kind {
             Kind::Placed => "placed",
             Kind::Destroyed => "broken",
             Kind::Tooltip => "tooltip",
+            Kind::Neighbour => "neighbour",
         }
     }
 }
@@ -254,7 +262,7 @@ fn owner(scan: &ModScan, class: &str, kind: Kind) -> Option<String> {
 /// The hooks the behaviours need, with the classes behind each.
 pub fn hooks(behaviours: &[Behaviour]) -> Vec<(&'static str, BTreeSet<String>)> {
     let mut out: BTreeMap<&'static str, BTreeSet<String>> = BTreeMap::new();
-    for b in behaviours {
+    for b in behaviours.iter().filter(|b| b.kind != Kind::Neighbour) {
         out.entry(b.kind.hook())
             .or_default()
             .insert(b.class.clone());
@@ -449,6 +457,15 @@ pub fn runtime(
                 "bool",
                 "d.block",
             ),
+            Kind::Neighbour => (
+                "acts_on_neighbour_change",
+                "neighbour_changed",
+                "t: &BlockTick, world: &mut dyn World",
+                "t, world",
+                "false",
+                "bool",
+                "t.block",
+            ),
             Kind::Tooltip => (
                 "adds_tooltip",
                 "tooltip_lines",
@@ -533,6 +550,13 @@ pub fn runtime(
                 }
                 Kind::Destroyed => {
                     "what its blocks do as a player breaks them (`playerWillDestroy`,\n/// `playerDestroy`, `affectNeighborsAfterRemoval`): change blocks and block entities\n/// through `world` (a door's other half, a bed's head, its items dropped with\n/// `world.drop`). It runs before the block is removed, for all three; the return\n/// value is unused. Blocks removed by other means don't come here"
+                }
+                Kind::Neighbour => {
+                    "what its blocks do when a block beside them changes (`neighborChanged`): a
+/// redstone signal turning it on or off (`world.powered(pos)` is
+/// `level.hasNeighborSignal(pos)`), a block it rests on going. Change blocks through
+/// `world`; the return value is unused. It runs on the server level a tick after the
+/// change, as a tick does: blocks, sounds, particles and ticks"
                 }
                 Kind::Tooltip => {
                     "the lines its item's tooltip adds under its name (`appendHoverText`):\n/// return each `tooltip.add(..)` as a `TooltipLine`, in order"
@@ -1826,7 +1850,7 @@ fn {id}_update_shape({params}) {
 }
 "#;
 
-const DISPATCH_DOCS: [&str; 12] = [
+const DISPATCH_DOCS: [&str; 13] = [
     "\n/// The properties a block is placed with (Java's `getStateForPlacement` setting them\n/// on `defaultBlockState()`), from its class's function. None leaves its template's\n/// placement.\n",
     "\n/// A right click on a block, run by its class's function. True when it took the click\n/// (`InteractionResult.SUCCESS` or `CONSUME`): neither its template's use nor the held\n/// item's runs then. A click that opens a menu in Java (`player.openMenu(..)`) is false\n/// here: it goes on to the block's template (a barrel, a furnace), which opens the menu.\n",
     "\n/// The properties a block changes as its neighbour in `u.direction` changes (Java's\n/// `updateShape`), from its class's function. None keeps it as it is.\n",
@@ -1839,6 +1863,7 @@ const DISPATCH_DOCS: [&str; 12] = [
     "\n/// One of the mod's blocks placed by a player, run by its class's `onPlace` /\n/// `setPlacedBy` function.\n",
     "\n/// One of the mod's blocks broken by a player, run by its class's `playerWillDestroy`\n/// / `playerDestroy` / `affectNeighborsAfterRemoval` function, before it goes.\n",
     "\n/// The lines one of the mod's items adds to its tooltip, from its class's\n/// `appendHoverText` function.\n",
+    "\n/// A block beside one of the mod's blocks changed, run by its class's\n/// `neighborChanged` function a tick later (Horizon's neighbour hook can't change blocks).\n",
 ];
 
 const RUNTIME_TYPES: &str = r#"
@@ -1954,6 +1979,11 @@ pub trait World: Blocks {
     /// False where it can't be scheduled (off the server level).
     fn schedule_tick(&mut self, pos: [i32; 3], block: &str, delay: i32) -> bool {
         let _ = (pos, block, delay);
+        false
+    }
+    /// Whether a block beside `pos` powers it (`level.hasNeighborSignal(pos)`).
+    fn powered(&mut self, pos: [i32; 3]) -> bool {
+        let _ = pos;
         false
     }
 }

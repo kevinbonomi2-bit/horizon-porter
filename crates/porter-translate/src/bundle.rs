@@ -193,7 +193,7 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
 
     // Blocks, items and resources: a content mod. Block entities: native hooks.
     let ns = content::namespace(&java_id, &id).to_string();
-    let block_entities = block_entity::find(scan, &ns);
+    let mut block_entities = block_entity::find(scan, &ns);
     let mut machines = machine::find(scan, &ns, &id, &block_entities);
     let recipe_types = machine::recipe_types(scan, &ns);
     let machine_blocks: BTreeMap<String, String> = machines
@@ -207,6 +207,43 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
             })
         })
         .collect();
+    // Block entities that open a vanilla menu over their own slots (a cabinet's
+    // chest menu): their blocks, the menu, its slots. A machine's own menu wins.
+    let vanilla_containers: Vec<(String, String, usize)> = block_entities
+        .iter()
+        .filter(|be| !machines.iter().any(|m| m.entity == be.id))
+        .filter_map(|be| {
+            let mut class = be.class.clone()?;
+            for _ in 0..8 {
+                if let Some((_, menu, slots)) =
+                    scan.vanilla_menus.iter().find(|(c, _, _)| *c == class)
+                {
+                    return Some((be, menu.clone(), *slots));
+                }
+                class = scan
+                    .classes
+                    .iter()
+                    .find(|c| c.name == class)?
+                    .superclass
+                    .clone()?;
+            }
+            None
+        })
+        .flat_map(|(be, menu, slots)| {
+            be.blocks
+                .iter()
+                .map(move |b| (b.clone(), menu.clone(), slots))
+        })
+        .collect();
+    // A block that opens a vanilla menu needs a template that opens one too (a basket,
+    // a cabinet of the mod's own class).
+    let mut menu_blocks = machine_blocks.clone();
+    let prefix = format!("{ns}:");
+    for (block, menu, _) in &vanilla_containers {
+        if let Some(name) = block.strip_prefix(&prefix) {
+            menu_blocks.entry(name.to_string()).or_insert_with(|| menu.clone());
+        }
+    }
     let mut content = content::generate_with(
         scan,
         &id,
@@ -214,7 +251,7 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
         &name,
         &version,
         &description,
-        &machine_blocks,
+        &menu_blocks,
     );
     if !content.is_empty() {
         content.files.extend(machine::content_files(&machines));
@@ -301,34 +338,13 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
             wired.insert("standalone_models", BTreeSet::new());
         }
     }
-    // Block entities that open a vanilla menu over their own slots (a cabinet's
-    // chest menu): their blocks, the menu, its slots. A machine's own menu wins.
-    let vanilla_containers: Vec<(String, String, usize)> = block_entities
-        .iter()
-        .filter(|be| !machines.iter().any(|m| m.entity == be.id))
-        .filter_map(|be| {
-            let mut class = be.class.clone()?;
-            for _ in 0..8 {
-                if let Some((_, menu, slots)) =
-                    scan.vanilla_menus.iter().find(|(c, _, _)| *c == class)
-                {
-                    return Some((be, menu.clone(), *slots));
-                }
-                class = scan
-                    .classes
-                    .iter()
-                    .find(|c| c.name == class)?
-                    .superclass
-                    .clone()?;
-            }
-            None
-        })
-        .flat_map(|(be, menu, slots)| {
-            be.blocks
-                .iter()
-                .map(move |b| (b.clone(), menu.clone(), slots))
-        })
-        .collect();
+    // A vanilla menu's block entity holds that menu's slots (a basket's 27), for its tick
+    // and clicks, whatever its Java keeps them in.
+    for be in block_entities.iter_mut().filter(|be| be.items == 0) {
+        if let Some((_, _, n)) = vanilla_containers.iter().find(|(b, _, _)| be.blocks.contains(b)) {
+            be.items = *n;
+        }
+    }
     // Block entities that hold items without a menu (a skillet's pan, a cutting
     // board): their slots, so a click's code and the renderer reach them. No menu,
     // and no side a hopper reaches, as in Java.
@@ -2066,6 +2082,11 @@ fn {id}_block_entity_tick(
                 // SoundSource.BLOCKS
                 let _ = game.native_level_play_sound(&sound, at, 4, volume, pitch);
             }}
+            m::Effect::SetState {{ key, value }} => {{
+                let _ = game.native_set_block_property_with(pos, &key, &value, 2);
+            }}
+            // This bundle tells the tick of no dropped items (`machine.dropped` stays unset).
+            m::Effect::TakeDropped {{ .. }} => {{}}
         }}
     }}
     // Only a change touches the entity: each write marks it for saving and sending.
