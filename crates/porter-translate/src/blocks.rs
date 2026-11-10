@@ -1204,7 +1204,7 @@ const ITEM_WORLD: &str = r#"{tags}    struct Here<'g, 'a> {
                 f64::from(pos[1]) + 0.5,
                 f64::from(pos[2]) + 0.5,
             ];
-            let _ = self.game.native_level_play_sound(sound, at, self.source, volume, pitch);
+            @@LEVEL_CALL(self.game; native_level_play_sound; sound, at, self.source, volume, pitch)@@
         }
         fn shrink_held(&mut self, n: u32) {
             self.changed = true;
@@ -1277,7 +1277,7 @@ const ITEM_WORLD: &str = r#"{tags}    struct Here<'g, 'a> {
                 ParticleType::from_name(kind).map(ParticleOptions::simple)
             };
             if let Some(options) = options {
-                let _ = self.game.native_level_send_particles(&options, None, at, spread, speed, count);
+                @@LEVEL_CALL(self.game; native_level_send_particles; &options, None, at, spread, speed, count)@@
             }
         }
         fn block_is(&mut self, pos: [i32; 3], tag: &str) -> bool {
@@ -1643,7 +1643,7 @@ fn {id}_use_item_on({params}) {
                         f64::from(target[1]) + 0.5,
                         f64::from(target[2]) + 0.5,
                     ];
-                    let _ = game.native_level_play_sound("minecraft:item.crop.plant", at, 4, 1.0, 1.0);
+                    @@LEVEL_CALL(game; native_level_play_sound; "minecraft:item.crop.plant", at, 4, 1.0, 1.0)@@
                     *claimed = true;
                 }
             }

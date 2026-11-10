@@ -29,7 +29,7 @@ use porter_map::{hooks, ledger};
 /// is the commit `data/horizon-hooks.json` was read from (Nightly 2026-11-05), so
 /// every hook a port uses is in it. The launcher builds a port on the Horizon the
 /// player plays when its hook points version is new enough; this is the fallback.
-pub const HORIZON_REVISION: &str = "66f3981f522b24c250b21523a70080965b940424";
+pub const HORIZON_REVISION: &str = "2ebf00a0281c592f79191e76fce0e7d522c6f425";
 pub const HORIZON_MIXINS_REVISION: &str = "d9c83d7096b7ea5b83678da2efdfd6161f74997e";
 
 /// A generated bundle: files by path relative to the output folder.
@@ -514,6 +514,7 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
     let mut files = BTreeMap::new();
     if native {
         let dir = format!("mixins/{id}");
+        let levels_by_ref = level_calls_take_a_level(horizon);
         files.insert("Cargo.toml".into(), ctx.cargo_toml());
         files.insert("compatibility.json".into(), compatibility_json(hooks));
         // Makes the folder an unpacked .hnmod that needs a hook points version
@@ -533,11 +534,11 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
         files.insert(format!("{dir}/runtime.rs"), ctx.runtime());
         for hook in wired.keys() {
             let (file, body) = ctx.helper(hook);
-            files.insert(format!("{dir}/{file}"), body);
+            files.insert(format!("{dir}/{file}"), level_calls(&body, levels_by_ref));
         }
         for (hook, uses) in &stubbed {
             if let Some((file, body)) = ctx.stub_helper(hook, uses) {
-                files.insert(format!("{dir}/{file}"), body);
+                files.insert(format!("{dir}/{file}"), level_calls(&body, levels_by_ref));
             }
         }
     }
@@ -2134,7 +2135,7 @@ fn {id}_block_entity_tick(
                     ParticleType::from_name(&kind).map(ParticleOptions::simple)
                 }};
                 if let Some(options) = options {{
-                    let _ = game.native_level_send_particles(&options, None, at, spread, speed, count);
+                    @@LEVEL_CALL(game; native_level_send_particles; &options, None, at, spread, speed, count)@@
                 }}
             }}
             m::Effect::Drop {{ item, count, at, motion }} => {{
@@ -2155,7 +2156,7 @@ fn {id}_block_entity_tick(
             }}
             m::Effect::Sound {{ sound, at, volume, pitch }} => {{
                 // SoundSource.BLOCKS
-                let _ = game.native_level_play_sound(&sound, at, 4, volume, pitch);
+                @@LEVEL_CALL(game; native_level_play_sound; &sound, at, 4, volume, pitch)@@
             }}
             m::Effect::SetState {{ key, value }} => {{
                 let _ = game.native_set_block_property_with(pos, &key, &value, 2);
@@ -3895,6 +3896,67 @@ fn block_tags(scan: &ModScan, content: &content::Content) -> Vec<(String, Vec<St
         // A tag of thousands of blocks (`mineable/pickaxe`) would swamp the module.
         .filter(|(_, blocks)| blocks.len() <= 400)
         .collect()
+}
+
+/// Whether Horizon's `Game::native_level_play_sound` and `native_level_send_particles`
+/// take the level first (`level: LevelRef`, since late 2026) or play in the level in
+/// place, read from Horizon's source (the one the launcher keeps). Without a source,
+/// the newer form.
+fn level_calls_take_a_level(horizon: Option<&Path>) -> bool {
+    let Some(root) = horizon else {
+        return true;
+    };
+    let dir = root.join("crates/horizon-client/src/game");
+    let mut files: Vec<PathBuf> = Vec::new();
+    if let Ok(entries) = fs::read_dir(&dir) {
+        files.extend(entries.flatten().map(|e| e.path()).filter(|p| {
+            p.extension().is_some_and(|e| e == "rs")
+                && p.file_name()
+                    .is_some_and(|n| n.to_string_lossy().starts_with("native_"))
+        }));
+    }
+    for file in files {
+        let Ok(text) = fs::read_to_string(&file) else {
+            continue;
+        };
+        if let Some(i) = text.find("fn native_level_play_sound(") {
+            let head: String = text[i..].chars().take(160).collect();
+            return head.contains("level: LevelRef");
+        }
+    }
+    true
+}
+
+/// `text` with each `@@LEVEL_CALL(game; method; args)@@` written as the call Horizon
+/// takes: with the level in place found first (`native_level`), or without.
+fn level_calls(text: &str, by_ref: bool) -> String {
+    const OPEN: &str = "@@LEVEL_CALL(";
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(i) = rest.find(OPEN) {
+        out.push_str(&rest[..i]);
+        let after = &rest[i + OPEN.len()..];
+        let Some(end) = after.find(")@@") else {
+            break;
+        };
+        let mut parts = after[..end].splitn(3, "; ");
+        let (game, method, args) = (
+            parts.next().unwrap_or(""),
+            parts.next().unwrap_or(""),
+            parts.next().unwrap_or(""),
+        );
+        if by_ref {
+            let _ = write!(
+                out,
+                "if let Some(level_here) = {game}.native_level({game}.native_dimension()) {{ let _ = {game}.{method}(level_here, {args}); }}"
+            );
+        } else {
+            let _ = write!(out, "let _ = {game}.{method}({args});");
+        }
+        rest = &after[end + 3..];
+    }
+    out.push_str(rest);
+    out
 }
 
 #[cfg(test)]

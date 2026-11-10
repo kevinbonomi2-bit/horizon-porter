@@ -1,5 +1,5 @@
 {
- "horizon": "66f3981f522b24c250b21523a70080965b940424",
+ "horizon": "2ebf00a0281c592f79191e76fce0e7d522c6f425",
  "hooks": [
   {
    "name": "frame",
@@ -8252,7 +8252,9 @@
    ],
    "returns": "",
    "doc": "Before an actual connection is discarded, not on a dimension change.",
-   "cites": []
+   "cites": [
+    "ClientPlayerNetworkEvent.LoggingOut"
+   ]
   },
   {
    "name": "client_stopping",
@@ -10376,6 +10378,27 @@
    "doc": "The acting player as the hook points name one:"
   },
   {
+   "name": "native_apply_screen_blur",
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_apply_screen_blur",
+   "generics": "",
+   "params": [
+    "&self"
+   ],
+   "returns": "bool",
+   "doc": "Requests vanilla's menu background blur for this frame, with a per-frame guard so blur is applied at most once per frame."
+  },
+  {
+   "name": "native_biome",
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_biome",
+   "generics": "",
+   "params": [
+    "&self",
+    "pos: [i32; 3]"
+   ],
+   "returns": "Option<String>",
+   "doc": "The biome at `pos` (`minecraft:plains`, a data pack's own), as `Level.getBiome` picks it through `BiomeManager`'s zoom:"
+  },
+  {
    "name": "native_block_drops",
    "target": "horizon_client::game::native_hooks::Game<'_>::native_block_drops",
    "generics": "",
@@ -10390,6 +10413,19 @@
    ],
    "returns": "",
    "doc": "The mods' say on a broken block's drops (`native_loot_drops`)."
+  },
+  {
+   "name": "native_boss_bar",
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_boss_bar",
+   "generics": "",
+   "params": [
+    "&mut self",
+    "uuid: u128",
+    "id: u128",
+    "bar: Option<&NativeBossBar>"
+   ],
+   "returns": "bool",
+   "doc": "Shows that player the boss bar `id` (any UUID the mod picks; a random one keeps clear of the world's bars) as `bar`, in place of what it showed before, or takes it away (None), as Bukkit's `BossBar.addPlayer`/`removePlayer`."
   },
   {
    "name": "native_camera_pose_now",
@@ -10468,6 +10504,30 @@
    "doc": "A native mod's own folder:"
   },
   {
+   "name": "native_default_state",
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_default_state",
+   "generics": "",
+   "params": [
+    "&self",
+    "block: &str"
+   ],
+   "returns": "Option<BlockStateId>",
+   "doc": "The default state of the block named `block`, `minecraft:air` or `mymod:cable` (`Block.defaultBlockState`), what `native_set_block` takes:"
+  },
+  {
+   "name": "native_draw_menu_background",
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_draw_menu_background",
+   "generics": "",
+   "params": [
+    "&self",
+    "batch: &mut HudBatch",
+    "rect: [f32; 4]",
+    "in_world: bool"
+   ],
+   "returns": "",
+   "doc": "`Screen.renderMenuBackground`:"
+  },
+  {
    "name": "native_energy_tables",
    "target": "horizon_client::game::native_hooks::Game<'_>::native_energy_tables",
    "generics": "",
@@ -10520,6 +10580,16 @@
    "doc": "The container slots (of `size`) that the mod's screen for the block at `pos` does not show:"
   },
   {
+   "name": "native_hud_mode",
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_hud_mode",
+   "generics": "",
+   "params": [
+    "&self"
+   ],
+   "returns": "HudMode",
+   "doc": "Effective HUD mode."
+  },
+  {
    "name": "native_hurt_enemy_event",
    "target": "horizon_client::game::native_hooks::Game<'_>::native_hurt_enemy_event",
    "generics": "",
@@ -10565,6 +10635,17 @@
    ],
    "returns": "Vec<NativeItemEntity>",
    "doc": "The item entities of the server level `dimension` whose box meets the box `min`..`max`, in the level's order:"
+  },
+  {
+   "name": "native_item_from_snbt",
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_item_from_snbt",
+   "generics": "",
+   "params": [
+    "&self",
+    "snbt: &str"
+   ],
+   "returns": "Option<ItemStack>",
+   "doc": "The stack an SNBT item compound stands for, as `/give` and the data packs write one (`{id:\"minecraft:diamond_sword\",count:1,components:"
   },
   {
    "name": "native_key_event",
@@ -10623,6 +10704,16 @@
    "doc": "A vanilla mapping (`key.forward`, `key.jump`, `key.attack`…):"
   },
   {
+   "name": "native_menu_blur_radius",
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_menu_blur_radius",
+   "generics": "",
+   "params": [
+    "&self"
+   ],
+   "returns": "f32",
+   "doc": "The user's configured menu background blur radius (`menuBackgroundBlurriness` in options.txt, usually 0.0 to 10.0; default 5.0)."
+  },
+  {
    "name": "native_minimap_now",
    "target": "horizon_client::game::native_hooks::Game<'_>::native_minimap_now",
    "generics": "",
@@ -10657,6 +10748,30 @@
    "doc": "A mouse button while playing, for `native_key`."
   },
   {
+   "name": "native_new_map",
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_new_map",
+   "generics": "",
+   "params": [
+    "&mut self",
+    "dimension: &str",
+    "colors: &[u8; 16384]"
+   ],
+   "returns": "Option<i32>",
+   "doc": "A new map of the world showing `colors` (128 x 128 `MapColor` ids times 4 plus the shade, row by row), scale 0, locked as a cartography table locks one (no exploring draws over it) and without player markers, of the level `dimension`:"
+  },
+  {
+   "name": "native_paint_map",
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_paint_map",
+   "generics": "",
+   "params": [
+    "&mut self",
+    "map_id: i32",
+    "colors: &[u8; 16384]"
+   ],
+   "returns": "bool",
+   "doc": "Replaces the whole picture of the world's map `map_id` (`MapCanvas` drawn for everyone):"
+  },
+  {
    "name": "native_panel_recipes",
    "target": "horizon_client::game::native_hooks::Game<'_>::native_panel_recipes",
    "generics": "",
@@ -10687,7 +10802,9 @@
    "generics": "",
    "params": [
     "&mut self",
-    "stack: &ItemStack"
+    "stack: &ItemStack",
+    "thrower: Option<[i32; 4]>",
+    "at: horizon_core::geometry::Vec3"
    ],
    "returns": "bool",
    "doc": "Whether a native mod keeps the acting player from taking `stack`."
@@ -10706,6 +10823,22 @@
    ],
    "returns": "bool",
    "doc": "Play a sound event for nearby players in this server level."
+  },
+  {
+   "name": "native_play_sound_to",
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_play_sound_to",
+   "generics": "",
+   "params": [
+    "&mut self",
+    "uuid: u128",
+    "sound: &str",
+    "category: &str",
+    "at: Option<[f64; 3]>",
+    "volume: f32",
+    "pitch: f32"
+   ],
+   "returns": "bool",
+   "doc": "Plays `sound` to that player alone, as Bukkit's `Player.playSound`:"
   },
   {
    "name": "native_players_leaving",
@@ -10877,6 +11010,47 @@
    "doc": "Queue particles in this authoritative level."
   },
   {
+   "name": "native_send_particles_to",
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_send_particles_to",
+   "generics": "",
+   "params": [
+    "&mut self",
+    "uuid: u128",
+    "options: &ParticleOptions",
+    "state: Option<BlockStateId>",
+    "at: [f64; 3]",
+    "spread: [f64; 3]",
+    "speed: f64",
+    "count: i32",
+    "force: bool"
+   ],
+   "returns": "bool",
+   "doc": "Shows particles to that player alone, as Bukkit's `Player.spawnParticle` and vanilla's `ServerLevel.sendParticles(player, ...)` (`/particle ..."
+  },
+  {
+   "name": "native_set_compass_target",
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_set_compass_target",
+   "generics": "",
+   "params": [
+    "&mut self",
+    "uuid: u128",
+    "target: Option<(&str, [i32; 3])>"
+   ],
+   "returns": "bool",
+   "doc": "Points that player's compass at `pos` in `dimension`, or at the world spawn again (None), as Bukkit's `Player.setCompassTarget`:"
+  },
+  {
+   "name": "native_set_hud_mode",
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_set_hud_mode",
+   "generics": "",
+   "params": [
+    "&mut self",
+    "mode: HudMode"
+   ],
+   "returns": "",
+   "doc": "Set HUD and hand visibility, including from the post-handling input notice."
+  },
+  {
    "name": "native_settings_event",
    "target": "horizon_client::game::native_hooks::Game<'_>::native_settings_event",
    "generics": "",
@@ -10966,6 +11140,48 @@
    ],
    "returns": "bool",
    "doc": "Whether a native mod's block `name` has a ticking block entity."
+  },
+  {
+   "name": "native_tiled_sprite",
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_tiled_sprite",
+   "generics": "",
+   "params": [
+    "&self",
+    "batch: &mut HudBatch",
+    "sprite: &str",
+    "rect: [f32; 4]",
+    "size: f32",
+    "argb: u32"
+   ],
+   "returns": "bool",
+   "doc": "Repeats sprite `sprite` across `rect` (`[x, y, w, h]` in GUI pixels) with each tile sized `size` GUI pixels square, tinted by `argb`."
+  },
+  {
+   "name": "native_title",
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_title",
+   "generics": "",
+   "params": [
+    "&mut self",
+    "uuid: u128",
+    "title: &Text",
+    "subtitle: &Text",
+    "fade_in: i32",
+    "stay: i32",
+    "fade_out: i32"
+   ],
+   "returns": "bool",
+   "doc": "Shows `title` and `subtitle` in the middle of that player's screen, as Adventure's `Audience.showTitle` and `/title`:"
+  },
+  {
+   "name": "native_transfer_recipe",
+   "target": "horizon_client::game::native_hooks::Game<'_>::native_transfer_recipe",
+   "generics": "",
+   "params": [
+    "&mut self",
+    "book_id: i32"
+   ],
+   "returns": "",
+   "doc": "Move ingredients for a viewer recipe into the open crafting grid."
   },
   {
    "name": "native_use_drops",

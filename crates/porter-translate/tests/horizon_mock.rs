@@ -346,6 +346,8 @@ pub mod first_person {
 }
 
 pub mod mod_api {
+    #[derive(Clone, Copy)]
+    pub struct LevelRef;
     pub struct NativeScreen {
         pub width: f32,
         pub height: f32,
@@ -686,7 +688,7 @@ __LEVEL_HOOKS__
             pub fn native_set_item_entity(&mut self, dimension: &str, id: u32, stack: ItemStack) -> bool { false }
             pub fn native_light(&self, pos: [i32; 3]) -> (u8, u8) { (0, 0) }
             pub fn native_data(&self, path: &str) -> Option<Vec<u8>> { None }
-            pub fn native_level_send_particles(&mut self, options: &ParticleOptions, state: Option<BlockStateId>, at: [f64; 3], spread: [f64; 3], speed: f64, count: i32) -> bool { false }
+            pub fn native_level_send_particles(&mut self, level: crate::mod_api::LevelRef, options: &ParticleOptions, state: Option<BlockStateId>, at: [f64; 3], spread: [f64; 3], speed: f64, count: i32) -> bool { false }
             pub fn native_set_block(&mut self, dimension: &str, pos: [i32; 3], state: BlockStateId, flags: i32) -> bool { false }
             pub fn native_edit_blocks(&mut self, dimension: &str, edit: &super::native_world_edit::NativeBlockEdit) -> Result<u64, String> { Ok(0) }
             pub fn native_acting_player(&self) -> Option<crate::mod_api::NativeServerPlayer> { None }
@@ -695,7 +697,8 @@ __LEVEL_HOOKS__
             pub fn native_block_property(&self, pos: [i32; 3], key: &str) -> Option<String> { None }
             pub fn native_set_block_property_with(&mut self, pos: [i32; 3], key: &str, value: &str, flags: i32) -> bool { false }
             // native_host_bridge.rs: Game's is `native_level_play_sound` (GameLevel has `native_play_sound`).
-            pub fn native_level_play_sound(&mut self, sound: &str, at: [f64; 3], source: usize, volume: f32, pitch: f32) -> bool { false }
+            pub fn native_level_play_sound(&mut self, level: crate::mod_api::LevelRef, sound: &str, at: [f64; 3], source: usize, volume: f32, pitch: f32) -> bool { false }
+            pub fn native_level(&self, dimension: &str) -> Option<crate::mod_api::LevelRef> { None }
         }
 
         impl Game<'_> {
