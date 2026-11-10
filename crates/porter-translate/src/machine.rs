@@ -480,6 +480,8 @@ pub enum Effect {
     SetState { key: String, value: String },
     /// `ExperienceOrb.award(level, pos, amount)`.
     Xp { at: [f64; 3], amount: u32 },
+    /// An entity spawned (`type.create(level, ..)`, `addFreshEntity`), a baby when `baby`.
+    Summon { kind: String, at: [f64; 3], baby: bool },
 }
 
 /// A dropped item in the world (`ItemEntity`), as `machine.dropped_in` finds it.
@@ -733,6 +735,17 @@ impl<'a> Machine<'a> {
         if amount > 0 {
             self.effects.push(Effect::Xp { at, amount });
         }
+    }
+
+    /// Spawns entity `kind` (`minecraft:bee`, a mod's own) at `at` after the tick
+    /// (`type.create(level, ..)`, `level.addFreshEntity(entity)`).
+    pub fn summon(&mut self, kind: &str, at: [f64; 3]) {
+        self.effects.push(Effect::Summon { kind: kind.to_string(), at, baby: false });
+    }
+
+    /// Spawns a baby `kind` at `at` after the tick (`setAge(-24000)`, `setBaby(true)`).
+    pub fn summon_baby(&mut self, kind: &str, at: [f64; 3]) {
+        self.effects.push(Effect::Summon { kind: kind.to_string(), at, baby: true });
     }
 
     /// Plays `sound` at `at` for the players near it after the tick (`level.playSound`,

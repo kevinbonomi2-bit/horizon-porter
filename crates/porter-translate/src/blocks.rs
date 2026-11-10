@@ -277,6 +277,13 @@ pub fn hooks(behaviours: &[Behaviour]) -> Vec<(&'static str, BTreeSet<String>)> 
                 .insert(b.class.clone());
         }
     }
+    // What a tick spawns appears once the level's tick is over.
+    if behaviours
+        .iter()
+        .any(|b| matches!(b.kind, Kind::RandomTick | Kind::Tick))
+    {
+        out.entry("level_tick_post").or_default();
+    }
     out.into_iter().collect()
 }
 
@@ -536,7 +543,7 @@ pub fn runtime(
                     "what a right click on its blocks does: read and change blocks through\n/// `world`, and return true where Java returns `SUCCESS` or `CONSUME`, false for `PASS`.\n/// Where Java opens a menu (`player.openMenu(..)`), return false: the click goes on to\n/// the block's template (a barrel, a furnace), which opens the block's menu itself; true\n/// would stop it"
                 }
                 Kind::Shape => {
-                    "the state its blocks take as a neighbour changes: return the properties\n/// Java's `updateShape` changes (`state.setValue(..)`), or None to keep the state"
+                    "the state its blocks take as a neighbour changes: return the properties\n/// Java's `updateShape` changes (`state.setValue(..)`), or None to keep the state.\n/// Where Java returns `Blocks.AIR.defaultBlockState()` (it can't stay), return\n/// `Some(vec![(REMOVE.into(), String::new())])`: the block breaks, with its drops. Where\n/// Java schedules a tick of the block (`scheduledTickAccess.scheduleTick(pos, this, n)`),\n/// add `(TICK_IN.into(), n.to_string())` to what it returns. A waterlogged block's water\n/// tick (`scheduleTick(pos, Fluids.WATER, ..)`) is scheduled for it: leave it out, it is\n/// not missing"
                 }
                 Kind::ItemUseOn => {
                     "what its items do used on a block (`u.on`): read and change blocks and\n/// the stack in hand through `world`, and return true where Java returns `SUCCESS` or\n/// `CONSUME`, false for `PASS` (the item's `use` runs next)"
@@ -560,7 +567,7 @@ pub fn runtime(
                     "what its blocks do once a player placed them (`setPlacedBy`, and\n/// `onPlace` for that placement): change blocks, block entities and the stack through\n/// `world`; the return value is unused (return true where Java did anything).\n/// Placements by other means (a dispenser, a command) don't come here"
                 }
                 Kind::Destroyed => {
-                    "what its blocks do as a player breaks them (`playerWillDestroy`,\n/// `playerDestroy`, `affectNeighborsAfterRemoval`): change blocks and block entities\n/// through `world` (a door's other half, a bed's head, its items dropped with\n/// `world.drop`). It runs before the block is removed, for all three; the return\n/// value is unused. Blocks removed by other means don't come here"
+                    "what its blocks do as a player breaks them (`playerWillDestroy`,\n/// `playerDestroy`, `affectNeighborsAfterRemoval`): change blocks and block entities\n/// through `world` (a door's other half, a bed's head, its items dropped with\n/// `world.drop`). It runs before the block is removed, for all three; the return\n/// value is unused. The block's own loot drops afterwards as for any block\n/// (`super.playerDestroy`): that is not missing. Blocks removed by other means don't\n/// come here"
                 }
                 Kind::Neighbour => {
                     "what its blocks do when a block beside them changes (`neighborChanged`): a
@@ -679,6 +686,7 @@ pub fn helper(
         "update_shape" => ("update_shape.rs", SHAPE_HELPER),
         "random_tick" => ("random_tick.rs", TICK_HELPER),
         "tick_block" => ("tick_block.rs", TICK_HELPER),
+        "level_tick_post" => ("level_tick_post.rs", SPAWN_HELPER),
         "can_survive" => ("can_survive.rs", SURVIVE_HELPER),
         "has_analog_output" => ("has_analog_output.rs", HAS_ANALOG_HELPER),
         "analog_output" => ("analog_output.rs", ANALOG_HELPER),
@@ -841,8 +849,48 @@ const LEVEL_WORLD: &str = r#"    // The server level as the block's code changes
         fn schedule_tick(&mut self, pos: [i32; 3], block: &str, delay: i32) -> bool {
             self.game.native_schedule_block_tick(self.ticks, pos, block, delay)
         }
+        fn spawn(&mut self, spawn: &m::Spawn) -> bool {
+            m::queue_spawn(spawn.clone());
+            true
+        }
+        fn block_particles(&mut self, block: &str, at: [f64; 3], spread: [f64; 3], speed: f64, count: i32) {
+            let state = self.game.registry.default_state(block);
+            if let Some(options) = ParticleType::from_name("block").map(ParticleOptions::simple) {
+                let _ = self.game.native_send_particles(&options, state, at, spread, speed, count);
+            }
+        }
+        fn break_effect(&mut self, pos: [i32; 3], block: &str) {
+            let at = [f64::from(pos[0]) + 0.5, f64::from(pos[1]) + 0.5, f64::from(pos[2]) + 0.5];
+            self.block_particles(block, at, [0.25, 0.25, 0.25], 0.05, 30);
+        }
+        fn sound_at(&mut self, sound: &str, at: [f64; 3], volume: f32, pitch: f32) {
+            let _ = self.game.native_play_sound(sound, at, 4, volume, pitch);
+        }
     }
 {level_entities}"#;
+
+const SPAWN_HELPER: &str = r#"// The entities {name}'s block ticks asked for (an egg hatching in its `randomTick`): a
+// tick's level can't spawn, so they waited in runtime.rs until the level's tick was over.
+fn {id}_level_tick_post({params}) {
+    use crate::game::{m} as m;
+    use horizon_world::nbt::{Compound, Tag};
+    for spawn in m::take_spawns() {
+        let mut nbt = Compound::new();
+        if spawn.baby {
+            nbt.insert("Age".into(), Tag::Int(-24000));
+            // A hostile kind's own flag (`Zombie.setBaby`).
+            nbt.insert("IsBaby".into(), Tag::Byte(1));
+        }
+        if spawn.velocity != [0.0; 3] {
+            nbt.insert(
+                "Motion".into(),
+                Tag::List(spawn.velocity.iter().map(|v| Tag::Double(v.to_bits())).collect()),
+            );
+        }
+        let _ = game.native_summon(dimension, &spawn.kind, spawn.at, nbt);
+    }
+}
+"#;
 
 const LEVEL_ENTITIES: &str = r#"    impl m::BlockEntities for Level<'_, '_, '_> {
         fn entity(&mut self, pos: [i32; 3]) -> Option<m::EntityValues> {
@@ -1159,17 +1207,43 @@ const ITEM_WORLD: &str = r#"{tags}    struct Here<'g, 'a> {
             let (a, b) = self.game.native_light(pos);
             a.max(b)
         }
+        fn sky_light(&self, pos: [i32; 3]) -> u8 {
+            self.game.native_light(pos).1
+        }
+        fn block_light(&self, pos: [i32; 3]) -> u8 {
+            self.game.native_light(pos).0
+        }
         fn sturdy(&self, pos: [i32; 3], face: &str) -> bool {
             m::boxes_fill_face(&self.game.native_block_collision(pos), face)
         }
     }
     impl m::World for Here<'_, '_> {
-        fn summon(&mut self, kind: &str, at: [f64; 3]) -> bool {
+        fn spawn(&mut self, spawn: &m::Spawn) -> bool {
+            use horizon_world::nbt::{Compound, Tag};
             self.changed = true;
+            let mut nbt = Compound::new();
+            if spawn.baby {
+                nbt.insert("Age".into(), Tag::Int(-24000));
+                // A hostile kind's own flag (`Zombie.setBaby`).
+                nbt.insert("IsBaby".into(), Tag::Byte(1));
+            }
+            if spawn.velocity != [0.0; 3] {
+                nbt.insert(
+                    "Motion".into(),
+                    Tag::List(spawn.velocity.iter().map(|v| Tag::Double(v.to_bits())).collect()),
+                );
+            }
             let dimension = self.game.native_dimension();
-            self.game
-                .native_summon(dimension, kind, at, horizon_world::nbt::Compound::new())
-                .is_some()
+            self.game.native_summon(dimension, &spawn.kind, spawn.at, nbt).is_some()
+        }
+        fn block_particles(&mut self, block: &str, at: [f64; 3], spread: [f64; 3], speed: f64, count: i32) {
+            let state = self.game.pack.assets.registry.default_state(block);
+            if let Some(options) = ParticleType::from_name("block").map(ParticleOptions::simple) {
+                @@LEVEL_CALL(self.game; native_level_send_particles; &options, state, at, spread, speed, count)@@
+            }
+        }
+        fn sound_at(&mut self, sound: &str, at: [f64; 3], volume: f32, pitch: f32) {
+            @@LEVEL_CALL(self.game; native_level_play_sound; sound, at, self.source, volume, pitch)@@
         }
         fn level_event(&mut self, id: i32, pos: [i32; 3], data: i32) {
             let _ = data;
@@ -1924,7 +1998,7 @@ const SHAPE_HELPER: &str = r#"// {name}'s blocks that change with their neighbou
 // `update_shape` gives the properties that change; left empty, the template's rule runs.
 fn {id}_update_shape({params}) {
     use crate::game::{m} as m;
-    let _ = (ticks, dimension);
+    let _ = dimension;
     if new.is_some() {
         return;
     }
@@ -1994,8 +2068,21 @@ fn {id}_update_shape({params}) {
     let Some(set) = m::update_shape(&update, &Level { game }) else {
         return;
     };
+    let at = [pos.x, pos.y, pos.z];
+    // Java returned air: the block breaks, with its drops.
+    if set.iter().any(|(k, _)| k == m::REMOVE) {
+        if let Some(air) = game.registry.default_state("minecraft:air") {
+            *new = Some(air);
+        }
+        return;
+    }
     let mut shaped = *state;
     for (key, value) in set {
+        // A tick of the block Java scheduled (`scheduledTickAccess.scheduleTick`).
+        if key == m::TICK_IN {
+            let _ = game.native_schedule_block_tick(ticks, at, block, value.parse().unwrap_or(1));
+            continue;
+        }
         let value = if key == "facing" {
             m::stored_facing(block, &value)
         } else {
@@ -2004,6 +2091,11 @@ fn {id}_update_shape({params}) {
         if let Some(next) = game.native_state_with_property(shaped, &key, &value) {
             shaped = next;
         }
+    }
+    // A waterlogged block's water flows on (`scheduleTick(pos, Fluids.WATER, ..)`): the
+    // template's own rule, which doesn't run now, would have scheduled it.
+    if game.native_state_with_property(shaped, "waterlogged", "true") == Some(shaped) {
+        let _ = game.native_schedule_fluid_tick(ticks, at, "minecraft:water", 5);
     }
     *new = Some(shaped);
 }
@@ -2060,6 +2152,16 @@ pub trait Blocks {
     fn sees_sky(&self, pos: [i32; 3]) -> bool {
         let _ = pos;
         true
+    }
+    /// The sky's light alone at `pos`, 0 to 15 (`level.getBrightness(LightLayer.SKY,
+    /// pos)`). `light` where Horizon doesn't tell them apart.
+    fn sky_light(&self, pos: [i32; 3]) -> u8 {
+        self.light(pos)
+    }
+    /// The blocks' light alone at `pos`, 0 to 15 (`level.getBrightness(LightLayer.BLOCK,
+    /// pos)`): torches and the like.
+    fn block_light(&self, pos: [i32; 3]) -> u8 {
+        self.light(pos)
     }
     /// The light at `pos`, 0 to 15 (`level.getRawBrightness(pos, 0)`,
     /// `getMaxLocalRawBrightness(pos)`): the brighter of the sky's and the blocks'. 15
@@ -2281,6 +2383,17 @@ pub trait World: Blocks {
     fn particles(&mut self, kind: &str, at: [f64; 3], spread: [f64; 3], speed: f64, count: i32) {
         let _ = (kind, at, spread, speed, count);
     }
+    /// Sends particles of `block`'s own look (`new BlockParticleOption(ParticleTypes.BLOCK,
+    /// state)`): the bits a block throws off as it is cut, dug or worked.
+    fn block_particles(&mut self, block: &str, at: [f64; 3], spread: [f64; 3], speed: f64, count: i32) {
+        let _ = (block, at, spread, speed, count);
+    }
+    /// Plays `sound` at `at`, world coordinates (`level.playSound(null, x, y, z, ..)`,
+    /// at a player's or an entity's own position rather than a block's middle).
+    fn sound_at(&mut self, sound: &str, at: [f64; 3], volume: f32, pitch: f32) {
+        let pos = [at[0].floor() as i32, at[1].floor() as i32, at[2].floor() as i32];
+        self.play_sound(sound, pos, volume, pitch);
+    }
     /// Schedules a tick of `block` at `pos` in `delay` game ticks
     /// (`level.scheduleTick(pos, this, delay)`): its class's `tick` function runs then.
     /// False where it can't be scheduled (off the server level).
@@ -2296,7 +2409,24 @@ pub trait World: Blocks {
     /// Spawns entity `kind` (`minecraft:bee`, a mod's `naturalist:snail`) at `at`
     /// (`type.spawn(level, pos, ..)`, `level.addFreshEntity(entity)`). True when it did.
     fn summon(&mut self, kind: &str, at: [f64; 3]) -> bool {
-        let _ = (kind, at);
+        self.spawn(&Spawn { kind: kind.to_string(), at, ..Spawn::default() })
+    }
+    /// Spawns a baby `kind` at `at`: an egg hatching (`type.create(level, BREEDING)`,
+    /// `setAge(-24000)` or `setBaby(true)`, `addFreshEntity`). True when it did.
+    fn summon_baby(&mut self, kind: &str, at: [f64; 3]) -> bool {
+        self.spawn(&Spawn { kind: kind.to_string(), at, baby: true, ..Spawn::default() })
+    }
+    /// Spawns `kind` at `at` moving at `velocity`, blocks a tick: something thrown or
+    /// shot (`projectile.shoot(..)`, `shootFromRotation`, `setDeltaMovement` before
+    /// `addFreshEntity`). A throw along a use's look at speed 1.5 is
+    /// `[u.look[0] * 1.5, u.look[1] * 1.5, u.look[2] * 1.5]` from `u.eye`.
+    fn launch(&mut self, kind: &str, at: [f64; 3], velocity: [f64; 3]) -> bool {
+        self.spawn(&Spawn { kind: kind.to_string(), at, velocity, ..Spawn::default() })
+    }
+    /// What `summon`, `summon_baby` and `launch` do. In a block's tick the entity
+    /// appears once the level's tick is over.
+    fn spawn(&mut self, spawn: &Spawn) -> bool {
+        let _ = spawn;
         false
     }
     /// `level.levelEvent(id, pos, data)`: one of vanilla's sound-and-particle events
@@ -2573,6 +2703,47 @@ pub struct Placement {
 /// Java's `getStateForPlacement` returning `null` does: `Some(vec![(CANCEL.into(),
 /// String::new())])`.
 pub const CANCEL: &str = "!cancel";
+
+/// What a shape function returns, as the only property, where Java's `updateShape`
+/// returns `Blocks.AIR.defaultBlockState()` (the block can't stay): the block breaks,
+/// with its drops. `Some(vec![(REMOVE.into(), String::new())])`.
+pub const REMOVE: &str = "!remove";
+
+/// What a shape function adds to what it returns where Java schedules a tick of the
+/// block (`scheduledTickAccess.scheduleTick(pos, this, delay)`): `(TICK_IN.into(),
+/// delay.to_string())`. Alone, the state is kept and the tick scheduled.
+pub const TICK_IN: &str = "!tick";
+
+/// An entity to spawn: what `World::summon`, `summon_baby` and `launch` ask for.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Spawn {
+    /// `minecraft:bee`, a mod's `naturalist:snail`.
+    pub kind: String,
+    pub at: [f64; 3],
+    /// A baby (`setAge(-24000)`, `setBaby(true)`).
+    pub baby: bool,
+    /// Its speed, blocks a tick (`setDeltaMovement`, `shoot`).
+    pub velocity: [f64; 3],
+}
+
+// Entities a block's tick asked for. A tick's level can't spawn, so they wait here until
+// the level's tick is over.
+static SPAWNS: std::sync::Mutex<Vec<Spawn>> = std::sync::Mutex::new(Vec::new());
+
+/// Keeps `spawn` for the end of the level's tick.
+pub fn queue_spawn(spawn: Spawn) {
+    if let Ok(mut waiting) = SPAWNS.lock() {
+        // A tick that asks for more than a few hundred has gone wrong.
+        if waiting.len() < 512 {
+            waiting.push(spawn);
+        }
+    }
+}
+
+/// The entities block ticks asked for since the last call.
+pub fn take_spawns() -> Vec<Spawn> {
+    SPAWNS.lock().map(|mut w| std::mem::take(&mut *w)).unwrap_or_default()
+}
 
 impl Placement {
     /// The way the placer looks, flat (`getHorizontalDirection`, Java's

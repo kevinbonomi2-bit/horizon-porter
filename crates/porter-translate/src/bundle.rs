@@ -2174,6 +2174,15 @@ fn {id}_block_entity_tick(
                 nbt.insert(JavaString::from("Value"), Tag::Short(amount.min(32767) as i16));
                 let _ = game.native_summon(&dimension_here, "minecraft:experience_orb", at, nbt);
             }}
+            m::Effect::Summon {{ kind, at, baby }} => {{
+                use horizon_world::nbt::{{Compound, Tag}};
+                let mut nbt = Compound::new();
+                if baby {{
+                    nbt.insert(JavaString::from("Age"), Tag::Int(-24000));
+                    nbt.insert(JavaString::from("IsBaby"), Tag::Byte(1));
+                }}
+                let _ = game.native_summon(&dimension_here, &kind, at, nbt);
+            }}
         }}
     }}
     // Only a change touches the entity: each write marks it for saving and sending.
@@ -2744,6 +2753,7 @@ fn {id}_menu_quick_move(
             | "use_item"
             | "random_tick"
             | "tick_block"
+            | "level_tick_post"
             | "can_survive"
             | "has_analog_output"
             | "analog_output"

@@ -135,10 +135,43 @@ const REACHES: &[(u32, &[&str])] = &[
             "sky",
         ],
     ),
+    // A shape update that removes the block or schedules a tick, spawning from a
+    // block's tick and a block entity's, babies, thrown things, a block's own
+    // particles, sounds at a point, the sky's and the blocks' light apart.
+    (
+        4,
+        &[
+            "blocks.air",
+            "into air",
+            "minecraft:air",
+            "removal",
+            "block change, not a property",
+            "scheduledtickaccess",
+            "schedule a tick",
+            "scheduled-tick",
+            "spawn",
+            "summon",
+            "addfreshentity",
+            ".create(",
+            "entity api",
+            "entity creation",
+            "setage",
+            "baby",
+            "velocity",
+            "projectile",
+            "thrown",
+            "blockparticleoption",
+            "block particle",
+            "block-particle",
+            "needs the block state",
+            "takes a block position",
+            "lightlayer",
+        ],
+    ),
 ];
 
 /// The newest line of `REACHES`.
-pub const REACH: u32 = 3;
+pub const REACH: u32 = 4;
 
 /// Whether a function ported at reach `at`, whose port says `notes` were out of reach,
 /// is worth porting again now.
@@ -995,6 +1028,14 @@ mod tests {
             "// Missing: `level.levelEvent(2001, pos, id)`."
         ));
         assert!(!reach_grew_for(2, "// Missing: `isFaceSturdy`."));
+        assert!(reach_grew_for(
+            3,
+            "// Missing: returning `Blocks.AIR` is a block removal."
+        ));
+        assert!(!reach_grew_for(
+            3,
+            "// Missing: `level.levelEvent(2001, pos, id)`."
+        ));
     }
 
     #[test]

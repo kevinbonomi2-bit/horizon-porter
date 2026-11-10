@@ -106,6 +106,18 @@ code can also show an action-bar line and break a block with its drops, and a pl
 knows the item in the placer's hand. A block that always holds water in Java (rice,
 a `LiquidBlockContainer`) keeps its water.
 
+It can spawn entities too (`world.summon`, a baby with `summon_baby`, something thrown
+with `launch`): from a click or an item at once, from a block's tick once the level's
+tick is over (an egg hatching). A use knows where the player stands, their eyes and the
+way they look. A block whose Java `updateShape` returns air breaks, with its drops, and
+one that schedules a tick there gets its tick.
+
+The mod's **entity types** come over as content: a mob copies the vanilla mob it is most
+like (a zombie, a villager, or a neutral wandering trader) with its own attributes, and a
+thrown item (`ThrowableItemProjectile`) becomes Horizon's thrown type, drawn as its item
+and thrown by using it. Other projectiles and vehicles are left out and listed in
+PORTING.md.
+
 Each **block entity** becomes a state struct in `runtime.rs`, saved with its block
 under the keys `saveAdditional` writes, plus a `tick_<name>` stub for its Java tick.
 Horizon's `native_block_entity` hooks give the blocks their block entity and run the

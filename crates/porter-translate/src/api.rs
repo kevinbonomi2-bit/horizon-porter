@@ -213,13 +213,18 @@ fn lib_rs(
     if plants {
         r.push_str(PLANT_FN);
     }
-    r.push_str(&register(entities, plants, particles));
+    r.push_str(&register(
+        entities,
+        plants,
+        particles,
+        has(Kind::RandomTick) || has(Kind::Tick) || has(Kind::Neighbour),
+    ));
     r
 }
 
 /// The mod's `Hooks`: its parts attached at registration, its block entity types
 /// declared with their blocks, and their containers.
-fn register(entities: bool, plants: bool, particles: &[String]) -> String {
+fn register(entities: bool, plants: bool, particles: &[String], ticks: bool) -> String {
     let mut r = String::from(
         "
 #[derive(Default)]
@@ -294,6 +299,20 @@ impl Hooks for Mod {
         "    }
 ",
     );
+    if ticks {
+        r.push_str(
+            "
+    // The entities block ticks asked for (an egg hatching): a tick's level can't spawn,
+    // so they waited in runtime.rs until the level's tick was over.
+    fn level_tick_post(&self, host: &mut dyn ServerHost, event: &mut mod_api::LevelTickPostEvent<'_>) {
+        for spawn in runtime::take_spawns() {
+            let nbt = spawn_nbt(spawn.baby, spawn.velocity);
+            let _ = host.summon(event.dimension, &spawn.kind, spawn.at, nbt);
+        }
+    }
+",
+        );
+    }
     if entities {
         r.push_str(
             "
@@ -582,6 +601,31 @@ impl runtime::Blocks for Read<'_> {
     fn light(&self, pos: [i32; 3]) -> u8 {
         self.level.raw_brightness(pos, 0).clamp(0, 15) as u8
     }
+    fn sky_light(&self, pos: [i32; 3]) -> u8 {
+        self.level.brightness(mod_api::LightLayer::Sky, pos).clamp(0, 15) as u8
+    }
+    fn block_light(&self, pos: [i32; 3]) -> u8 {
+        self.level.brightness(mod_api::LightLayer::Block, pos).clamp(0, 15) as u8
+    }
+}
+
+/// The data an entity spawns with: a baby's age, a thrown thing's speed.
+#[allow(dead_code)]
+fn spawn_nbt(baby: bool, velocity: [f64; 3]) -> mod_api::Compound {
+    use mod_api::Tag;
+    let mut nbt = mod_api::Compound::new();
+    if baby {
+        nbt.insert("Age".into(), Tag::Int(-24000));
+        // A hostile kind's own flag (`Zombie.setBaby`).
+        nbt.insert("IsBaby".into(), Tag::Byte(1));
+    }
+    if velocity != [0.0; 3] {
+        nbt.insert(
+            "Motion".into(),
+            Tag::List(velocity.iter().map(|v| Tag::Double(v.to_bits())).collect()),
+        );
+    }
+    nbt
 }
 "#;
 
@@ -649,6 +693,16 @@ impl runtime::Blocks for Here<'_> {
         };
         let of = |layer| level.brightness(&*self.host, layer, pos).unwrap_or(0);
         of(mod_api::LightLayer::Sky).max(of(mod_api::LightLayer::Block)).clamp(0, 15) as u8
+    }
+    fn sky_light(&self, pos: [i32; 3]) -> u8 {
+        self.level
+            .and_then(|l| l.brightness(&*self.host, mod_api::LightLayer::Sky, pos))
+            .map_or(15, |v| v.clamp(0, 15) as u8)
+    }
+    fn block_light(&self, pos: [i32; 3]) -> u8 {
+        self.level
+            .and_then(|l| l.brightness(&*self.host, mod_api::LightLayer::Block, pos))
+            .map_or(0, |v| v.clamp(0, 15) as u8)
     }
 }
 
@@ -786,8 +840,22 @@ impl runtime::World for Here<'_> {
             let _ = level.award_experience(self.host, at[0], at[1], at[2], amount);
         }
     }
-    fn summon(&mut self, kind: &str, at: [f64; 3]) -> bool {
-        self.host.summon(self.dimension, kind, at, mod_api::Compound::new()).is_some()
+    fn spawn(&mut self, spawn: &runtime::Spawn) -> bool {
+        let nbt = spawn_nbt(spawn.baby, spawn.velocity);
+        self.host.summon(self.dimension, &spawn.kind, spawn.at, nbt).is_some()
+    }
+    fn block_particles(&mut self, block: &str, at: [f64; 3], spread: [f64; 3], speed: f64, count: i32) {
+        let (Some(level), Some(key)) = (self.level, particle("block")) else {
+            return;
+        };
+        let state = self.host.block_state_id(block);
+        let options = mod_api::ParticleOptions::simple(key);
+        let _ = level.send_particles(self.host, &options, state, at, spread, speed, count);
+    }
+    fn sound_at(&mut self, sound: &str, at: [f64; 3], volume: f32, pitch: f32) {
+        if let Some(level) = self.level {
+            let _ = level.play_sound(self.host, sound, at, mod_api::SoundSource::Blocks, volume, pitch);
+        }
     }
     fn level_event(&mut self, id: i32, pos: [i32; 3], data: i32) {
         if let Some(level) = self.level {
@@ -852,6 +920,12 @@ impl runtime::Blocks for Level<'_> {
     fn light(&self, pos: [i32; 3]) -> u8 {
         runtime::Blocks::light(&Read { level: &*self.level }, pos)
     }
+    fn sky_light(&self, pos: [i32; 3]) -> u8 {
+        runtime::Blocks::sky_light(&Read { level: &*self.level }, pos)
+    }
+    fn block_light(&self, pos: [i32; 3]) -> u8 {
+        runtime::Blocks::block_light(&Read { level: &*self.level }, pos)
+    }
 }
 
 impl runtime::World for Level<'_> {
@@ -900,6 +974,34 @@ impl runtime::World for Level<'_> {
     }
     fn powered(&mut self, pos: [i32; 3]) -> bool {
         self.level.has_neighbor_signal(pos)
+    }
+    fn particles(&mut self, kind: &str, at: [f64; 3], spread: [f64; 3], speed: f64, count: i32) {
+        if let Some(key) = particle(kind) {
+            let options = mod_api::ParticleOptions::simple(key);
+            let _ = self.level.send_particles(&options, None, at, spread, speed, count);
+        }
+    }
+    fn block_particles(&mut self, block: &str, at: [f64; 3], spread: [f64; 3], speed: f64, count: i32) {
+        if let Some(key) = particle("block") {
+            let state = self.level.block_state_id(block);
+            let options = mod_api::ParticleOptions::simple(key);
+            let _ = self.level.send_particles(&options, state, at, spread, speed, count);
+        }
+    }
+    fn break_effect(&mut self, pos: [i32; 3], block: &str) {
+        let at = [f64::from(pos[0]) + 0.5, f64::from(pos[1]) + 0.5, f64::from(pos[2]) + 0.5];
+        runtime::World::block_particles(self, block, at, [0.25, 0.25, 0.25], 0.05, 30);
+    }
+    fn level_event(&mut self, id: i32, pos: [i32; 3], data: i32) {
+        let _ = self.level.level_event(id, pos, data);
+    }
+    fn sound_at(&mut self, sound: &str, at: [f64; 3], volume: f32, pitch: f32) {
+        let _ = self.level.play_sound(sound, at, 4, volume, pitch);
+    }
+    // A tick's level can't spawn: the entity appears once the level's tick is over.
+    fn spawn(&mut self, spawn: &runtime::Spawn) -> bool {
+        runtime::queue_spawn(spawn.clone());
+        true
     }
 }
 "#;
@@ -971,7 +1073,26 @@ const PART_SHAPE: &str = r#"    fn update_shape(
             neighbour_properties: neighbour_props,
         };
         let set = runtime::update_shape(&u, &Read { level: reader })?;
-        Some(apply(reader, event.state, &set))
+        let at = [event.pos.x, event.pos.y, event.pos.z];
+        // Java returned air: the block breaks, with its drops.
+        if set.iter().any(|(k, _)| k == runtime::REMOVE) {
+            return level.block_state_id("minecraft:air");
+        }
+        // A tick of the block Java scheduled (`scheduledTickAccess.scheduleTick`).
+        for (_, delay) in set.iter().filter(|(k, _)| k == runtime::TICK_IN) {
+            let _ = level.schedule_block_tick(at, event.state.block(), delay.parse().unwrap_or(1));
+        }
+        let set: Vec<(String, String)> = set.into_iter().filter(|(k, _)| k != runtime::TICK_IN).collect();
+        let shaped = {
+            let reader: &dyn LevelHost = &*level;
+            apply(reader, event.state, &set)
+        };
+        // A waterlogged block's water flows on (`scheduleTick(pos, Fluids.WATER, ..)`): the
+        // template's own rule, which doesn't run now, would have scheduled it.
+        if level.state_with_property(shaped, "waterlogged", "true") == Some(shaped) {
+            let _ = level.schedule_fluid_tick(at, "minecraft:water", 5);
+        }
+        Some(shaped)
     }
 
 "#;
@@ -1643,6 +1764,9 @@ impl mod_api::BlockEntityPart for PortedEntity {
                     if let Some(level) = level {
                         let _ = level.award_experience(host, at[0], at[1], at[2], amount);
                     }
+                }
+                runtime::Effect::Summon { kind, at, baby } => {
+                    let _ = host.summon(dimension, &kind, at, spawn_nbt(baby, [0.0; 3]));
                 }
                 runtime::Effect::SetState { key, value } => {
                     let mut now = props.clone();

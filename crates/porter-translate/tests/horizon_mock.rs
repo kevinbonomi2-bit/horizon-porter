@@ -605,6 +605,7 @@ pub mod game {
             pub fn native_play_sound(&mut self, sound: &str, at: [f64; 3], source: usize, volume: f32, pitch: f32) -> bool { false }
             pub fn native_send_particles(&mut self, options: &ParticleOptions, state: Option<BlockStateId>, at: [f64; 3], spread: [f64; 3], speed: f64, count: i32) -> bool { false }
             pub fn native_schedule_block_tick(&self, ticks: &mut Ticks, pos: [i32; 3], block: &str, delay: i32) -> bool { false }
+            pub fn native_schedule_fluid_tick(&self, ticks: &mut Ticks, pos: [i32; 3], fluid: &str, delay: i32) -> bool { false }
             pub fn native_level_random(&mut self) -> Option<&mut crate::horizon_core::random::LegacyRandom> { None }
         }
 
@@ -862,9 +863,16 @@ fn block_behaviour_helpers_compile_against_horizon_api() {
         "place_block",
         "destroy_block",
         "item_tooltip",
+        // What a tick spawns appears once the level's tick is over.
+        "level_tick_post",
     ] {
         assert!(b.wired.contains_key(hook), "{hook}: {:?}", b.wired.keys());
     }
+    assert!(b.files["mixins/shutters/level_tick_post.rs"].contains("m::take_spawns()"));
+    // A shape update can remove the block, schedule its tick, and keeps its water flowing.
+    let shape = &b.files["mixins/shutters/update_shape.rs"];
+    assert!(shape.contains("m::REMOVE") && shape.contains("m::TICK_IN"));
+    assert!(shape.contains("native_schedule_fluid_tick"));
     let runtime = &b.files["mixins/shutters/runtime.rs"];
     // The gate places and opens as the shutter it extends does, and joins
     // its neighbour by its own updateShape.

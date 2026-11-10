@@ -735,6 +735,8 @@ pub fn generate_with(
     // default attributes. Horizon's templates are a zombie (hostile), a wandering
     // trader (neutral, all goals) and a villager.
     let mut seen_mobs = BTreeSet::new();
+    // Horizon takes one thrown type per item.
+    let mut thrown_items = BTreeSet::new();
     for reg in scan
         .registrations
         .iter()
@@ -747,6 +749,23 @@ pub fn generate_with(
             continue;
         }
         let class = reg.creates.as_deref().and_then(class_of);
+        // Something thrown that flies as an item (a rotten tomato, a mod's egg): Horizon's
+        // thrown item type, a snowball drawn as the mod's item. Using the item throws it.
+        if let Some(item) = thrown_item(scan, name, reg, class.as_deref())
+            .filter(|item| thrown_items.insert(item.clone()))
+        {
+            content.files.insert(
+                format!("data/{ns}/horizon/entity_type/{name}.json"),
+                pretty(&serde_json::json!({
+                    "template": "minecraft:snowball",
+                    "item": format!("{ns}:{item}"),
+                })),
+            );
+            content.entities.push(format!(
+                "{ns}:{name} (minecraft:snowball, thrown as {ns}:{item})"
+            ));
+            continue;
+        }
         let Some((template, attributes_allowed)) = mob_template(scan, reg, class.as_deref()) else {
             content.skipped.push(format!(
                 "entity `{name}`: not a mob Horizon has a template for (projectiles, vehicles and others are left out)"
@@ -2593,21 +2612,7 @@ fn mob_template(
         "minecraft:movement_speed",
         "minecraft:armor",
     ];
-    // Its classes, up to the first vanilla one.
-    let mut chain: Vec<String> = Vec::new();
-    let mut next = class.map(str::to_string).or_else(|| reg.creates.clone());
-    while let Some(name) = next.take() {
-        let simple = name.rsplit('.').next().unwrap_or(&name).to_string();
-        chain.push(simple);
-        if chain.len() > 12 {
-            break;
-        }
-        next = scan
-            .classes
-            .iter()
-            .find(|c| c.name == name)
-            .and_then(|c| c.superclass.clone());
-    }
+    let chain = class_chain(scan, reg, class);
     let any = |words: &[&str]| chain.iter().any(|c| words.iter().any(|w| c.contains(w)));
     if any(&[
         "Projectile",
@@ -2648,8 +2653,78 @@ fn mob_template(
             "AmbientCreature",
             "WaterAnimal",
             "Mob",
+            "Golem",
+            "Fish",
+            "Squid",
+            "Horse",
         ]);
     creature.then_some(("minecraft:wandering_trader", OTHER))
+}
+
+/// An entity type's classes by simple name, from its own up to the first vanilla one.
+fn class_chain(scan: &ModScan, reg: &Registration, class: Option<&str>) -> Vec<String> {
+    let mut chain: Vec<String> = Vec::new();
+    let mut next = class.map(str::to_string).or_else(|| reg.creates.clone());
+    while let Some(name) = next.take() {
+        let simple = name.rsplit('.').next().unwrap_or(&name).to_string();
+        chain.push(simple);
+        if chain.len() > 12 {
+            break;
+        }
+        next = scan
+            .classes
+            .iter()
+            .find(|c| c.name == name)
+            .and_then(|c| c.superclass.clone());
+    }
+    chain
+}
+
+/// The mod's item a thrown projectile type flies as (`ThrowableItemProjectile` and
+/// vanilla's own: a snowball, an egg), when it is one: the item whose class throws it
+/// (it names the projectile's class), or the item of the type's own name.
+fn thrown_item(
+    scan: &ModScan,
+    name: &str,
+    reg: &Registration,
+    class: Option<&str>,
+) -> Option<String> {
+    let chain = class_chain(scan, reg, class);
+    let thrown = [
+        "ThrowableItemProjectile",
+        "Snowball",
+        "ThrownEgg",
+        "ThrownEnderpearl",
+        "ThrownExperienceBottle",
+    ];
+    if !chain.iter().any(|c| thrown.contains(&c.as_str())) {
+        return None;
+    }
+    let own = chain.first()?;
+    // The mod's items, with the class of each that has its own.
+    let items = || {
+        scan.registrations
+            .iter()
+            .filter(|r| r.registry == "item")
+            .filter_map(|r| {
+                Some((
+                    r.id.as_deref().filter(|n| valid_name(n))?,
+                    r.creates.as_deref(),
+                ))
+            })
+    };
+    let names = |simple: &str| {
+        scan.classes.iter().any(|k| {
+            k.name.rsplit('.').next() == Some(simple)
+                && k.references
+                    .iter()
+                    .any(|r| r.rsplit(['.', '$']).next() == Some(own.as_str()))
+        })
+    };
+    items()
+        .find(|(_, creates)| creates.is_some_and(|c| names(c.rsplit('.').next().unwrap_or(c))))
+        .or_else(|| items().find(|(id, _)| *id == name))
+        .map(|(id, _)| id.to_string())
 }
 
 /// `Blocks.IRON_BLOCK` in `text` → `iron_block` (the first one).
