@@ -688,6 +688,7 @@ __LEVEL_HOOKS__
             pub fn native_item_entities(&self, dimension: &str, min: [f64; 3], max: [f64; 3]) -> Vec<NativeItemEntity> { Vec::new() }
             pub fn native_set_item_entity(&mut self, dimension: &str, id: u32, stack: ItemStack) -> bool { false }
             pub fn native_light(&self, pos: [i32; 3]) -> (u8, u8) { (0, 0) }
+            pub fn native_action_bar(&mut self, uuid: u128, line: Text) -> bool { false }
             pub fn native_data(&self, path: &str) -> Option<Vec<u8>> { None }
             pub fn native_level_send_particles(&mut self, level: crate::mod_api::LevelRef, options: &ParticleOptions, state: Option<BlockStateId>, at: [f64; 3], spread: [f64; 3], speed: f64, count: i32) -> bool { false }
             pub fn native_set_block(&mut self, dimension: &str, pos: [i32; 3], state: BlockStateId, flags: i32) -> bool { false }

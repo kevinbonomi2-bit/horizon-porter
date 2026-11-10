@@ -129,6 +129,24 @@ pub fn find_again(file: &str, source: &str, gaps: bool) -> Vec<Unit> {
     out
 }
 
+/// The comment lines of a ported function that say it couldn't reach something, and
+/// the lines after each (a note often runs on).
+pub fn gap_notes(function: &str) -> String {
+    let lines: Vec<&str> = function.lines().collect();
+    let mut out = String::new();
+    for (i, line) in lines.iter().enumerate() {
+        if line.trim_start().starts_with("//") && GAPS.iter().any(|g| line.contains(g)) {
+            for l in lines[i.saturating_sub(1)..(i + 3).min(lines.len())].iter() {
+                if l.trim_start().starts_with("//") {
+                    out.push_str(l.trim());
+                    out.push('\n');
+                }
+            }
+        }
+    }
+    out
+}
+
 /// Whether a ported function's body says it couldn't reach something.
 pub fn admits_gap(function: &str) -> bool {
     GAPS.iter().any(|g| function.contains(g))

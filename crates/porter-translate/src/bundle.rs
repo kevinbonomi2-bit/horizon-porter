@@ -514,7 +514,6 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
     let mut files = BTreeMap::new();
     if native {
         let dir = format!("mixins/{id}");
-        let levels_by_ref = level_calls_take_a_level(horizon);
         files.insert("Cargo.toml".into(), ctx.cargo_toml());
         files.insert("compatibility.json".into(), compatibility_json(hooks));
         // Makes the folder an unpacked .hnmod that needs a hook points version
@@ -534,11 +533,11 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
         files.insert(format!("{dir}/runtime.rs"), ctx.runtime());
         for hook in wired.keys() {
             let (file, body) = ctx.helper(hook);
-            files.insert(format!("{dir}/{file}"), level_calls(&body, levels_by_ref));
+            files.insert(format!("{dir}/{file}"), level_calls(&body));
         }
         for (hook, uses) in &stubbed {
             if let Some((file, body)) = ctx.stub_helper(hook, uses) {
-                files.insert(format!("{dir}/{file}"), level_calls(&body, levels_by_ref));
+                files.insert(format!("{dir}/{file}"), level_calls(&body));
             }
         }
     }
@@ -3885,8 +3884,28 @@ fn block_tags(scan: &ModScan, content: &content::Content) -> Vec<(String, Vec<St
     }
     // Vanilla's small tags, whatever the Java names: the classes a mod's blocks are
     // built on ask about them (`VegetationBlock.mayPlaceOn`: `supports_vegetation`).
+    const NOT_SOLID: [&str; 18] = [
+        "replaceable",
+        "flowers",
+        "small_flowers",
+        "saplings",
+        "crops",
+        "fire",
+        "rails",
+        "buttons",
+        "pressure_plates",
+        "climbable",
+        "all_signs",
+        "banners",
+        "candles",
+        "wool_carpets",
+        "corals",
+        "leaves",
+        "doors",
+        "trapdoors",
+    ];
     for (id, blocks) in &vanilla {
-        if blocks.len() <= 40 {
+        if blocks.len() <= 40 || NOT_SOLID.contains(&id.as_str()) {
             let tag = format!("minecraft:{id}");
             out.entry(tag.clone())
                 .or_insert_with(|| resolve(&tag, &own, &vanilla_blocks, 0));
@@ -3927,39 +3946,16 @@ const CONTAINER_SIGNAL: &str = r#"    if m::has_comparator_output(m::BLOCK_ENTIT
     }
 "#;
 
-/// Whether Horizon's `Game::native_level_play_sound` and `native_level_send_particles`
-/// take the level first (`level: LevelRef`, since late 2026) or play in the level in
-/// place, read from Horizon's source (the one the launcher keeps). Without a source,
-/// the newer form.
-fn level_calls_take_a_level(horizon: Option<&Path>) -> bool {
-    let Some(root) = horizon else {
-        return true;
-    };
-    let dir = root.join("crates/horizon-client/src/game");
-    let mut files: Vec<PathBuf> = Vec::new();
-    if let Ok(entries) = fs::read_dir(&dir) {
-        files.extend(entries.flatten().map(|e| e.path()).filter(|p| {
-            p.extension().is_some_and(|e| e == "rs")
-                && p.file_name()
-                    .is_some_and(|n| n.to_string_lossy().starts_with("native_"))
-        }));
-    }
-    for file in files {
-        let Ok(text) = fs::read_to_string(&file) else {
-            continue;
-        };
-        if let Some(i) = text.find("fn native_level_play_sound(") {
-            let head: String = text[i..].chars().take(160).collect();
-            return head.contains("level: LevelRef");
-        }
-    }
-    true
-}
-
-/// `text` with each `@@LEVEL_CALL(game; method; args)@@` written as the call Horizon
-/// takes: with the level in place found first (`native_level`), or without.
-fn level_calls(text: &str, by_ref: bool) -> String {
+/// `text` with each `@@LEVEL_CALL(game; method; args)@@` written as a call that
+/// compiles on either Horizon: `Game::native_level_play_sound` and
+/// `native_level_send_particles` play in the level in place up to 66f3981 and take the
+/// level first (`level: LevelRef`) from 2ebf00a. A port is built on whichever Horizon
+/// its instance plays, so the call picks the form by the function's own type: the trait
+/// below has one impl per form, and only one fits.
+fn level_calls(text: &str) -> String {
     const OPEN: &str = "@@LEVEL_CALL(";
+    const GAME: &str = "crate::game::Game<'g>";
+    const LEVEL: &str = "horizon_client::mod_api::LevelRef";
     let mut out = String::new();
     let mut rest = text;
     while let Some(i) = rest.find(OPEN) {
@@ -3974,14 +3970,53 @@ fn level_calls(text: &str, by_ref: bool) -> String {
             parts.next().unwrap_or(""),
             parts.next().unwrap_or(""),
         );
-        if by_ref {
-            let _ = write!(
-                out,
-                "if let Some(level_here) = {game}.native_level({game}.native_dimension()) {{ let _ = {game}.{method}(level_here, {args}); }}"
-            );
+        // (parameters after the game, their types, the names passed on)
+        let (params, types, names) = if method == "native_level_play_sound" {
+            (
+                "sound: &str, at: [f64; 3], source: usize, volume: f32, pitch: f32",
+                "&str, [f64; 3], usize, f32, f32",
+                "sound, at, source, volume, pitch",
+            )
         } else {
-            let _ = write!(out, "let _ = {game}.{method}({args});");
-        }
+            (
+                "options: O, state: S, at: [f64; 3], spread: [f64; 3], speed: f64, count: i32",
+                "O, S, [f64; 3], [f64; 3], f64, i32",
+                "options, state, at, spread, speed, count",
+            )
+        };
+        let generics = if method == "native_level_play_sound" {
+            ""
+        } else {
+            ", O, S"
+        };
+        let _ = write!(
+            out,
+            "{{
+                trait InLevel<'g, M{generics}> {{
+                    fn run(self, game: &mut {GAME}, {params}) -> bool;
+                }}
+                impl<'g, F{generics}> InLevel<'g, (){generics}> for F
+                where
+                    F: Fn(&mut {GAME}, {types}) -> bool,
+                {{
+                    fn run(self, game: &mut {GAME}, {params}) -> bool {{
+                        self(game, {names})
+                    }}
+                }}
+                impl<'g, F{generics}> InLevel<'g, ({LEVEL},){generics}> for F
+                where
+                    F: Fn(&mut {GAME}, {LEVEL}, {types}) -> bool,
+                {{
+                    fn run(self, game: &mut {GAME}, {params}) -> bool {{
+                        match game.native_level(game.native_dimension()) {{
+                            Some(level) => self(game, level, {names}),
+                            None => false,
+                        }}
+                    }}
+                }}
+                let _ = InLevel::run(crate::game::Game::{method}, &mut *{game}, {args});
+            }}"
+        );
         rest = &after[end + 3..];
     }
     out.push_str(rest);

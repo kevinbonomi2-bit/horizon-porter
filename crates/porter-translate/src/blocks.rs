@@ -642,6 +642,7 @@ pub fn tests(behaviours: &[Behaviour]) -> String {
             replace_clicked: false,
             water: false,
             water_source: false,
+            held: String::new(),
         };
         assert_eq!(p.horizontal_direction(), "south");
         p.yaw = 90.0;
@@ -1143,8 +1144,22 @@ const ITEM_WORLD: &str = r#"{tags}    struct Here<'g, 'a> {
             let (a, b) = self.game.native_light(pos);
             a.max(b)
         }
+        fn sturdy(&self, pos: [i32; 3], face: &str) -> bool {
+            m::boxes_fill_face(&self.game.native_block_collision(pos), face)
+        }
     }
     impl m::World for Here<'_, '_> {
+        fn overlay(&mut self, text: &str) {
+            let Some(player) = self.game.native_acting_player() else {
+                return;
+            };
+            let line = if text.contains('.') && !text.contains(' ') {
+                Text::translate(text, &[])
+            } else {
+                Text::literal(text)
+            };
+            let _ = self.game.native_action_bar(player.uuid, line);
+        }
         fn xp(&mut self, at: [f64; 3], amount: u32) {
             use horizon_world::nbt::{Compound, JavaString, Tag};
             if amount == 0 {
@@ -1797,6 +1812,7 @@ fn {id}_state_for_placement({params}) {
         replace_clicked: context.replace_clicked,
         water: fluid.kind().name().contains("water"),
         water_source: fluid.kind().name().contains("water") && fluid.amount() == 8,
+        held: context.item.clone(),
     };
     let mut set = m::state_for_placement(&placement, &Level { game }).unwrap_or_default();
     // Java's `null`: no block.
@@ -1955,6 +1971,15 @@ pub trait Blocks {
     fn in_tag(&self, pos: [i32; 3], tag: &str) -> bool {
         block_in_tag(&self.block(pos), tag)
     }
+    /// Whether the block at `pos` has a full, solid face on its `face` side (`up`,
+    /// `north`...): `state.isFaceSturdy(level, pos, face)`, `canSupportCenter` and
+    /// `canSupportRigidBlock` (for `up`), what a block that rests on or hangs from
+    /// another asks. From the block's shape where Horizon gives it; elsewhere, any block
+    /// but air, liquids, and the plants, signs, rails and the like `BLOCK_TAGS` names.
+    fn sturdy(&self, pos: [i32; 3], face: &str) -> bool {
+        let _ = face;
+        block_seems_solid(&self.block(pos))
+    }
     /// The light at `pos`, 0 to 15 (`level.getRawBrightness(pos, 0)`,
     /// `getMaxLocalRawBrightness(pos)`): the brighter of the sky's and the blocks'. 15
     /// where Horizon gives no light query.
@@ -2011,6 +2036,61 @@ pub fn note_container_signal(pos: [i32; 3], signal: i32) -> bool {
 pub fn container_signal(pos: [i32; 3]) -> Option<i32> {
     let signals = CONTAINER_SIGNALS.lock().ok()?;
     signals.iter().find(|(p, _)| *p == pos).map(|(_, s)| *s)
+}
+
+/// A guess at whether `block` is a solid block others can rest on, where its shape
+/// isn't at hand: not air, a liquid, or in one of the tags of things with no solid face.
+pub fn block_seems_solid(block: &str) -> bool {
+    if matches!(
+        block,
+        "minecraft:air" | "minecraft:cave_air" | "minecraft:void_air" | "minecraft:water" | "minecraft:lava"
+    ) {
+        return false;
+    }
+    !NOT_SOLID.iter().any(|tag| block_in_tag(block, tag))
+}
+
+/// Vanilla tags of blocks with no solid face (`BLOCK_TAGS` has them).
+pub const NOT_SOLID: &[&str] = &[
+    "minecraft:replaceable",
+    "minecraft:flowers",
+    "minecraft:small_flowers",
+    "minecraft:saplings",
+    "minecraft:crops",
+    "minecraft:fire",
+    "minecraft:rails",
+    "minecraft:buttons",
+    "minecraft:pressure_plates",
+    "minecraft:climbable",
+    "minecraft:all_signs",
+    "minecraft:banners",
+    "minecraft:candles",
+    "minecraft:wool_carpets",
+    "minecraft:corals",
+    "minecraft:leaves",
+    "minecraft:doors",
+    "minecraft:trapdoors",
+];
+
+/// Whether collision boxes `boxes` (each `[x0, y0, z0, x1, y1, z1]` within the block)
+/// fill the block's `face` side: a full, solid face.
+pub fn boxes_fill_face(boxes: &[[f64; 6]], face: &str) -> bool {
+    // (the axis the face is on, whether it is the far side)
+    let (axis, far) = match face {
+        "down" => (1, false),
+        "up" => (1, true),
+        "north" => (2, false),
+        "south" => (2, true),
+        "west" => (0, false),
+        _ => (0, true),
+    };
+    boxes.iter().any(|b| {
+        let touches = if far { b[axis + 3] >= 0.999 } else { b[axis] <= 0.001 };
+        touches
+            && (0..3)
+                .filter(|a| *a != axis)
+                .all(|a| b[a] <= 0.001 && b[a + 3] >= 0.999)
+    })
 }
 
 /// Whether `block` is in block tag `tag`, by `BLOCK_TAGS`.
@@ -2131,6 +2211,29 @@ pub trait World: Blocks {
     fn powered(&mut self, pos: [i32; 3]) -> bool {
         let _ = pos;
         false
+    }
+    /// Shows the player who clicked a line above their hotbar
+    /// (`player.displayClientMessage(text, true)`, `sendOverlayMessage`): a translation
+    /// key (`farmersdelight.block.rice.invalid_placement`) or plain words.
+    fn overlay(&mut self, text: &str) {
+        let _ = text;
+    }
+    /// Breaks the block at `pos` (`level.destroyBlock(pos, drop)`): it goes, with its
+    /// drops when `drop`. False when there was nothing to break.
+    fn destroy(&mut self, pos: [i32; 3], drop: bool) -> bool {
+        let block = self.block(pos);
+        if block == "minecraft:air" {
+            return false;
+        }
+        if !self.set_block(pos, "minecraft:air", &[]) {
+            return false;
+        }
+        if drop {
+            // Its own item, where its loot isn't at hand.
+            let at = [f64::from(pos[0]) + 0.5, f64::from(pos[1]) + 0.5, f64::from(pos[2]) + 0.5];
+            self.drop(&block, 1, at, [0.0; 3]);
+        }
+        true
     }
     /// Drops `amount` experience at `at` (world coordinates) as orbs
     /// (`ExperienceOrb.award(level, pos, amount)`, `popExperience`).
@@ -2348,6 +2451,9 @@ pub struct Placement {
     /// (`getAmount() == 8`).
     pub water: bool,
     pub water_source: bool,
+    /// The item in the placer's hand (`context.getItemInHand()`): `mymod:red_blind`,
+    /// what a block that stores its item's colour or kind reads.
+    pub held: String,
 }
 
 /// What a place function returns, as the only property, to refuse the placement as

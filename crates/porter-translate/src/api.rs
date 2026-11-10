@@ -625,6 +625,19 @@ impl runtime::Blocks for Here<'_> {
     fn in_tag(&self, pos: [i32; 3], tag: &str) -> bool {
         in_tag(&*self.host, "block", tag, &runtime::Blocks::block(self, pos))
     }
+    fn sturdy(&self, pos: [i32; 3], face: &str) -> bool {
+        let side = match face {
+            "down" => mod_api::NativeBlockFace::Down,
+            "up" => mod_api::NativeBlockFace::Up,
+            "north" => mod_api::NativeBlockFace::North,
+            "south" => mod_api::NativeBlockFace::South,
+            "west" => mod_api::NativeBlockFace::West,
+            _ => mod_api::NativeBlockFace::East,
+        };
+        self.level
+            .and_then(|l| l.block_face_sturdy(&*self.host, pos, side, mod_api::NativeSupportType::Full))
+            .unwrap_or_else(|| runtime::block_seems_solid(&runtime::Blocks::block(self, pos)))
+    }
     fn light(&self, pos: [i32; 3]) -> u8 {
         let Some(level) = self.level else {
             return 15;
@@ -768,6 +781,26 @@ impl runtime::World for Here<'_> {
             let _ = level.award_experience(self.host, at[0], at[1], at[2], amount);
         }
     }
+    fn overlay(&mut self, text: &str) {
+        let Some(player) = self.player else {
+            return;
+        };
+        let line = if text.contains('.') && !text.contains(' ') {
+            mod_api::Text::translate(text, Vec::new())
+        } else {
+            mod_api::Text::literal(text)
+        };
+        let _ = player.action_bar(self.host, line);
+    }
+    fn destroy(&mut self, pos: [i32; 3], drop: bool) -> bool {
+        let Some(level) = self.level else {
+            return false;
+        };
+        if runtime::Blocks::block(self, pos) == "minecraft:air" {
+            return false;
+        }
+        level.destroy_block(self.host, pos, drop, None, false).is_ok()
+    }
 }
 "#;
 
@@ -853,6 +886,8 @@ const PART_PLACE: &str = r#"    fn state_for_placement(
             return None;
         }
         let c = event.context;
+        let water = !event.fluid.is_empty()
+            && mod_api::__private::fluid_id(event.fluid.fluid).is_some_and(|f| f.contains("water"));
         let p = runtime::Placement {
             block,
             pos: [c.pos.x, c.pos.y, c.pos.z],
@@ -863,12 +898,24 @@ const PART_PLACE: &str = r#"    fn state_for_placement(
             pitch: c.pitch,
             sneaking: c.sneaking,
             replace_clicked: c.replace_clicked,
-            water: false,
-            water_source: false,
+            water,
+            water_source: water && event.fluid.source,
+            held: c
+                .item
+                .and_then(mod_api::__private::item_key_id)
+                .unwrap_or("minecraft:air")
+                .to_string(),
         };
-        let set = runtime::state_for_placement(&p, &Read { level })?;
+        let mut set = runtime::state_for_placement(&p, &Read { level })?;
         if set.iter().any(|(k, _)| k == runtime::CANCEL) {
             return Some(None);
+        }
+        // A waterlogged block is so only where it is placed in water
+        // (`SimpleWaterloggedBlock`), unless its Java says otherwise.
+        if !set.iter().any(|(k, _)| k == "waterlogged")
+            && level.state_with_property(event.state, "waterlogged", "false").is_some()
+        {
+            set.push(("waterlogged".into(), p.water_source.to_string()));
         }
         Some(Some(apply(level, event.state, &set)))
     }

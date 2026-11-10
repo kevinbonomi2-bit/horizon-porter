@@ -80,10 +80,48 @@ pub struct Outcome {
     pub output_tokens: u64,
 }
 
-/// What a ported function can reach has grown since translations of this number: a
-/// function ported before it that said something was out of reach is ported again by
-/// `translate --refresh`. Raise it when runtime.rs gives ported code more.
-pub const REACH: u32 = 1;
+/// What a ported function can reach, by version: each time runtime.rs gives ported code
+/// more, a line here, with words a port uses for what it couldn't do then (none: any
+/// port that says something was out of reach). `translate --refresh` ports a function
+/// again when it was ported before a line whose words its notes use.
+const REACHES: &[(u32, &[&str])] = &[
+    // Tags, water, light, dropped items, redstone and a block's state in a tick, slots'
+    // stack sizes: broad enough that every port with a gap is worth another go.
+    (1, &[]),
+    // Sturdy faces, the held item in a placement, the action bar, breaking a block.
+    (
+        2,
+        &[
+            "sturdy",
+            "cansupport",
+            "support",
+            "shape query",
+            "solid",
+            "getiteminhand",
+            "held item",
+            "carry the held",
+            "overlay",
+            "displayclientmessage",
+            "action bar",
+            "destroyblock",
+            "destroy the block",
+            "break the block",
+        ],
+    ),
+];
+
+/// The newest line of `REACHES`.
+pub const REACH: u32 = 2;
+
+/// Whether a function ported at reach `at`, whose port says `notes` were out of reach,
+/// is worth porting again now.
+fn reach_grew_for(at: u32, notes: &str) -> bool {
+    let notes = notes.to_ascii_lowercase();
+    REACHES
+        .iter()
+        .filter(|(n, _)| *n > at)
+        .any(|(_, words)| words.is_empty() || words.iter().any(|w| notes.contains(w)))
+}
 
 /// The ported functions `translate --refresh` ports again: those `port --force` marked
 /// outdated, and those that said something was out of reach when ported with an older
@@ -102,7 +140,10 @@ pub fn outdated(dir: &Path) -> Result<Vec<Unit>> {
             let marked = units::function_comment(&source, &unit.function)
                 .is_some_and(|c| c.contains(units::OUTDATED));
             let reach = state.units.get(&unit.key()).map_or(0, |r| r.reach);
-            if marked || reach < REACH {
+            let notes = units::gap_notes(
+                &units::function_source(&source, &unit.function).unwrap_or_default(),
+            );
+            if marked || reach_grew_for(reach, &notes) {
                 out.push(unit);
             }
         }
@@ -833,6 +874,23 @@ impl State {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn refresh_is_for_what_a_newer_reach_gives() {
+        // Ported before any reach: every gap is worth another go.
+        assert!(reach_grew_for(0, "// Missing: the stat award."));
+        // Ported at reach 1: only what reach 2 gives.
+        assert!(!reach_grew_for(1, "// Missing: the stat award."));
+        assert!(reach_grew_for(
+            1,
+            "// Missing: `isFaceSturdy(level, below, UP)`."
+        ));
+        assert!(reach_grew_for(
+            1,
+            "// `Placement` does not carry the held item."
+        ));
+        assert!(!reach_grew_for(REACH, "// Missing: `isFaceSturdy`."));
+    }
 
     #[test]
     fn reads_a_function_from_an_answer() {
