@@ -102,7 +102,7 @@ Ported block code asks the world what Java asks it: a block and its state, wheth
 in a tag (`world.in_tag(pos, "minecraft:dirt")`; where Horizon gives no tag query, from a
 table of the vanilla tags the mod's Java names and the mod's own), the water and the light
 at a spot, whether a block's face is sturdy, and whether redstone powers it. A click's
-code can also show an action-bar line and break a block with its drops, and a placement
+code can also show an action-bar line or a chat line and break a block with its drops, and a placement
 knows the item in the placer's hand. A block that always holds water in Java (rice,
 a `LiquidBlockContainer`) keeps its water.
 

@@ -567,7 +567,7 @@ pub fn runtime(
                     "what its blocks do once a player placed them (`setPlacedBy`, and\n/// `onPlace` for that placement): change blocks, block entities and the stack through\n/// `world`; the return value is unused (return true where Java did anything).\n/// Placements by other means (a dispenser, a command) don't come here"
                 }
                 Kind::Destroyed => {
-                    "what its blocks do as a player breaks them (`playerWillDestroy`,\n/// `playerDestroy`, `affectNeighborsAfterRemoval`): change blocks and block entities\n/// through `world` (a door's other half, a bed's head, its items dropped with\n/// `world.drop`). It runs before the block is removed, for all three; the return\n/// value is unused. The block's own loot drops afterwards as for any block\n/// (`super.playerDestroy`): that is not missing. Blocks removed by other means don't\n/// come here"
+                    "what its blocks do as a player breaks them (`playerWillDestroy`,\n/// `playerDestroy`, `affectNeighborsAfterRemoval`): change blocks and block entities\n/// through `world` (a door's other half, a bed's head, its items dropped with\n/// `world.drop`). Its neighbours are told as for any block\n/// (`Containers.updateNeighboursAfterDestroy`, `updateNeighbourForOutputSignal`): that is\n/// not missing. It runs before the block is removed, for all three; the return\n/// value is unused. The block's own loot drops afterwards as for any block\n/// (`super.playerDestroy`): that is not missing. Blocks removed by other means don't\n/// come here"
                 }
                 Kind::Neighbour => {
                     "what its blocks do when a block beside them changes (`neighborChanged`): a
@@ -1278,6 +1278,17 @@ const ITEM_WORLD: &str = r#"{tags}    struct Here<'g, 'a> {
                 Text::literal(text)
             };
             let _ = self.game.native_action_bar(player.uuid, line);
+        }
+        fn chat(&mut self, text: &str) {
+            let Some(player) = self.game.native_acting_player() else {
+                return;
+            };
+            let line = if text.contains('.') && !text.contains(' ') {
+                Text::translate(text, &[])
+            } else {
+                Text::literal(text)
+            };
+            let _ = self.game.native_tell(player.uuid, line);
         }
         fn xp(&mut self, at: [f64; 3], amount: u32) {
             use horizon_world::nbt::{Compound, JavaString, Tag};
@@ -2449,6 +2460,11 @@ pub trait World: Blocks {
     /// (`player.displayClientMessage(text, true)`, `sendOverlayMessage`): a translation
     /// key (`farmersdelight.block.rice.invalid_placement`) or plain words.
     fn overlay(&mut self, text: &str) {
+        let _ = text;
+    }
+    /// A line in the chat of the player who clicked (`player.sendSystemMessage(text)`,
+    /// `displayClientMessage(text, false)`): a translation key or plain words.
+    fn chat(&mut self, text: &str) {
         let _ = text;
     }
     /// Breaks the block at `pos` (`level.destroyBlock(pos, drop)`): it goes, with its

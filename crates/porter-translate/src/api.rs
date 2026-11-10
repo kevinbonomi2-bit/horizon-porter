@@ -888,6 +888,17 @@ impl runtime::World for Here<'_> {
         };
         let _ = player.action_bar(self.host, line);
     }
+    fn chat(&mut self, text: &str) {
+        let Some(player) = self.player else {
+            return;
+        };
+        let line = if text.contains('.') && !text.contains(' ') {
+            mod_api::Text::translate(text, Vec::new())
+        } else {
+            mod_api::Text::literal(text)
+        };
+        let _ = player.tell(self.host, line);
+    }
     fn destroy(&mut self, pos: [i32; 3], drop: bool) -> bool {
         let Some(level) = self.level else {
             return false;

@@ -168,10 +168,23 @@ const REACHES: &[(u32, &[&str])] = &[
             "lightlayer",
         ],
     ),
+    // A line in the player's chat; the ids of a long registry class's constants.
+    (
+        5,
+        &[
+            "chat",
+            "sendsystemmessage",
+            "system message",
+            "sound id",
+            "sound event id",
+            "the id of",
+            "registry id",
+        ],
+    ),
 ];
 
 /// The newest line of `REACHES`.
-pub const REACH: u32 = 4;
+pub const REACH: u32 = 5;
 
 /// Whether a function ported at reach `at`, whose port says `notes` were out of reach,
 /// is worth porting again now.
@@ -726,10 +739,28 @@ fn prompt(dir: &Path, scan: &ModScan, unit: &Unit) -> Result<Prompt> {
     let mut used_chars = 0;
     for (class, source) in used {
         if used_chars + source.len() > USED_BUDGET || java_chars + source.len() > JAVA_BUDGET {
-            out.notes.push(format!(
-                "{} (a class it uses) left out: past the budget for them",
-                class.name
-            ));
+            // Too long to show (a registry class: `ModItems`, `ModSounds`): the ids of
+            // its constants the code names, so `ModSounds.EGG_HATCH` isn't a guess.
+            let simple = class.name.rsplit('.').next().unwrap_or(&class.name);
+            let named = named_constants(simple, &source, &java_text);
+            if named.is_empty() {
+                out.notes.push(format!(
+                    "{} (a class it uses) left out: past the budget for them",
+                    class.name
+                ));
+            } else {
+                let _ = writeln!(
+                    p,
+                    "`{}` is a class of the mod too long to show. Its constants the code above names, with the id each is registered under (in the mod's namespace unless it has one):
+
+{named}",
+                    class.name
+                );
+                out.notes.push(format!(
+                    "{} (a class it uses) is too long to show: the ids of its constants the code names are",
+                    class.name
+                ));
+            }
             continue;
         }
         used_chars += source.len();
@@ -916,6 +947,46 @@ fn find_class<'a>(scan: &'a ModScan, name: &str) -> Option<&'a porter_model::Cla
     })
 }
 
+/// The constants of class `simple` that `code` names (`ModSounds.EGG_HATCH`), each with
+/// the first string its declaration in `source` has, the id it is registered under:
+/// a line each, `- `EGG_HATCH`: "entity.ostrich.egg_hatch"`.
+fn named_constants(simple: &str, source: &str, code: &str) -> String {
+    let mut out = String::new();
+    let mut seen: Vec<&str> = Vec::new();
+    for statement in source.split(';') {
+        let Some((head, value)) = statement.split_once(" = ") else {
+            continue;
+        };
+        let name = head
+            .rsplit(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .next()
+            .unwrap_or("");
+        if name.is_empty()
+            || !name.starts_with(|c: char| c.is_ascii_uppercase())
+            || seen.contains(&name)
+            || !code.contains(&format!("{simple}.{name}"))
+        {
+            continue;
+        }
+        let Some(id) = value.split('"').nth(1) else {
+            continue;
+        };
+        let plain = !id.is_empty()
+            && id
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || "_./:-".contains(c));
+        if !plain {
+            continue;
+        }
+        seen.push(name);
+        let _ = writeln!(out, "- `{name}`: \"{id}\"");
+        if seen.len() >= 80 {
+            break;
+        }
+    }
+    out
+}
+
 /// The model's instructions.
 const SYSTEM: &str = "You port Minecraft Java mods to Horizon, a Rust rewrite of Minecraft 26.3, one function at a time. \
 A tool generated the Rust function you are given: its signature, its parameters and the Horizon hook it is wired to are \
@@ -1006,6 +1077,23 @@ mod tests {
         );
         assert!(!text.contains("### `b`"));
         fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn names_the_ids_of_a_long_classs_constants() {
+        let source = "public class ModSounds {
+   public static final Supplier<SoundEvent> EGG_HATCH = register(\"entity.ostrich.egg_hatch\");
+   public static final Supplier<SoundEvent> EGG_CRACK = SOUNDS.register(
+      \"entity.ostrich.egg_crack\", () -> make());
+   public static final int COUNT = 3;
+   static void f() { String s = \"x\"; }
+}";
+        let code = "level.playSound(null, pos, ModSounds.EGG_CRACK.get(), BLOCKS, 0.7F, 1.0F); int n = ModSounds.COUNT;";
+        assert_eq!(
+            named_constants("ModSounds", source, code),
+            "- `EGG_CRACK`: \"entity.ostrich.egg_crack\"
+"
+        );
     }
 
     #[test]

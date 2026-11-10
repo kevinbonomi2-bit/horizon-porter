@@ -116,3 +116,20 @@ By theme, the next things to give ported code:
 Also: a block entity whose slot count comes from a method (`getInventorySlotCount()`, Farmer's
 Delight's stove) gets no slots, so its own cooking isn't ported; `level.destroyBlock`,
 `levelEvent` and `gameEvent` from Tier 2 are still open.
+
+## What ports still say is missing (0.9.2)
+
+Shapes and sturdy faces, the sky, overlay messages, block particles, config classes of plain
+fields, `destroyBlock`, `levelEvent` and `gameEvent` from the table above are done, along with
+spawning (babies and thrown things included), a shape update that removes its block or schedules
+a tick, and chat lines. What the twelve trial mods' notes name most now:
+
+| Missing | Would need |
+| --- | --- |
+| Mobs near a block (`getEntitiesOfClass`): feeding, trading, targeting | Horizon request 20 |
+| The held stack's data (`CUSTOM_DATA`, a caught mob, a dye colour) | Horizon request 22 |
+| A mod's own screens: widgets, pages, text with translations | a screen model beyond a machine's slots |
+| What happens when a player dies or respawns (a grave) | porting event handlers that carry player state |
+| Stats, cooldowns, advancement triggers | to check in Horizon |
+| A projectile's own hit (`onHitEntity`: damage, an effect) | reading the damage into the thrown type |
+| Mobs' own AI and models | out of reach: they come over as a vanilla mob's copy |
