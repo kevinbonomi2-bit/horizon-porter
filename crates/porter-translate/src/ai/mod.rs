@@ -817,6 +817,27 @@ fn prompt(dir: &Path, scan: &ModScan, unit: &Unit) -> Result<Prompt> {
                 used.push((other, source));
             }
         }
+        // A class of its own package needs no import, so the scan's references miss
+        // it: a block's block entity beside it (`HandCrankBlockEntity`), by its name
+        // in the code.
+        let package = |n: &str| {
+            n.rsplit_once('.')
+                .map_or(String::new(), |(p, _)| p.to_string())
+        };
+        let here = package(&class.name);
+        for other in scan.classes.iter().filter(|c| package(&c.name) == here) {
+            let simple = other.name.rsplit('.').next().unwrap_or(&other.name);
+            if other.is_mixin
+                || sent.contains(&other.name)
+                || used.iter().any(|(c, _)| c.name == other.name)
+                || !names_word(&java_text, simple)
+            {
+                continue;
+            }
+            if let Ok(source) = fs::read_to_string(Path::new(&scan.input).join(&other.path)) {
+                used.push((other, source));
+            }
+        }
     }
     // Those whose static functions the code calls come first (`RotationPropagator.
     // handleAdded(..)`: what the tick hands its work to), then the smallest.
@@ -832,7 +853,15 @@ fn prompt(dir: &Path, scan: &ModScan, unit: &Unit) -> Result<Prompt> {
                 rest.starts_with(|c: char| c.is_ascii_lowercase()) && rest[name..].starts_with('(')
             })
     };
-    used.sort_by_key(|(class, s)| (!calls_into(class), s.len()));
+    // A block's code reaches its block entity through an instance, not a static call
+    // (`withBlockEntityDo(level, pos, be -> be.turn(sneaking))`): a block entity class
+    // the code names comes before the rest, or a click that only tells its block
+    // entity what to do is ported as doing nothing.
+    let its_entity = |class: &porter_model::ClassInfo| {
+        let simple = class.name.rsplit('.').next().unwrap_or(&class.name);
+        simple.ends_with("BlockEntity") || simple.ends_with("TileEntity")
+    };
+    used.sort_by_key(|(class, s)| (!its_entity(class), !calls_into(class), s.len()));
     let mut shown: Vec<String> = sent.clone();
     let mut used_chars = 0;
     for (class, source) in used {
@@ -1221,6 +1250,23 @@ fn equivalents(java: &str, stub: &str) -> String {
             "`level.hasNeighborSignal(pos)` is `machine.powered`",
         ),
         (
+            "dyn World",
+            "withBlockEntityDo(",
+            "`withBlockEntityDo(level, pos, be -> be.method(..))` (and `level.getBlockEntity(pos)` then a call on it) can't run the block entity's code from here: do what that method does to its fields with `world.save_entity(pos, &[(key, value)])`, by the keys its state struct saves them under. Where the method goes on to call another of the entity's own (an update its tick also makes), set the field its tick watches for that, so the tick does it on its next turn",
+        ),
+        // A library's helper whose source the mod doesn't carry (Catnip, which Create
+        // and its add-ons draw with): what it does, so the turn isn't a guess.
+        (
+            "&mut Draw",
+            "partialFacing(",
+            "`CachedBuffers.partialFacing(model, state)` (Catnip; the facing is the state's `FACING` unless one is passed) is `model`, which is built facing south, turned through the block's centre about Y by `AngleHelper.horizontalAngle(facing)` (south 0, west -90, north 180, east 90, up and down 0) and then about X by `AngleHelper.verticalAngle(facing)` (up -90, down 90, the rest 0): `draw.rotate_about([0.0, 1.0, 0.0], y, [0.5; 3]); draw.rotate_about([1.0, 0.0, 0.0], x, [0.5; 3]); draw.model(..)`. A spin Java gives that buffer afterwards is made before both",
+        ),
+        (
+            "&mut Draw",
+            "AngleHelper.horizontalAngle(",
+            "`AngleHelper.horizontalAngle(facing)` (Catnip) is south 0, west -90, north 180, east 90, up and down 0, in degrees about Y; `AngleHelper.verticalAngle(facing)` is up -90, down 90, the rest 0, about X",
+        ),
+        (
             "",
             "canSeeSky(",
             "`level.canSeeSky(pos)` is `world.sees_sky(pos)`",
@@ -1264,6 +1310,15 @@ fn equivalents(java: &str, stub: &str) -> String {
         }
     }
     out
+}
+
+/// Whether `text` has `word` as a whole identifier.
+fn names_word(text: &str, word: &str) -> bool {
+    let ident = |c: char| c.is_alphanumeric() || c == '_' || c == '$';
+    text.match_indices(word).any(|(i, m)| {
+        !text[..i].chars().next_back().is_some_and(ident)
+            && !text[i + m.len()..].chars().next().is_some_and(ident)
+    })
 }
 
 /// The most the interface answers add to a prompt, in characters.
@@ -1534,6 +1589,22 @@ mod tests {
         );
         assert!(!text.contains("### `b`"));
         fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn finds_a_name_as_a_whole_word() {
+        assert!(names_word(
+            "return HandCrankBlockEntity.class;",
+            "HandCrankBlockEntity"
+        ));
+        assert!(!names_word(
+            "new HandCrankBlockEntityRenderer()",
+            "HandCrankBlockEntity"
+        ));
+        assert!(!names_word(
+            "MyHandCrankBlockEntity x;",
+            "HandCrankBlockEntity"
+        ));
     }
 
     #[test]

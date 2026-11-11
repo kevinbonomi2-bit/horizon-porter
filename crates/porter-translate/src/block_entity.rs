@@ -1010,6 +1010,14 @@ impl Draw {
         self.rotate_about(axis, degrees, [0.0; 3]);
     }
     /// A turn through `pivot`: `[0.5; 3]` is the block's centre.
+    ///
+    /// As with a `PoseStack`, the turn made last reaches the model first, and each
+    /// later one is about the axes the earlier ones left. So where Java turns a model
+    /// to its facing and then spins it about a world axis (a buffer made already
+    /// turned, `partialFacing(model, state)` or a block state's own model, then
+    /// `rotateCentered(angle, axis)` or `kineticRotationTransform`), make the spin
+    /// first and the turn to the facing after it: the other way round the spin goes
+    /// about the model's own axis, and it tumbles.
     pub fn rotate_about(&mut self, axis: [f32; 3], degrees: f32, pivot: [f32; 3]) {
         self.ops.push(DrawOp::Rotate { axis, degrees, pivot });
     }
