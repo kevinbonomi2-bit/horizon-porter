@@ -198,7 +198,7 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
     let questions = if block_entities.is_empty() {
         Vec::new()
     } else {
-        crate::questions::find(scan, &ns)
+        crate::questions::find(scan, &ns, &block_entities)
     };
     let mut machines = machine::find(scan, &ns, &id, &block_entities);
     let recipe_types = machine::recipe_types(scan, &ns);
@@ -1821,6 +1821,7 @@ fn {id}_block_entity_tick(
                 }});
                 Some(m::Neighbour {{
                     block,
+                    pos: at,
                     properties: m::STATE_KEYS
                         .iter()
                         .filter_map(|key| Some((key.to_string(), game.native_block_property(at, key)?)))

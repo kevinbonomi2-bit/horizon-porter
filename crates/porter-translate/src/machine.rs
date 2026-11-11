@@ -527,6 +527,8 @@ pub struct Dropped {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Neighbour {
     pub block: String,
+    /// Where it is (`getBlockPos()`).
+    pub pos: [i32; 3],
     /// Its state properties (`level.getBlockState(pos.relative(side)).getValue(AXIS)`):
     /// see `state`.
     pub properties: Vec<(String, String)>,
@@ -854,6 +856,22 @@ impl<'a> Machine<'a> {
     pub fn neighbour(&self, side: Side) -> Option<&Neighbour> {
         let i = Side::ALL.iter().position(|s| *s == side)?;
         self.neighbours.get(i)?.as_ref()
+    }
+
+    /// This block entity as its neighbours see it: its block, its state properties
+    /// and `values`, its saved values (`machine.me(pos, &state.save())`). What the
+    /// mod's own questions to a block entity take, for asking one of itself.
+    pub fn me(&self, pos: [i32; 3], values: &[(&str, Saved)]) -> Neighbour {
+        Neighbour {
+            block: self.block.clone(),
+            pos,
+            properties: self.properties.clone(),
+            entity: None,
+            values: values
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.clone()))
+                .collect(),
+        }
     }
 
     /// Changes saved value `key` of the mod block entity on `side`, after the tick
@@ -1214,6 +1232,7 @@ pub fn runtime_tests(machines: &[Machine]) -> String {
         let mut m = super::Machine::new(vec![], vec![], &none);
         m.neighbours[1] = Some(super::Neighbour {
             block: "demo:shaft".into(),
+            pos: [0, 65, 0],
             properties: vec![("axis".into(), "y".into())],
             entity: Some("demo:shaft".into()),
             values: vec![("Speed".into(), super::Saved::Float(16.0))],

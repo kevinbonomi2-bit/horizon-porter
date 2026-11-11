@@ -1,26 +1,53 @@
-//! A mod's own questions to a block: methods of an interface of the mod's that its block
-//! classes answer, and that its code asks of a block it meets (Create's
-//! `IRotate.hasShaftTowards`, asked of every neighbour a shaft looks at). Ported once
-//! each, as a function over the block and its state properties, so the ticks and clicks
-//! that ask don't each carry their own copy of every block's answer.
+//! A mod's own questions, ported once each for every function that asks them:
+//!
+//! - **to a block**: a method of one of the mod's interfaces that its block classes
+//!   answer, asked of a block the code meets (Create's `IRotate.hasShaftTowards`, asked
+//!   of every neighbour a shaft looks at);
+//! - **to a block entity**: a method its block entity classes answer differently, asked
+//!   of another block entity (`SplitShaftBlockEntity.getRotationSpeedModifier`: what a
+//!   clutch or a gearshift passes on);
+//! - **helpers**: a static function that takes block entities and answers with a value
+//!   (`RotationPropagator.getRotationSpeedModifier(from, to)`), which the block
+//!   entities' code hands its work to.
+//!
+//! Each becomes a function of runtime.rs over the block and its state properties, or
+//! over a view of the block entity, so the ticks and clicks that ask don't each carry
+//! their own copy of every class's answer.
 
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt::Write as _;
 use std::fs;
 use std::path::Path;
 
 use porter_model::{ClassInfo, ClassKind, ModScan};
 
-/// The most questions a mod gets, the most asked first.
+use crate::block_entity::BlockEntity;
+
+/// The most questions of each kind a mod gets, the most asked first.
 const LIMIT: usize = 24;
+const ENTITY_LIMIT: usize = 16;
+const HELPER_LIMIT: usize = 12;
 
 /// A body longer than this isn't quoted: the class is read instead.
 const BODY_LIMIT: usize = 600;
 
-/// One method of one of the mod's interfaces, with what each block class answers.
+/// Whom a question is asked of.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Asks {
+    /// A block: `(block, state, ..)`.
+    Block,
+    /// A block entity: `(be, ..)`.
+    Entity,
+    /// No one: a static helper that takes block entities.
+    Helper,
+}
+
+/// One question, with what each class answers.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Question {
-    /// The interface, fully qualified.
-    pub interface: String,
+    pub asks: Asks,
+    /// The interface, the base class or the helper class, fully qualified.
+    pub owner: String,
     /// The Java method: `hasShaftTowards`.
     pub method: String,
     /// Its declaration's parameters as written: `LevelReader world, BlockPos pos,
@@ -28,33 +55,48 @@ pub struct Question {
     pub java_params: String,
     /// The Rust function: `i_rotate_has_shaft_towards`.
     pub rust: String,
-    /// The Rust parameters after `block` and `state`: (name, type).
-    pub params: Vec<(String, &'static str)>,
+    /// The Rust parameters after the one asked: (name, type).
+    pub params: Vec<(String, String)>,
     /// The Rust return type.
     pub returns: &'static str,
-    /// The interface's own answer, when it gives one (`default`).
+    /// The owner's own answer, when it gives one (an interface's `default`, a helper's
+    /// whole body when short).
     pub default: Option<String>,
-    /// What each block class answers.
+    /// What each class answers.
     pub answers: Vec<Answer>,
     /// How many of the mod's classes ask it.
     pub asked: usize,
 }
 
-/// One block class's answer.
+/// One class's answer.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Answer {
     /// The class that decides it, fully qualified.
     pub class: String,
-    /// The blocks registered with it, or with a class that inherits the answer.
-    pub blocks: Vec<String>,
+    /// The blocks (or block entities) of it, and of classes that inherit the answer.
+    pub of: Vec<String>,
     /// The method's body on one line; none when it is too long to quote.
     pub body: Option<String>,
 }
 
-/// The mod's questions to a block, the most asked first. `ns` is the namespace of its ids.
-pub fn find(scan: &ModScan, ns: &str) -> Vec<Question> {
+/// The mod's questions: to a block, to a block entity, and the helpers that take block
+/// entities. `ns` is the namespace of its ids, `entities` its block entities.
+pub fn find(scan: &ModScan, ns: &str, entities: &[BlockEntity]) -> Vec<Question> {
     let class = |name: &str| scan.classes.iter().find(|c| c.name == name);
-    let source = |c: &ClassInfo| fs::read_to_string(Path::new(&scan.input).join(&c.path)).ok();
+    let mut sources: HashMap<&str, String> = HashMap::new();
+    // How many classes call each method on something (`x.name(`).
+    let mut asked: HashMap<String, usize> = HashMap::new();
+    for c in scan.classes.iter().filter(|c| !c.is_mixin) {
+        let Ok(text) = fs::read_to_string(Path::new(&scan.input).join(&c.path)) else {
+            continue;
+        };
+        for m in called_methods(&text) {
+            *asked.entry(m.to_string()).or_default() += 1;
+        }
+        sources.insert(c.name.as_str(), text);
+    }
+    let source = |c: &ClassInfo| sources.get(c.name.as_str());
+
     // Each registered block's class, by simple name as registrations give it.
     let mut blocks: Vec<(String, &ClassInfo)> = Vec::new();
     for r in scan.registrations.iter().filter(|r| r.registry == "block") {
@@ -71,119 +113,310 @@ pub fn find(scan: &ModScan, ns: &str) -> Vec<Question> {
             blocks.push((id, c));
         }
     }
-    if blocks.is_empty() {
-        return Vec::new();
-    }
+    // A class and the mod's classes above it, its own first.
+    let chain = |name: &str| -> Vec<&ClassInfo> {
+        let mut out = Vec::new();
+        let mut next = class(name);
+        while let Some(c) = next {
+            out.push(c);
+            if out.len() >= 10 {
+                break;
+            }
+            next = c.superclass.as_deref().and_then(class);
+        }
+        out
+    };
+    let chains: Vec<(&BlockEntity, Vec<&ClassInfo>)> = entities
+        .iter()
+        .filter_map(|e| Some((e, chain(e.class.as_deref()?))))
+        .collect();
+    let entity_classes: BTreeSet<String> = chains
+        .iter()
+        .flat_map(|(_, c)| c.iter().map(|k| simple(&k.name)))
+        .collect();
+
     let mut out: Vec<Question> = Vec::new();
+
+    // To a block: an interface's methods its block classes answer.
+    let mut to_blocks: Vec<Question> = Vec::new();
     for interface in scan
         .classes
         .iter()
         .filter(|c| c.kind == ClassKind::Interface && !c.is_mixin && !c.method_names.is_empty())
     {
-        let mut text: Option<String> = None;
         for method in &interface.method_names {
-            if out.iter().any(|q| q.method == *method) {
+            if to_blocks.iter().any(|q| q.method == *method) || !asked.contains_key(method) {
                 continue;
             }
             // The class that decides it for each block: its own, or the nearest above.
             let mut by_class: Vec<(&ClassInfo, Vec<String>)> = Vec::new();
             for (id, own) in &blocks {
-                let mut next = Some(*own);
-                for _ in 0..12 {
-                    let Some(c) = next else {
-                        break;
-                    };
-                    if c.kind != ClassKind::Interface && c.method_names.iter().any(|n| n == method)
-                    {
-                        match by_class.iter_mut().find(|(k, _)| k.name == c.name) {
-                            Some((_, ids)) => ids.push(id.clone()),
-                            None => by_class.push((c, vec![id.clone()])),
-                        }
-                        break;
+                let decides = chain(&own.name).into_iter().find(|c| {
+                    c.kind != ClassKind::Interface && c.method_names.iter().any(|n| n == method)
+                });
+                if let Some(c) = decides {
+                    match by_class.iter_mut().find(|(k, _)| k.name == c.name) {
+                        Some((_, ids)) => ids.push(id.clone()),
+                        None => by_class.push((c, vec![id.clone()])),
                     }
-                    next = c.superclass.as_deref().and_then(class);
                 }
             }
             if by_class.is_empty() {
                 continue;
             }
-            let text = text.get_or_insert_with(|| source(interface).unwrap_or_default());
-            let Some(decl) = declaration(text, method) else {
+            let Some(text) = source(interface) else {
                 continue;
             };
-            let Some((params, returns)) = signature(&decl) else {
-                continue;
-            };
-            let answers = by_class
+            let Some((decl, params, returns)) = declarations(text, method)
                 .into_iter()
-                .map(|(c, ids)| Answer {
-                    class: c.name.clone(),
-                    blocks: ids,
-                    body: source(c)
-                        .and_then(|s| method_body(&s, method))
-                        .filter(|b| b.len() <= BODY_LIMIT),
-                })
-                .collect();
-            out.push(Question {
-                interface: interface.name.clone(),
+                .find_map(|d| signature(&d, Asks::Block, &entity_classes).map(|(p, r)| (d, p, r)))
+            else {
+                continue;
+            };
+            to_blocks.push(Question {
+                asks: Asks::Block,
+                owner: interface.name.clone(),
                 method: method.clone(),
                 java_params: decl.params_text.clone(),
                 rust: format!("{}_{}", snake(&simple(&interface.name)), snake(method)),
                 params,
                 returns,
                 default: decl.body.filter(|b| b.len() <= BODY_LIMIT),
-                answers,
-                asked: 0,
+                answers: answers(by_class, method, &source),
+                asked: asked[method],
             });
         }
     }
-    if out.is_empty() {
-        return out;
-    }
-    // Asked by the mod's code of something other than itself: `x.method(`.
-    for c in scan.classes.iter().filter(|c| !c.is_mixin) {
-        let Some(text) = source(c) else {
-            continue;
-        };
-        for q in out.iter_mut().filter(|q| q.interface != c.name) {
-            if text.contains(&format!(".{}(", q.method)) {
-                q.asked += 1;
+    to_blocks.sort_by(|a, b| b.asked.cmp(&a.asked).then(a.rust.cmp(&b.rust)));
+    to_blocks.truncate(LIMIT);
+    out.extend(to_blocks);
+
+    // To a block entity: a method the block entities' classes answer differently
+    // (two of them define it), asked of something.
+    let mut defined: HashMap<&str, BTreeSet<&str>> = HashMap::new();
+    for (_, classes) in &chains {
+        for c in classes {
+            for m in &c.method_names {
+                defined
+                    .entry(m.as_str())
+                    .or_default()
+                    .insert(c.name.as_str());
             }
         }
     }
-    out.retain(|q| q.asked > 0);
-    out.sort_by(|a, b| b.asked.cmp(&a.asked).then(a.rust.cmp(&b.rust)));
-    out.truncate(LIMIT);
+    // Asked by the block entities' own classes, or by the helpers those call into:
+    // elsewhere a name like `getState` is somebody else's.
+    let mut called_into: BTreeSet<String> = BTreeSet::new();
+    let mut core: HashMap<&str, usize> = HashMap::new();
+    let mut seen: BTreeSet<&str> = BTreeSet::new();
+    for (_, classes) in &chains {
+        for c in classes {
+            if seen.insert(c.name.as_str())
+                && let Some(text) = source(c)
+            {
+                called_into.extend(static_receivers(text));
+                for m in called_methods(text) {
+                    *core.entry(m).or_default() += 1;
+                }
+            }
+        }
+    }
+    for c in scan
+        .classes
+        .iter()
+        .filter(|c| !c.is_mixin && called_into.contains(&simple(&c.name)))
+    {
+        if seen.insert(c.name.as_str())
+            && let Some(text) = source(c)
+        {
+            for m in called_methods(text) {
+                *core.entry(m).or_default() += 1;
+            }
+        }
+    }
+    // A name several other classes of the mod define too is somebody else's as well
+    // (`getState`, `isValid`); one or two may be a helper of the same name.
+    let elsewhere = |method: &str| {
+        scan.classes
+            .iter()
+            .filter(|c| {
+                !entity_classes.contains(&simple(&c.name))
+                    && !called_into.contains(&simple(&c.name))
+                    && c.method_names.iter().any(|n| n == method)
+            })
+            .count()
+    };
+    let mut to_entities: Vec<Question> = Vec::new();
+    for (method, classes) in &defined {
+        if classes.len() < 2
+            || !core.contains_key(*method)
+            || out.iter().any(|q| q.method == *method)
+            || elsewhere(method) > 2
+        {
+            continue;
+        }
+        // The class each block entity's answer comes from: its own, or the nearest above.
+        let mut by_class: Vec<(&ClassInfo, Vec<String>)> = Vec::new();
+        for (e, classes) in &chains {
+            let decides = classes
+                .iter()
+                .find(|c| c.method_names.iter().any(|n| n == method));
+            if let Some(c) = decides {
+                match by_class.iter_mut().find(|(k, _)| k.name == c.name) {
+                    Some((_, ids)) => ids.push(e.id.clone()),
+                    None => by_class.push((c, vec![e.id.clone()])),
+                }
+            }
+        }
+        // Declared by the one highest up that has it.
+        let Some(top) = chains.iter().find_map(|(_, classes)| {
+            classes
+                .iter()
+                .rev()
+                .find(|c| c.method_names.iter().any(|n| n == method))
+        }) else {
+            continue;
+        };
+        let Some(text) = source(top) else {
+            continue;
+        };
+        let Some((decl, params, returns)) = declarations(text, method)
+            .into_iter()
+            .find_map(|d| signature(&d, Asks::Entity, &entity_classes).map(|(p, r)| (d, p, r)))
+        else {
+            continue;
+        };
+        to_entities.push(Question {
+            asks: Asks::Entity,
+            owner: top.name.clone(),
+            method: method.to_string(),
+            java_params: decl.params_text.clone(),
+            rust: format!("{}_{}", snake(&simple(&top.name)), snake(method)),
+            params,
+            returns,
+            default: None,
+            answers: answers(by_class, method, &source),
+            asked: core[*method],
+        });
+    }
+    // The most answered first: what many classes override is what gets asked.
+    to_entities.sort_by(|a, b| {
+        b.answers
+            .len()
+            .cmp(&a.answers.len())
+            .then(b.asked.cmp(&a.asked))
+            .then(a.rust.cmp(&b.rust))
+    });
+    to_entities.truncate(ENTITY_LIMIT);
+    out.extend(to_entities);
+
+    // Helpers: static functions that take block entities, of classes the block
+    // entities' own classes call into.
+    let mut helpers: Vec<Question> = Vec::new();
+    for c in scan.classes.iter().filter(|c| {
+        !c.is_mixin
+            && c.kind != ClassKind::Interface
+            && called_into.contains(&simple(&c.name))
+            && !entity_classes.contains(&simple(&c.name))
+    }) {
+        let Some(text) = source(c) else {
+            continue;
+        };
+        let mut names: Vec<&String> = c.method_names.iter().collect();
+        names.sort();
+        names.dedup();
+        for method in names {
+            let Some((decl, params, returns)) = declarations(text, method)
+                .into_iter()
+                .find_map(|d| signature(&d, Asks::Helper, &entity_classes).map(|(p, r)| (d, p, r)))
+            else {
+                continue;
+            };
+            helpers.push(Question {
+                asks: Asks::Helper,
+                owner: c.name.clone(),
+                method: method.clone(),
+                java_params: decl.params_text.clone(),
+                rust: format!("{}_{}", snake(&simple(&c.name)), snake(method)),
+                params,
+                returns,
+                default: decl.body.filter(|b| b.len() <= BODY_LIMIT),
+                answers: Vec::new(),
+                // Asked inside its own class too, where it is called bare.
+                asked: text.matches(&format!("{method}(")).count(),
+            });
+        }
+    }
+    helpers.sort_by(|a, b| b.asked.cmp(&a.asked).then(a.rust.cmp(&b.rust)));
+    helpers.truncate(HELPER_LIMIT);
+    out.extend(helpers);
     out
 }
+
+/// The answers of `by_class`, each with its body where that is short enough to quote.
+fn answers<'a>(
+    by_class: Vec<(&ClassInfo, Vec<String>)>,
+    method: &str,
+    source: &impl Fn(&ClassInfo) -> Option<&'a String>,
+) -> Vec<Answer> {
+    by_class
+        .into_iter()
+        .map(|(c, of)| Answer {
+            class: c.name.clone(),
+            of,
+            body: source(c)
+                .and_then(|s| method_body(s, method))
+                .filter(|b| b.len() <= BODY_LIMIT),
+        })
+        .collect()
+}
+
+/// What a view of a block entity is, for the comments of what takes one.
+const VIEW: &str = "its block (`be.block`), that block's state properties (`be.state(\"powered\")` for\n/// `getBlockState().getValue(POWERED)`), where it is (`be.pos`), and its saved values by the key\n/// its state struct saves each under (`be.get(\"Speed\")`)";
 
 /// runtime.rs's part: a function to port for each question.
 pub fn runtime(questions: &[Question]) -> String {
     let mut r = String::new();
     for q in questions {
-        let interface = simple(&q.interface);
-        let _ = write!(
-            r,
-            "\n/// `{interface}.{method}({java})`: a question the mod's code asks a block it meets,\n/// answered here once for every block of the mod. `block` is the block asked\n/// (`{example}`) and `state` its state properties: `state.getValue(FACING)` is the value\n/// under `facing` (a `Direction` as `north`: `Side::from_name` makes it a `Side`),\n/// `getValue(AXIS)` the one under `axis` (`x`, `y` or `z`, as an `Axis` is here). The level\n/// isn't given.\n///\n/// What each block class answers, with its blocks and those of classes that inherit it:\n",
-            method = q.method,
-            java = q.java_params,
-            example = q
-                .answers
-                .first()
-                .and_then(|a| a.blocks.first())
-                .map_or("", String::as_str),
-        );
+        let owner = simple(&q.owner);
+        match q.asks {
+            Asks::Block => {
+                let _ = write!(
+                    r,
+                    "\n/// `{owner}.{method}({java})`: a question the mod's code asks a block it meets,\n/// answered here once for every block of the mod. `block` is the block asked\n/// (`{example}`) and `state` its state properties: `state.getValue(FACING)` is the value\n/// under `facing` (a `Direction` as `north`: `Side::from_name` makes it a `Side`),\n/// `getValue(AXIS)` the one under `axis` (`x`, `y` or `z`, as an `Axis` is here). The level\n/// isn't given.\n///\n/// What each block class answers, with its blocks and those of classes that inherit it:\n",
+                    method = q.method,
+                    java = q.java_params,
+                    example = example(q),
+                );
+            }
+            Asks::Entity => {
+                let _ = write!(
+                    r,
+                    "\n/// `{owner}.{method}({java})`: a question the mod's code asks a block entity it meets,\n/// answered here once for every block entity of the mod. `be` is a view of the one asked\n/// (`{example}`): {VIEW}. A neighbour is such a view already\n/// (`machine.neighbour(side)`), and `machine.me(pos, &state.save())` makes one of the block\n/// entity a tick is for. Its fields are those saved values; a method of its own that the\n/// Java calls (`hasSource()`, `getSpeed()`) is worked out from them as its class does.\n///\n/// What each block entity class answers, with its block entities and those that inherit it:\n",
+                    method = q.method,
+                    java = q.java_params,
+                    example = example(q),
+                );
+            }
+            Asks::Helper => {
+                let _ = write!(
+                    r,
+                    "\n/// `{owner}.{method}({java})`: a helper of the mod's code that takes block entities,\n/// ported here once for every function that calls it. A block entity it takes is a view:\n/// {VIEW}. A neighbour is such a view already (`machine.neighbour(side)`), and\n/// `machine.me(pos, &state.save())` makes one of the block entity a tick is for. What the\n/// Java reads of them from the level (`getBlockState()`, `getBlockPos()`) is in the views;\n/// the level isn't given. `instanceof` a class is told by the view's block.\n",
+                    method = q.method,
+                    java = q.java_params,
+                );
+            }
+        }
         let mut long: Vec<&str> = Vec::new();
         for a in &q.answers {
-            let mut ids = a
-                .blocks
-                .iter()
-                .take(12)
-                .map(|b| format!("`{b}`"))
-                .collect::<Vec<_>>()
-                .join(", ");
-            if a.blocks.len() > 12 {
-                let _ = write!(ids, " and {} more", a.blocks.len() - 12);
+            let mut ids =
+                a.of.iter()
+                    .take(12)
+                    .map(|b| format!("`{b}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+            if a.of.len() > 12 {
+                let _ = write!(ids, " and {} more", a.of.len() - 12);
             }
             match &a.body {
                 Some(body) => {
@@ -205,119 +438,216 @@ pub fn runtime(questions: &[Question]) -> String {
                 }
             }
         }
-        let _ = writeln!(
-            r,
-            "/// Any other block answers as the interface does: {}.",
-            match &q.default {
-                Some(body) => format!("`{}`", one_line(body)),
-                None => "it gives none, so the plainest answer".to_string(),
+        match q.asks {
+            Asks::Block => {
+                let _ = writeln!(
+                    r,
+                    "/// Any other block answers as the interface does: {}.",
+                    match &q.default {
+                        Some(body) => format!("`{}`", one_line(body)),
+                        None => "it gives none, so the plainest answer".to_string(),
+                    }
+                );
             }
-        );
-        // The classes whose answer wasn't quoted are read with the interface.
-        let mut from = format!("`{}`", q.interface);
+            Asks::Entity => {
+                let _ = writeln!(
+                    r,
+                    "/// A block entity none of them covers gives the plainest answer."
+                );
+            }
+            Asks::Helper => {
+                if let Some(body) = &q.default {
+                    let _ = writeln!(r, "///\n/// In Java: `{}`", one_line(body));
+                }
+            }
+        }
+        // The classes whose answer wasn't quoted are read with the owner.
+        let mut from = format!("`{}`", q.owner);
         for class in long.iter().take(4) {
             let _ = write!(from, ", `{class}`");
         }
-        let params: String = q
-            .params
-            .iter()
-            .map(|(n, t)| format!(", {n}: {t}"))
-            .collect();
-        let names: String = q.params.iter().map(|(n, _)| format!(", {n}")).collect();
+        let (given, names) = match q.asks {
+            Asks::Block => ("block: &str, state: &[(String, String)]", "block, state"),
+            Asks::Entity => ("be: &Neighbour", "be"),
+            Asks::Helper => ("", ""),
+        };
+        let mut params: Vec<String> = Vec::new();
+        let mut used: Vec<String> = Vec::new();
+        if !given.is_empty() {
+            params.push(given.to_string());
+            used.push(names.to_string());
+        }
+        for (n, t) in &q.params {
+            params.push(format!("{n}: {t}"));
+            used.push(n.clone());
+        }
+        let todo = match q.asks {
+            Asks::Helper => format!("TODO: port `{}` of {from}.", q.method),
+            _ => format!("TODO: port from {from}."),
+        };
         let _ = write!(
             r,
-            "///\n/// TODO: port from {from}.\npub fn {rust}(block: &str, state: &[(String, String)]{params}) -> {returns} {{\n    let _ = (block, state{names});\n    {value}\n}}\n",
+            "///\n/// {todo}\npub fn {rust}({params}) -> {returns} {{\n    let _ = ({used});\n    {value}\n}}\n",
             rust = q.rust,
+            params = params.join(", "),
             returns = q.returns,
+            used = used.join(", "),
             value = default_value(q.returns),
         );
     }
     r
 }
 
-/// The line that tells a function's translation its Java's `x.method(..)` is ported:
-/// for each question of `module` (a runtime.rs) that `java` asks. Nothing when it asks
-/// none, or when `function` is one of them itself.
+fn example(q: &Question) -> &str {
+    q.answers
+        .first()
+        .and_then(|a| a.of.first())
+        .map_or("", String::as_str)
+}
+
+/// The lines that tell a function's translation which of its Java's calls are ported
+/// already: for each question of `module` (a runtime.rs) that `java` asks. Nothing when
+/// it asks none; a question isn't told of itself.
 pub fn ported(module: &str, java: &str, function: &str) -> String {
     let mut out = String::new();
-    for (method, rust, signature) in in_module(module) {
-        if rust == function || !java.contains(&format!(".{method}(")) {
+    for q in in_module(module) {
+        if q.rust == function {
             continue;
         }
-        let _ = writeln!(
-            out,
-            "- `x.{method}(..)` asked of a block is `{rust}`, already ported for every block of the mod: `{signature}`. Pass the block asked and its state properties (a neighbour's `n.block` and `&n.properties`, this block's `machine.block` and `&machine.properties`)."
-        );
+        let Ported {
+            asks,
+            owner,
+            method,
+            rust,
+            signature,
+        } = &q;
+        match asks {
+            Asks::Block if java.contains(&format!(".{method}(")) => {
+                let _ = writeln!(
+                    out,
+                    "- `x.{method}(..)` asked of a block is `{rust}`, already ported for every block of the mod: `{signature}`. Pass the block asked and its state properties (a neighbour's `n.block` and `&n.properties`, this block's `machine.block` and `&machine.properties`)."
+                );
+            }
+            Asks::Entity if java.contains(&format!(".{method}(")) => {
+                let _ = writeln!(
+                    out,
+                    "- `x.{method}(..)` asked of a block entity is `{rust}`, already ported for every block entity of the mod: `{signature}`. Pass a view of the one asked: a neighbour is one (`machine.neighbour(side)`), and `machine.me(pos, &state.save())` is this one."
+                );
+            }
+            Asks::Helper
+                if java.contains(&format!("{method}(")) && java.contains(owner.as_str()) =>
+            {
+                let _ = writeln!(
+                    out,
+                    "- `{owner}.{method}(..)` is `{rust}`, already ported: `{signature}`. A block entity it takes is a view: a neighbour is one (`machine.neighbour(side)`), and `machine.me(pos, &state.save())` is this one."
+                );
+            }
+            _ => {}
+        }
     }
     out
 }
 
 /// Whether `function` is one of `module`'s questions.
 pub fn is_question(module: &str, function: &str) -> bool {
-    in_module(module)
-        .iter()
-        .any(|(_, rust, _)| rust == function)
+    in_module(module).iter().any(|q| q.rust == function)
 }
 
 /// The Java methods `module` has a question function for.
 pub fn methods(module: &str) -> Vec<String> {
-    in_module(module).into_iter().map(|(m, _, _)| m).collect()
+    in_module(module).into_iter().map(|q| q.method).collect()
 }
 
-/// The questions a runtime.rs carries: (Java method, Rust function, its signature line).
-fn in_module(module: &str) -> Vec<(String, String, String)> {
+/// A question as a runtime.rs carries it.
+struct Ported {
+    asks: Asks,
+    /// The owner's simple name.
+    owner: String,
+    method: String,
+    rust: String,
+    /// Its `pub fn` line.
+    signature: String,
+}
+
+/// The questions a runtime.rs carries.
+fn in_module(module: &str) -> Vec<Ported> {
     let mut out = Vec::new();
-    let mut method: Option<String> = None;
+    let mut head: Option<(Asks, String, String)> = None;
     for line in module.lines() {
         if let Some(rest) = line.strip_prefix("/// `") {
             // "/// `IRotate.hasShaftTowards(..)`: a question the mod's code asks ..."
-            if line.contains("a question the mod's code asks a block it meets") {
-                method = rest
-                    .split('(')
-                    .next()
-                    .and_then(|m| m.rsplit('.').next())
-                    .map(str::to_string);
+            let asks = if line.contains("a question the mod's code asks a block entity it meets") {
+                Some(Asks::Entity)
+            } else if line.contains("a question the mod's code asks a block it meets") {
+                Some(Asks::Block)
+            } else if line.contains("a helper of the mod's code that takes block entities") {
+                Some(Asks::Helper)
+            } else {
+                None
+            };
+            if let Some(asks) = asks {
+                let name = rest.split('(').next().unwrap_or_default();
+                if let Some((owner, method)) = name.rsplit_once('.') {
+                    head = Some((asks, owner.to_string(), method.to_string()));
+                }
             }
         } else if let Some(rest) = line.strip_prefix("pub fn ") {
-            if let Some(m) = method.take() {
-                let name = rest.split('(').next().unwrap_or_default().to_string();
-                let signature = line.trim_end_matches('{').trim().to_string();
-                out.push((m, name, signature));
+            if let Some((asks, owner, method)) = head.take() {
+                out.push(Ported {
+                    asks,
+                    owner,
+                    method,
+                    rust: rest.split('(').next().unwrap_or_default().to_string(),
+                    signature: line.trim_end_matches('{').trim().to_string(),
+                });
             }
         } else if !line.starts_with("///") {
-            method = None;
+            head = None;
         }
     }
     out
 }
 
-/// A method as an interface declares it.
+/// A method as its class declares it.
 struct Declaration {
     returns: String,
     /// (type, name), as written.
     params: Vec<(String, String)>,
     params_text: String,
     is_static: bool,
-    /// Its `default` body, on one line.
+    /// Its body, on one line.
     body: Option<String>,
 }
 
-/// How `source` declares method `name`: the first declaration of that name.
-fn declaration(source: &str, name: &str) -> Option<Declaration> {
+/// Every way `source` declares a method named `name`.
+fn declarations(source: &str, name: &str) -> Vec<Declaration> {
+    let mut out = Vec::new();
     let mut from = 0;
     while let Some(at) = source[from..].find(&format!(" {name}(")).map(|i| from + i) {
         from = at + 1;
         // What the statement says before the name: modifiers and the return type.
         let start = source[..at].rfind([';', '{', '}']).map_or(0, |i| i + 1);
-        let mut head: Vec<&str> = source[start..at]
-            .split_whitespace()
-            .filter(|w| !w.starts_with('@') && !w.starts_with("//"))
+        // Without the comment above it: a Javadoc block, or lines of `//`.
+        let said = &source[start..at];
+        let said = said.rfind("*/").map_or(said, |i| &said[i + 2..]);
+        let mut head: Vec<&str> = said
+            .lines()
+            .map(|l| l.split("//").next().unwrap_or(l))
+            .flat_map(str::split_whitespace)
+            .filter(|w| !w.starts_with('@'))
             .collect();
         let is_static = head.contains(&"static");
         head.retain(|w| {
             !matches!(
                 *w,
-                "public" | "default" | "static" | "abstract" | "final" | "private" | "protected"
+                "public"
+                    | "default"
+                    | "static"
+                    | "abstract"
+                    | "final"
+                    | "private"
+                    | "protected"
+                    | "synchronized"
             )
         });
         // A declaration has one word left, its return type; a call has none, or more.
@@ -328,17 +658,20 @@ fn declaration(source: &str, name: &str) -> Option<Declaration> {
             continue;
         }
         let open = at + 1 + name.len();
-        let inside = balanced(&source[open..])?;
+        let Some(inside) = balanced(&source[open..]) else {
+            continue;
+        };
         let after = source[open + inside.len() + 2..].trim_start();
+        if !after.starts_with('{') && !after.starts_with(';') && !after.starts_with("throws") {
+            continue;
+        }
         let body = after
             .starts_with('{')
             .then(|| method_body(&source[at..], name))
             .flatten();
-        if !after.starts_with('{') && !after.starts_with(';') && !after.starts_with("throws") {
-            continue;
-        }
-        let params = split_top(inside)
-            .into_iter()
+        let listed = split_top(inside);
+        let params: Vec<(String, String)> = listed
+            .iter()
             .filter_map(|p| {
                 let words: Vec<&str> = p
                     .split_whitespace()
@@ -349,16 +682,11 @@ fn declaration(source: &str, name: &str) -> Option<Declaration> {
                     _ => None,
                 }
             })
-            .collect::<Vec<_>>();
-        if params.len() != split_top(inside).len() {
+            .collect();
+        if params.len() != listed.len() {
             continue;
         }
-        // A static helper of the same name (`isSmallCog(BlockState)`) isn't the
-        // question: the one a block answers comes after it.
-        if is_static && source[from..].contains(&format!(" {name}(")) {
-            continue;
-        }
-        return Some(Declaration {
+        out.push(Declaration {
             returns: returns.to_string(),
             params_text: params
                 .iter()
@@ -370,13 +698,18 @@ fn declaration(source: &str, name: &str) -> Option<Declaration> {
             body,
         });
     }
-    None
+    out
 }
 
-/// The Rust parameters (after `block` and `state`) and return type for a declaration, when
-/// every type of it has one here: a question about a block, not a command.
-fn signature(decl: &Declaration) -> Option<(Vec<(String, &'static str)>, &'static str)> {
-    if decl.is_static {
+/// The Rust parameters (after the one asked) and return type for a declaration, when
+/// every type of it has one here: a question with an answer, not a command.
+/// `entity_classes` are the block entities' classes, by simple name.
+fn signature(
+    decl: &Declaration,
+    asks: Asks,
+    entity_classes: &BTreeSet<String>,
+) -> Option<(Vec<(String, String)>, &'static str)> {
+    if decl.is_static != (asks == Asks::Helper) {
         return None;
     }
     let returns = match plain(&decl.returns) {
@@ -389,14 +722,30 @@ fn signature(decl: &Declaration) -> Option<(Vec<(String, &'static str)>, &'stati
         "Direction" => "Side",
         _ => return None,
     };
-    let mut params = Vec::new();
-    let mut state = false;
+    let mut params: Vec<(String, String)> = Vec::new();
+    let mut asked_block = false;
+    let mut views = 0;
     for (ty, name) in &decl.params {
-        let rust = match plain(ty) {
+        let name = snake(name);
+        let name = if matches!(
+            name.as_str(),
+            "block" | "state" | "be" | "type" | "match" | "ref" | "in" | "box" | "move" | "loop"
+        ) {
+            format!("{name}_")
+        } else {
+            name
+        };
+        let ty = plain(ty);
+        let rust = match ty {
             // The block asked: `block` and `state`.
-            "BlockState" if !state => {
-                state = true;
+            "BlockState" if asks == Asks::Block && !asked_block => {
+                asked_block = true;
                 continue;
+            }
+            // Another block: its id and its state properties.
+            "BlockState" => {
+                params.push((format!("{name}_block"), "&str".to_string()));
+                "&[(String, String)]"
             }
             // The level isn't given.
             "Level" | "LevelReader" | "LevelAccessor" | "BlockGetter" | "ServerLevel"
@@ -410,15 +759,18 @@ fn signature(decl: &Declaration) -> Option<(Vec<(String, &'static str)>, &'stati
             "float" => "f32",
             "double" => "f64",
             "String" => "&str",
+            // A block entity of the mod's: a view of it.
+            _ if asks != Asks::Block && entity_classes.contains(ty) => {
+                views += 1;
+                "&Neighbour"
+            }
             _ => return None,
         };
-        let name = snake(name);
-        let name = if matches!(name.as_str(), "block" | "state" | "type" | "match" | "ref") {
-            format!("{name}_")
-        } else {
-            name
-        };
-        params.push((name, rust));
+        params.push((name, rust.to_string()));
+    }
+    // A helper is offered for the block entities it takes.
+    if asks == Asks::Helper && views == 0 {
+        return None;
     }
     Some((params, returns))
 }
@@ -442,6 +794,56 @@ fn default_value(returns: &str) -> &'static str {
         "Side" => "Side::Up",
         _ => "\"y\"",
     }
+}
+
+/// The methods `java` calls on something: each `name` of an `x.name(`.
+pub fn called_methods(java: &str) -> HashSet<&str> {
+    let mut out = HashSet::new();
+    let bytes = java.as_bytes();
+    let ident = |b: u8| b.is_ascii_alphanumeric() || b == b'_' || b == b'$';
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'.' {
+            let start = i + 1;
+            let mut end = start;
+            while end < bytes.len() && ident(bytes[end]) {
+                end += 1;
+            }
+            if end > start && bytes.get(end) == Some(&b'(') {
+                out.insert(&java[start..end]);
+            }
+            i = end.max(i + 1);
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
+/// The classes `java` calls a static function of: each `Name` of a `Name.function(`.
+fn static_receivers(java: &str) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    let ident = |c: char| c.is_ascii_alphanumeric() || c == '_' || c == '$';
+    for (dot, _) in java.match_indices('.') {
+        let after = &java[dot + 1..];
+        let name_len = after.find(|c: char| !ident(c)).unwrap_or(after.len());
+        if name_len == 0
+            || !after.starts_with(|c: char| c.is_ascii_lowercase())
+            || !after[name_len..].starts_with('(')
+        {
+            continue;
+        }
+        let before = &java[..dot];
+        let start = before.rfind(|c: char| !ident(c)).map_or(0, |i| i + 1);
+        let receiver = &before[start..];
+        // A class by its capital, and not a constant (`AXIS.x(`).
+        if receiver.starts_with(|c: char| c.is_ascii_uppercase())
+            && receiver.chars().any(|c| c.is_ascii_lowercase())
+        {
+            out.insert(receiver.to_string());
+        }
+    }
+    out
 }
 
 /// The body of method `name` as `source` declares it, on one line: `return face ==
@@ -556,68 +958,158 @@ mod tests {
 
     const INTERFACE: &str = "public interface IRotate extends IWrenchable {\n\n\tpublic boolean hasShaftTowards(LevelReader world, BlockPos pos, BlockState state, Direction face);\n\n\tpublic Axis getRotationAxis(BlockState state);\n\n\tdefault SpeedLevel getMinimumRequiredSpeedLevel() {\n\t\treturn SpeedLevel.NONE;\n\t}\n\n\tdefault boolean hideStressImpact() {\n\t\treturn false;\n\t}\n\n\tstatic boolean isIt(BlockState state) { return state.hasShaftTowards(null, null, state, null); }\n}";
 
+    fn first(source: &str, name: &str) -> Declaration {
+        declarations(source, name)
+            .into_iter()
+            .next()
+            .expect("declared")
+    }
+
+    fn entities() -> BTreeSet<String> {
+        [
+            "KineticBlockEntity".to_string(),
+            "ClutchBlockEntity".to_string(),
+        ]
+        .into()
+    }
+
     #[test]
     fn reads_a_declaration_and_gives_it_a_rust_shape() {
-        let d = declaration(INTERFACE, "hasShaftTowards").expect("declared");
+        let d = first(INTERFACE, "hasShaftTowards");
         assert_eq!(d.returns, "boolean");
         assert_eq!(
             d.params_text,
             "LevelReader world, BlockPos pos, BlockState state, Direction face"
         );
-        let (params, returns) = signature(&d).expect("a question");
+        let (params, returns) = signature(&d, Asks::Block, &entities()).expect("a question");
         assert_eq!(returns, "bool");
         assert_eq!(
             params,
             [
-                ("pos".to_string(), "[i32; 3]"),
-                ("face".to_string(), "Side")
+                ("pos".to_string(), "[i32; 3]".to_string()),
+                ("face".to_string(), "Side".to_string())
             ]
         );
         // An axis comes back as its letter.
-        let d = declaration(INTERFACE, "getRotationAxis").expect("declared");
-        assert_eq!(signature(&d), Some((Vec::new(), "&'static str")));
+        let d = first(INTERFACE, "getRotationAxis");
+        assert_eq!(
+            signature(&d, Asks::Block, &entities()),
+            Some((Vec::new(), "&'static str"))
+        );
         // A default answer is kept; a type with no shape here is no question.
-        let d = declaration(INTERFACE, "hideStressImpact").expect("declared");
+        let d = first(INTERFACE, "hideStressImpact");
         assert_eq!(d.body.as_deref(), Some("return false;"));
-        let d = declaration(INTERFACE, "getMinimumRequiredSpeedLevel").expect("declared");
-        assert_eq!(signature(&d), None);
-        // Nor is a static helper.
-        let d = declaration(INTERFACE, "isIt").expect("declared");
-        assert_eq!(signature(&d), None);
+        let d = first(INTERFACE, "getMinimumRequiredSpeedLevel");
+        assert_eq!(signature(&d, Asks::Block, &entities()), None);
+        // Nor is a static helper a question to a block.
+        let d = first(INTERFACE, "isIt");
+        assert_eq!(signature(&d, Asks::Block, &entities()), None);
         // A static helper named like the question is passed over for the question.
-        let cog = "interface ICogWheel {
-	static boolean isLargeCog(BlockState state) {
-		return state.getBlock() instanceof ICogWheel c && c.isLargeCog();
-	}
-
-	default boolean isLargeCog() {
-		return false;
-	}
-}";
-        let d = declaration(cog, "isLargeCog").expect("declared");
-        assert!(!d.is_static);
-        assert_eq!(signature(&d), Some((Vec::new(), "bool")));
-        assert_eq!(d.body.as_deref(), Some("return false;"));
+        let cog = "interface ICogWheel {\n\tstatic boolean isLargeCog(BlockState state) {\n\t\treturn state.getBlock() instanceof ICogWheel c && c.isLargeCog();\n\t}\n\n\tdefault boolean isLargeCog() {\n\t\treturn false;\n\t}\n}";
+        let found = declarations(cog, "isLargeCog")
+            .into_iter()
+            .find_map(|d| signature(&d, Asks::Block, &entities()).map(|s| (d, s)))
+            .expect("the question");
+        assert!(!found.0.is_static);
+        assert_eq!(found.1, (Vec::new(), "bool"));
+        assert_eq!(found.0.body.as_deref(), Some("return false;"));
     }
 
     #[test]
-    fn writes_a_function_to_port_and_finds_it_again() {
-        let q = Question {
-            interface: "com.spin.IRotate".into(),
-            method: "hasShaftTowards".into(),
-            java_params: "LevelReader world, BlockPos pos, BlockState state, Direction face".into(),
-            rust: "i_rotate_has_shaft_towards".into(),
-            params: vec![("pos".into(), "[i32; 3]"), ("face".into(), "Side")],
+    fn a_block_entitys_method_and_a_helper_take_views() {
+        let base = "public abstract class SplitShaftBlockEntity extends KineticBlockEntity {\n\tpublic abstract float getRotationSpeedModifier(Direction face);\n}";
+        let d = first(base, "getRotationSpeedModifier");
+        assert_eq!(
+            signature(&d, Asks::Entity, &entities()),
+            Some((vec![("face".to_string(), "Side".to_string())], "f32"))
+        );
+        let helper = "public class RotationPropagator {\n\tprivate static float getRotationSpeedModifier(KineticBlockEntity from, KineticBlockEntity to) {\n\t\treturn 1;\n\t}\n\tpublic static void handleAdded(Level level, BlockPos pos, KineticBlockEntity be) {\n\t}\n\tstatic boolean isLargeToLargeGear(BlockState from, BlockState to, BlockPos diff) {\n\t\treturn false;\n\t}\n}";
+        let d = first(helper, "getRotationSpeedModifier");
+        assert_eq!(
+            signature(&d, Asks::Helper, &entities()),
+            Some((
+                vec![
+                    ("from".to_string(), "&Neighbour".to_string()),
+                    ("to".to_string(), "&Neighbour".to_string())
+                ],
+                "f32"
+            ))
+        );
+        // A comment above it is not part of what it says.
+        let documented = "class P {
+	int x;
+
+	/**
+	 * Determines the change in rotation between two attached kinetics.
+	 */
+	private static float modifier(KineticBlockEntity from, KineticBlockEntity to) {
+		return 1;
+	}
+}";
+        assert_eq!(first(documented, "modifier").returns, "float");
+        // A command isn't offered, nor a helper that takes no block entity.
+        assert!(
+            declarations(helper, "handleAdded")
+                .iter()
+                .all(|d| signature(d, Asks::Helper, &entities()).is_none())
+        );
+        let d = first(helper, "isLargeToLargeGear");
+        assert_eq!(signature(&d, Asks::Helper, &entities()), None);
+        // Called on the class: a helper the block entities call into.
+        let calls = static_receivers(
+            "RotationPropagator.handleAdded(level, pos, this); AXIS.get(); x.y();",
+        );
+        assert!(
+            calls.contains("RotationPropagator") && calls.len() == 1,
+            "{calls:?}"
+        );
+    }
+
+    fn question(asks: Asks, owner: &str, method: &str, rust: &str) -> Question {
+        Question {
+            asks,
+            owner: owner.into(),
+            method: method.into(),
+            java_params: "Direction face".into(),
+            rust: rust.into(),
+            params: vec![("face".into(), "Side".into())],
             returns: "bool",
             default: None,
             answers: vec![Answer {
                 class: "com.spin.MotorBlock".into(),
-                blocks: vec!["spin:motor".into()],
+                of: vec!["spin:motor".into()],
                 body: Some("return face == state.getValue(FACING);".into()),
             }],
             asked: 3,
-        };
-        let text = runtime(&[q]);
+        }
+    }
+
+    #[test]
+    fn writes_a_function_to_port_and_finds_it_again() {
+        let text = runtime(&[
+            question(
+                Asks::Block,
+                "com.spin.IRotate",
+                "hasShaftTowards",
+                "i_rotate_has_shaft_towards",
+            ),
+            question(
+                Asks::Entity,
+                "com.spin.SplitShaft",
+                "passes",
+                "split_shaft_passes",
+            ),
+            Question {
+                answers: Vec::new(),
+                params: vec![("from".into(), "&Neighbour".into())],
+                ..question(
+                    Asks::Helper,
+                    "com.spin.Propagator",
+                    "modifier",
+                    "propagator_modifier",
+                )
+            },
+        ]);
         assert!(
             text.contains(
                 "- `MotorBlock` (`spin:motor`): `return face == state.getValue(FACING);`"
@@ -629,31 +1121,52 @@ mod tests {
             "{text}"
         );
         assert!(
-            text.contains("pub fn i_rotate_has_shaft_towards(block: &str, state: &[(String, String)], pos: [i32; 3], face: Side) -> bool {"),
+            text.contains("TODO: port `modifier` of `com.spin.Propagator`."),
             "{text}"
         );
-        assert_eq!(methods(&text), ["hasShaftTowards"]);
-        assert!(is_question(&text, "i_rotate_has_shaft_towards"));
-        // A function whose Java asks it is told; the question itself is not.
+        assert!(
+            text.contains(
+                "pub fn i_rotate_has_shaft_towards(block: &str, state: &[(String, String)], face: Side) -> bool {"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains("pub fn split_shaft_passes(be: &Neighbour, face: Side) -> bool {"),
+            "{text}"
+        );
+        assert!(
+            text.contains("pub fn propagator_modifier(from: &Neighbour) -> bool {"),
+            "{text}"
+        );
+        assert_eq!(methods(&text), ["hasShaftTowards", "passes", "modifier"]);
+        assert!(is_question(&text, "split_shaft_passes"));
+        // A function whose Java asks is told; a question isn't told of itself.
         let told = ported(
             &text,
-            "if (def.hasShaftTowards(world, pos, state, face))",
+            "if (def.hasShaftTowards(face) && be.passes(face))",
             "tick_shaft",
         );
-        assert!(told.contains("`i_rotate_has_shaft_towards`"), "{told}");
+        assert!(
+            told.contains("`i_rotate_has_shaft_towards`") && told.contains("`split_shaft_passes`"),
+            "{told}"
+        );
+        assert!(!told.contains("propagator_modifier"), "{told}");
+        let told = ported(&text, "Propagator.modifier(this)", "tick_shaft");
+        assert!(told.contains("`propagator_modifier`"), "{told}");
         assert!(ported(&text, "x.hasShaftTowards(", "i_rotate_has_shaft_towards").is_empty());
         assert!(ported(&text, "nothing asked", "tick_shaft").is_empty());
     }
 
     #[test]
-    fn reads_a_methods_body_on_one_line() {
-        let source = "class Motor {
-    @Override
-    public boolean hasShaftTowards(LevelReader world, BlockPos pos, BlockState state, Direction face) {
-        return face == state.getValue(FACING);
+    fn lists_the_methods_called_on_something() {
+        let asked = called_methods("if (def.hasShaftTowards(w, p, s, f) && own()) x.y.getAxis();");
+        assert!(asked.contains("hasShaftTowards") && asked.contains("getAxis"));
+        assert!(!asked.contains("own") && !asked.contains("y"));
     }
-    void other() { hasShaftTowards(null, null, null, null); }
-}";
+
+    #[test]
+    fn reads_a_methods_body_on_one_line() {
+        let source = "class Motor {\n    @Override\n    public boolean hasShaftTowards(LevelReader world, BlockPos pos, BlockState state, Direction face) {\n        return face == state.getValue(FACING);\n    }\n    void other() { hasShaftTowards(null, null, null, null); }\n}";
         assert_eq!(
             method_body(source, "hasShaftTowards").as_deref(),
             Some("return face == state.getValue(FACING);")

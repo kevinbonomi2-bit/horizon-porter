@@ -952,8 +952,9 @@ fn prompt(dir: &Path, scan: &ModScan, unit: &Unit) -> Result<Prompt> {
                     "Whether two blocks connect is in the Java of their block classes (which face has a \
                      shaft, which axis turns): read it from their state properties."
                 } else {
-                    "Whether two blocks connect is what the mod's own questions answer, and those are \
-                     functions of this module already (below): ask them of both blocks."
+                    "Whether two blocks connect, and what one passes on to the other, is what the mod's \
+                     own questions and helpers answer. Those are functions of this module already \
+                     (below): call them rather than working it out again."
                 };
                 let _ = writeln!(p, "{NETWORK_STEP} {connect}\n");
             }
@@ -962,9 +963,10 @@ fn prompt(dir: &Path, scan: &ModScan, unit: &Unit) -> Result<Prompt> {
             if !questions.is_empty() {
                 let _ = writeln!(
                     p,
-                    "The Java asks blocks it meets questions through the mod's own interfaces. Each is a \
-                     function of this module already, ported for every block of the mod. Call it, and do not \
-                     write your own table of what each block answers:\n{questions}"
+                    "The Java asks the blocks and block entities it meets questions of the mod's own, and \
+                     calls helpers of the mod's that take block entities. Each of these is a function of this \
+                     module already, ported once. Call it, and do not write your own version of it or your \
+                     own table of what each class answers:\n{questions}"
                 );
             }
             let hints = equivalents(&java_text, &stub);
@@ -1346,30 +1348,6 @@ fn equivalents(java: &str, stub: &str) -> String {
     out
 }
 
-/// The methods `java` calls on something: each `name` of an `x.name(`.
-fn called_methods(java: &str) -> std::collections::HashSet<&str> {
-    let mut out = std::collections::HashSet::new();
-    let bytes = java.as_bytes();
-    let ident = |b: u8| b.is_ascii_alphanumeric() || b == b'_' || b == b'$';
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'.' {
-            let start = i + 1;
-            let mut end = start;
-            while end < bytes.len() && ident(bytes[end]) {
-                end += 1;
-            }
-            if end > start && bytes.get(end) == Some(&b'(') {
-                out.insert(&java[start..end]);
-            }
-            i = end.max(i + 1);
-        } else {
-            i += 1;
-        }
-    }
-    out
-}
-
 /// Whether `text` has `word` as a whole identifier.
 fn names_word(text: &str, word: &str) -> bool {
     let ident = |c: char| c.is_alphanumeric() || c == '_' || c == '$';
@@ -1397,7 +1375,7 @@ fn interface_answers(scan: &ModScan, java: &str, shown: &[String], ported: &[Str
     let mut methods: Vec<(String, String)> = Vec::new();
     // What the code calls on something (`x.name(`) and the words it has, read once: a
     // large mod has hundreds of interfaces to look up in a long text.
-    let asked = called_methods(java);
+    let asked = crate::questions::called_methods(java);
     let words: std::collections::HashSet<&str> = java
         .split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$'))
         .collect();
@@ -1624,13 +1602,6 @@ mod tests {
         );
         assert!(!text.contains("### `b`"));
         fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn lists_the_methods_called_on_something() {
-        let asked = called_methods("if (def.hasShaftTowards(w, p, s, f) && own()) x.y.getAxis();");
-        assert!(asked.contains("hasShaftTowards") && asked.contains("getAxis"));
-        assert!(!asked.contains("own") && !asked.contains("y"));
     }
 
     #[test]
