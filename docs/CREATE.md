@@ -134,6 +134,24 @@ every tick, and a shaft and a cogwheel on it read -32 while it is held and 0 aft
 ported apart and didn't agree before; what changed is that the click's translation now sees the
 block entity's class, and the tick was ported again.
 
+**Six more kinetic blocks, and what they show.** With the shared functions, an encased shaft, an
+encased cogwheel, a gearbox, a clutch, a gearshift and a water wheel were translated (about two
+cents each) and tried:
+
+| Block | In the port | In Java |
+| --- | --- | --- |
+| Encased shaft | passes 16 on | the same |
+| Gearbox | passes 16 to its three other faces | -16, -16 and 16: each face turns its own way |
+| Clutch | follows redstone (`powered=true`), still passes 16 | passes nothing while powered |
+| Gearshift | follows redstone, still passes 16 | passes -16 while powered |
+
+Connecting is right; what a block *passes on* is not. In Java that is asked of the block entity
+giving the speed (`SplitShaftBlockEntity.getRotationSpeedModifier(face)`, a gearbox's faces in
+`RotationPropagator.getAxisModifier`), by the one taking it. Here the taker's tick is ported
+alone and doesn't know what its neighbour's class would answer. It is the same shape as the
+blocks' questions, one level up: a mod's questions to a block entity, and the helper that asks
+them, ported once.
+
 **Where it stops.**
 
 - **Stress.** Speed carries; stress and capacity don't. `KineticNetwork` keeps them for a whole
@@ -141,10 +159,17 @@ block entity's class, and the tick was ported again.
 - **Diagonals.** A large cogwheel meshes with a small one diagonally, which six neighbours
   don't reach.
 - **Items drawn by code.** The wrench has no icon: its model is a renderer of Create's own.
+- **What a block entity passes on.** The table above: the next step is to port the methods a
+  mod asks of its block entities (`getRotationSpeedModifier`), and the static helper that asks
+  them (`RotationPropagator.getRotationSpeedModifier(from, to)`), once each, as the blocks'
+  questions are, so every tick takes its speed through the same function.
 - **One function at a time.** Each kinetic block entity's tick still carries its own copy of
   the step that takes speed from its neighbours: it is `KineticBlockEntity`'s work, the same for
-  all hundred of them, and translated again for each. The next step is to port a base class's
-  tick once, for every block entity that inherits it.
+  all hundred of them, and translated again for each (about two cents and 50 to 170 lines a
+  time). Porting a base class's tick once, for every block entity that inherits it, would end
+  that.
+- **The whole of it** is 662 functions to translate: about 45 million tokens in, some $5 with
+  Claude Haiku for one try each, and more with the tries that need fixing.
 - **Everything after this**: the 600 functions left, then the systems in the table above.
   Belts, fluids, contraptions and trains each need more from Horizon than a hook to paste into.
 
