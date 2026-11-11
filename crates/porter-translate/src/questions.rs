@@ -487,11 +487,14 @@ pub fn runtime(questions: &[Question]) -> String {
         };
         let _ = write!(
             r,
-            "///\n/// {todo}\npub fn {rust}({params}) -> {returns} {{\n    let _ = ({used});\n    {value}\n}}\n",
+            "///\n/// {todo}\npub fn {rust}({params}) -> {returns} {{\n    let _ = {used};\n    {value}\n}}\n",
             rust = q.rust,
             params = params.join(", "),
             returns = q.returns,
-            used = used.join(", "),
+            used = match &used[..] {
+                [one] => one.clone(),
+                many => format!("({})", many.join(", ")),
+            },
             value = default_value(q.returns),
         );
     }

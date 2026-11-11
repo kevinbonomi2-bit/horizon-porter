@@ -714,12 +714,9 @@ pub fn storage(class: &str, source: &str, fields: &[String]) -> Option<StorageIn
     // Several handlers of its own (an input and an output): their slots follow one
     // another, in the order it makes them.
     kept.sort_by_key(|(at, _, _)| *at);
-    let inventories: Vec<(String, usize)> = if kept.len() > 1 {
-        kept.into_iter().map(|(_, name, n)| (name, n)).collect()
-    } else {
-        Vec::new()
-    };
-    if !inventories.is_empty() {
+    let inventories: Vec<(String, usize)> =
+        kept.into_iter().map(|(_, name, n)| (name, n)).collect();
+    if inventories.len() > 1 {
         items = inventories.iter().map(|(_, n)| n).sum();
     }
     (!tanks.is_empty() || energy.is_some() || items > 0).then(|| StorageInfo {
@@ -1419,7 +1416,8 @@ public class InfuserScreen extends AbstractWidgetsContainerScreen<InfuserMenu> i
         // One handler: as before.
         let pot = "class Pot { ItemStackHandler inventory = new ItemStackHandler(9); }";
         let s = storage("Pot", pot, &["inventory".into()]).unwrap();
-        assert_eq!((s.items, s.inventories.len()), (9, 0));
+        assert_eq!(s.items, 9);
+        assert_eq!(s.inventories, [("inventory".to_string(), 9)]);
     }
 
     const MENU: &str = r#"

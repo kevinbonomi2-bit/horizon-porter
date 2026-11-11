@@ -433,6 +433,11 @@ pub struct Machine<'a> {
     pub neighbours: Vec<Option<Neighbour>>,
     /// Saved values to change in the block entities beside it, after the tick.
     pub neighbour_writes: Vec<(Side, String, Saved)>,
+    /// The mod block entities two steps away along each axis, for a block entity whose
+    /// Java looks that far (`pos.above(2)`): see `at`.
+    pub far: Vec<Neighbour>,
+    /// Saved values to change in a block entity `at` gives, after the tick.
+    pub far_writes: Vec<([i32; 3], String, Saved)>,
     /// Whether to send clients its state again.
     pub sync: bool,
     /// Particles and sounds to play after the tick: see `particles` and `sound`.
@@ -645,6 +650,7 @@ pub struct MachineParts {
     pub energy: i32,
     pub transfers: Vec<Transfer>,
     pub neighbour_writes: Vec<(Side, String, Saved)>,
+    pub far_writes: Vec<([i32; 3], String, Saved)>,
     pub sync: bool,
     pub effects: Vec<Effect>,
 }
@@ -703,6 +709,8 @@ impl<'a> Machine<'a> {
             block: String::new(),
             neighbours: (0..6).map(|_| None).collect(),
             neighbour_writes: Vec::new(),
+            far: Vec::new(),
+            far_writes: Vec::new(),
             sync: false,
             effects: Vec::new(),
             recipes,
@@ -880,6 +888,24 @@ impl<'a> Machine<'a> {
         self.neighbour_writes.push((side, key.to_string(), value));
     }
 
+    /// The mod block entity at `pos`, of those this tick reaches: one beside it, or one
+    /// two steps away along an axis (`level.getBlockEntity(pos.above(2))`, a press over
+    /// a depot) where its Java looks that far. None for any other place, and for a
+    /// block that isn't one of a mod's block entities.
+    pub fn at(&self, pos: [i32; 3]) -> Option<&Neighbour> {
+        self.neighbours
+            .iter()
+            .flatten()
+            .chain(self.far.iter())
+            .find(|n| n.pos == pos && n.entity.is_some())
+    }
+
+    /// Changes saved value `key` of the mod block entity at `pos` (one `at` gives),
+    /// after the tick; clients get it again.
+    pub fn set_at(&mut self, pos: [i32; 3], key: &str, value: Saved) {
+        self.far_writes.push((pos, key.to_string(), value));
+    }
+
     /// Sends clients this block entity's state again after the tick, for its
     /// renderer (`level.sendBlockUpdated`, `sendData`).
     pub fn sync(&mut self) {
@@ -909,6 +935,7 @@ impl<'a> Machine<'a> {
             energy: self.energy,
             transfers: self.transfers,
             neighbour_writes: self.neighbour_writes,
+            far_writes: self.far_writes,
             sync: self.sync,
             effects: self.effects,
         }
@@ -1245,6 +1272,18 @@ pub fn runtime_tests(machines: &[Machine]) -> String {
         m.sync();
         let parts = m.into_parts();
         assert_eq!(parts.neighbour_writes.len(), 1);
+        // Two steps away, where its Java looks that far.
+        let none = |_: &str| Vec::new();
+        let mut m = super::Machine::new(vec![], vec![], &none);
+        m.far.push(super::Neighbour {
+            block: "demo:press".into(),
+            pos: [0, 66, 0],
+            entity: Some("demo:press".into()),
+            ..Default::default()
+        });
+        assert!(m.at([0, 66, 0]).is_some() && m.at([0, 65, 0]).is_none());
+        m.set_at([0, 66, 0], "Running", super::Saved::Byte(1));
+        assert_eq!(m.into_parts().far_writes.len(), 1);
         assert!(parts.sync);
     }
 

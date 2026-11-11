@@ -1834,6 +1834,38 @@ fn {id}_block_entity_tick(
     }} else {{
         (0..6).map(|_| None).collect()
     }};
+    // The mod block entities two steps away along each axis, for a tick whose Java
+    // looks that far (a press over a depot).
+    let far: Vec<m::Neighbour> = if m::FAR.contains(&entity.id.as_str()) {{
+        let read = |tag: &Tag| -> Option<m::Saved> {{ {from_tag} }};
+        m::Side::ALL
+            .iter()
+            .filter_map(|side| {{
+                let [dx, dy, dz] = side.offset();
+                let at = [pos[0] + 2 * dx, pos[1] + 2 * dy, pos[2] + 2 * dz];
+                let (id, values) = game.native_with_mod_block_entity(at, |e| {{
+                    let values: Vec<(String, m::Saved)> = e
+                        .nbt
+                        .iter()
+                        .filter_map(|(k, tag)| read(tag).map(|v| (k.to_string_lossy(), v)))
+                        .collect();
+                    (e.id.clone(), values)
+                }})?;
+                Some(m::Neighbour {{
+                    block: game.native_block(at),
+                    pos: at,
+                    properties: m::STATE_KEYS
+                        .iter()
+                        .filter_map(|key| Some((key.to_string(), game.native_block_property(at, key)?)))
+                        .collect(),
+                    entity: Some(id),
+                    values,
+                }})
+            }})
+            .collect()
+    }} else {{
+        Vec::new()
+    }};
     // An ingredient as Horizon reads one: an item, a `#tag`, or a list of them.
     // Older recipe files write `{{"item": ...}}` or `{{"tag": ...}}`.
     // A tool by what it does (`{{"type": "item_ability", "action": "axe_strip"}}`,
@@ -2042,6 +2074,7 @@ fn {id}_block_entity_tick(
             | 1;
     }}
     machine.neighbours = neighbours;
+    machine.far = far;
     machine.block = block_here;
     // Its `facing`, as the block stores it, its state, its power and the items near.
     machine.facing = game.native_block_property(pos, "facing");
@@ -2165,6 +2198,18 @@ fn {id}_block_entity_tick(
                     break;
                 }}
             }}
+        }}
+    }}
+    // And in those it reached further off.
+    for (at, key, value) in std::mem::take(&mut done.far_writes) {{
+        let tag = {to_tag};
+        if game
+            .native_with_mod_block_entity(at, |e| {{
+                e.nbt.insert(JavaString::from(key.as_str()), tag);
+            }})
+            .is_some()
+        {{
+            game.native_block_entity_sync(at);
         }}
     }}
     // Saved values the tick changed in the block entities beside it.

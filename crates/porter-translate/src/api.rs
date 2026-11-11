@@ -2085,6 +2085,33 @@ impl mod_api::BlockEntityPart for PortedEntity {
                         Some(runtime::Neighbour { block, pos: at, properties, entity, values })
                     })
                     .collect();
+                // The mod block entities two steps away along each axis, where its tick
+                // reaches them (runtime.rs's `FAR`). What it sets in them (`set_at`), like
+                // what it sets in a neighbour, isn't carried out on this API yet.
+                if runtime::FAR.contains(&id.as_str()) {
+                    machine.far = runtime::Side::ALL
+                        .iter()
+                        .filter_map(|side| {
+                            let [dx, dy, dz] = side.offset();
+                            let at = [pos[0] + 2 * dx, pos[1] + 2 * dy, pos[2] + 2 * dz];
+                            let found = reader.block_entity(level, at)?;
+                            let (block, properties) = level
+                                .block_state(reader, at)
+                                .and_then(|s| reader.block_state_string(s))
+                                .map_or_else(|| ("minecraft:air".to_string(), Vec::new()), |t| parse_state(&t));
+                            let entity = found.kind(reader).map(|k| k.id(reader));
+                            let values = found
+                                .data(reader)
+                                .map(|data| {
+                                    data.iter()
+                                        .filter_map(|(k, t)| saved_of(t).map(|v| (k.to_string_lossy(), v)))
+                                        .collect()
+                                })
+                                .unwrap_or_default();
+                            Some(runtime::Neighbour { block, pos: at, properties, entity, values })
+                        })
+                        .collect();
+                }
             }
             // Its `facing`, as the block stores it, its state, its power, the items near.
             machine.facing = props.iter().find(|(k, _)| k == "facing").map(|(_, v)| v.clone());

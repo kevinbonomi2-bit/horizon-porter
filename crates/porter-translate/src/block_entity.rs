@@ -60,6 +60,13 @@ pub struct BlockEntity {
     /// Those of its blocks whose own model Java keeps out of the world
     /// (`getRenderShape`), for it to draw.
     pub drawn: Vec<String>,
+    /// Whether its Java looks two steps away (`pos.above(2)`): its tick then reaches
+    /// the block entities there too (`machine.at(pos)`).
+    pub far: bool,
+    /// The classes of the mod's own it keeps part of itself in, by the field that
+    /// holds each: (`pressingBehaviour`, `com.x.PressingBehaviour`). Their saved
+    /// values and lasting fields are in its state, their ticks part of its tick.
+    pub held: Vec<(String, String)>,
 }
 
 /// A field of the state struct.
@@ -74,6 +81,10 @@ pub struct StateField {
     pub saved_by_java: bool,
     /// The Java field, or the saved expression.
     pub java: String,
+    /// What it starts as, where the Java gives it a plain value (`int timer = 20`,
+    /// `generatedSpeed.value = DEFAULT_SPEED`): a Rust expression. None starts it at
+    /// zero, false or empty.
+    pub init: Option<String>,
 }
 
 /// The NBT kinds a state field can have.
@@ -301,9 +312,11 @@ pub fn find(scan: &ModScan, ns: &str) -> Vec<BlockEntity> {
             left_out: Vec::new(),
             bases: Vec::new(),
             drawn,
+            far: false,
+            held: Vec::new(),
         };
         if let Some(class) = class {
-            state_of(class, &mut be);
+            state_of(scan, class, &mut be);
             // What it inherits from the mod's own base classes: their saved values, the
             // fields that last between ticks, and the tick itself when it is theirs
             // (a shaft's speed and its spreading are `KineticBlockEntity`'s).
@@ -318,7 +331,7 @@ pub fn find(scan: &ModScan, ns: &str) -> Vec<BlockEntity> {
                 let mut theirs = be.clone();
                 theirs.fields.clear();
                 theirs.left_out.clear();
-                state_of(base, &mut theirs);
+                state_of(scan, base, &mut theirs);
                 let mut took = theirs.ticks && !be.ticks;
                 be.ticks |= theirs.ticks;
                 // A base class that looks at the blocks beside it (it uses `Direction`).
@@ -369,6 +382,39 @@ pub fn find(scan: &ModScan, ns: &str) -> Vec<BlockEntity> {
                 be.items = s.items;
                 be.inventories = s.inventories.clone();
             }
+            // What it keeps part of itself in (a behaviour, a component).
+            let mut owners = vec![class];
+            for base in &be.bases {
+                if let Some(c) = scan.classes.iter().find(|c| c.name == *base) {
+                    owners.push(c);
+                }
+            }
+            hold(scan, &owners, &mut be);
+            // Whether any of that looks two steps away: `worldPosition.below(2)`.
+            let reaches = |c: &ClassInfo| {
+                std::fs::read_to_string(std::path::Path::new(&scan.input).join(&c.path)).is_ok_and(
+                    |text| {
+                        [
+                            ".above(2)",
+                            ".below(2)",
+                            ".north(2)",
+                            ".south(2)",
+                            ".east(2)",
+                            ".west(2)",
+                        ]
+                        .iter()
+                        .any(|far| text.contains(far))
+                    },
+                )
+            };
+            be.far = owners.iter().any(|c| reaches(c))
+                || be.held.iter().any(|(_, name)| {
+                    scan.classes
+                        .iter()
+                        .find(|c| c.name == *name)
+                        .is_some_and(reaches)
+                });
+            be.neighbours |= be.far;
             // A class it keeps that holds item lists (a grave's `Death`, with the dead
             // player's inventory): its items are the block entity's own item slots.
             if be.items == 0 {
@@ -412,7 +458,7 @@ pub fn find(scan: &ModScan, ns: &str) -> Vec<BlockEntity> {
 }
 
 /// Fills in the state fields and whether it ticks, from the Java class.
-fn state_of(class: &ClassInfo, be: &mut BlockEntity) {
+fn state_of(scan: &ModScan, class: &ClassInfo, be: &mut BlockEntity) {
     // A tick method (`tick`, `serverTick`), `updateServer` and the like, or a
     // ticking interface of the mod's own (`TickerUtil.TickableServer`).
     be.ticks = class.method_names.iter().any(|m| {
@@ -448,6 +494,9 @@ fn state_of(class: &ClassInfo, be: &mut BlockEntity) {
             key: saved.key.clone(),
             saved_by_java: true,
             java: field.map_or_else(|| saved.value.clone(), |f| format!("{} {}", f.ty, f.name)),
+            init: field
+                .and_then(|f| f.init.as_deref())
+                .and_then(|i| initial(kind, i, class)),
         });
     }
     // Fields saveAdditional leaves out still have to last from tick to tick.
@@ -460,7 +509,9 @@ fn state_of(class: &ClassInfo, be: &mut BlockEntity) {
         if names.contains(&name) {
             continue;
         }
-        let Some(kind) = Kind::from_java(&f.ty) else {
+        // An enum of the mod's own is kept as its constant's name.
+        let is_enum = is_mod_enum(scan, class, &f.ty);
+        let Some(kind) = Kind::from_java(&f.ty).or(is_enum.then_some(Kind::Text)) else {
             be.left_out
                 .push(format!("`{} {}`: no Rust type for it yet", f.ty, f.name));
             continue;
@@ -476,7 +527,16 @@ fn state_of(class: &ClassInfo, be: &mut BlockEntity) {
             kind,
             key,
             saved_by_java: false,
-            java: format!("{} {}", f.ty, f.name),
+            java: if is_enum {
+                format!("enum {} {}", f.ty, f.name)
+            } else {
+                format!("{} {}", f.ty, f.name)
+            },
+            init: f
+                .init
+                .as_deref()
+                .filter(|_| !is_enum)
+                .and_then(|i| initial(kind, i, class)),
         });
     }
     for f in class.fields.iter().filter(|f| f.is_static) {
@@ -491,6 +551,236 @@ fn state_of(class: &ClassInfo, be: &mut BlockEntity) {
     }
     for l in &mut be.left_out {
         *l = one_line(l);
+    }
+}
+
+/// The Rust for a Java field's first value, where that is a plain one of the field's
+/// kind: a number, `true`, a string, or a constant of `class` that is one
+/// (`DEFAULT_SPEED`). None for anything built (`new ArrayList<>()`, a call).
+fn initial(kind: Kind, java: &str, class: &ClassInfo) -> Option<String> {
+    let text = java.trim();
+    // A constant of the class: its own value.
+    if text
+        .chars()
+        .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+        && text.starts_with(|c: char| c.is_ascii_uppercase())
+    {
+        let constant = class
+            .fields
+            .iter()
+            .find(|f| f.is_static && f.name == text)?
+            .init
+            .as_deref()?;
+        if constant.trim() == text {
+            return None;
+        }
+        return initial(kind, constant, class);
+    }
+    let number = text.replace('_', "");
+    match kind {
+        // False is what it starts as anyway.
+        Kind::Bool => (text == "true").then(|| text.to_string()),
+        Kind::Byte | Kind::Short | Kind::Int | Kind::Long => {
+            let digits = number.trim_end_matches(['L', 'l']);
+            let value: i64 = match digits
+                .strip_prefix("0x")
+                .or_else(|| digits.strip_prefix("0X"))
+            {
+                Some(hex) => i64::from_str_radix(hex, 16).ok()?,
+                None => digits.parse().ok()?,
+            };
+            let fits = match kind {
+                Kind::Byte => i8::try_from(value).is_ok(),
+                Kind::Short => i16::try_from(value).is_ok(),
+                Kind::Int => i32::try_from(value).is_ok(),
+                _ => true,
+            };
+            (fits && value != 0).then(|| value.to_string())
+        }
+        Kind::Float | Kind::Double => {
+            let digits = number.trim_end_matches(['f', 'F', 'd', 'D']);
+            let value: f64 = digits.parse().ok()?;
+            (value != 0.0 && value.is_finite()).then(|| format!("{value:?}"))
+        }
+        Kind::Text => {
+            let inner = text.strip_prefix('"')?.strip_suffix('"')?;
+            (!inner.is_empty() && !inner.contains(['"', '\\']))
+                .then(|| format!("{inner:?}.to_string()"))
+        }
+        Kind::Item => None,
+    }
+}
+
+/// Whether `ty` is an enum of the mod's own: one of its classes, or one nested in
+/// `class` (`PressingBehaviour.Mode`, written `Mode` there).
+fn is_mod_enum(scan: &ModScan, class: &ClassInfo, ty: &str) -> bool {
+    let simple = ty.rsplit(['.', '$']).next().unwrap_or(ty);
+    if simple.is_empty() || !simple.starts_with(|c: char| c.is_ascii_uppercase()) {
+        return false;
+    }
+    let nested = format!("{}${simple}", class.name);
+    let nested_dot = format!("{}.{simple}", class.name);
+    scan.classes.iter().any(|c| {
+        c.kind == porter_model::ClassKind::Enum
+            && (c.name == nested
+                || c.name == nested_dot
+                || c.name.rsplit(['.', '$']).next() == Some(simple))
+    })
+}
+
+/// What a block entity keeps part of itself in: the classes of the mod's own that its
+/// fields hold and that save values of their own, or hold items (Create's behaviours:
+/// a press's `PressingBehaviour`, a depot's `DepotBehaviour`, a motor's
+/// `ScrollValueBehaviour`). Their saved values and lasting fields join its state, named
+/// after the field; what they hold of items joins its item slots; their ticks are part
+/// of its tick. `owners` are its own class and the mod's above it.
+fn hold(scan: &ModScan, owners: &[&ClassInfo], be: &mut BlockEntity) {
+    let unique = |ty: &str| {
+        let simple = ty.split(['<', '[']).next().unwrap_or(ty).trim();
+        let simple = simple.rsplit(['.', '$']).next().unwrap_or(simple);
+        let mut found = scan
+            .classes
+            .iter()
+            .filter(|c| c.name.rsplit(['.', '$']).next() == Some(simple));
+        match (found.next(), found.next()) {
+            (Some(c), None) => Some(c),
+            _ => None,
+        }
+    };
+    // A class that wraps one stack with data of its own (a belt's
+    // `TransportedItemStack`): one item slot.
+    let one_stack = |c: &ClassInfo| {
+        c.fields
+            .iter()
+            .filter(|f| !f.is_static && f.ty == "ItemStack")
+            .count()
+            == 1
+    };
+    let own_slots = be.items;
+    let mut slots: Vec<(String, usize)> = Vec::new();
+    for owner in owners {
+        for f in owner.fields.iter().filter(|f| !f.is_static) {
+            if be.held.len() >= 6 {
+                break;
+            }
+            let Some(held) = unique(&f.ty) else {
+                continue;
+            };
+            let simple = held.name.rsplit(['.', '$']).next().unwrap_or(&held.name);
+            if held.kind != porter_model::ClassKind::Class
+                || simple.ends_with("BlockEntity")
+                || simple.ends_with("TileEntity")
+                || held.is_mixin
+                || owners.iter().any(|o| o.name == held.name)
+            {
+                continue;
+            }
+            // Its own state, and what the mod's classes above it add.
+            let mut chain = vec![held];
+            let mut parent = held.superclass.clone();
+            for _ in 0..3 {
+                let Some(base) = parent
+                    .take()
+                    .and_then(|n| scan.classes.iter().find(|c| c.name == n))
+                else {
+                    break;
+                };
+                chain.push(base);
+                parent = base.superclass.clone();
+            }
+            // It keeps something: values it saves, or items.
+            let storage = scan.storages.iter().find(|s| s.class == held.name);
+            let saves = chain.iter().any(|c| !c.saved.is_empty());
+            let stacks: Vec<&porter_model::FieldInfo> = held
+                .fields
+                .iter()
+                .filter(|g| !g.is_static)
+                .filter(|g| unique(&g.ty).is_some_and(one_stack) && !g.ty.contains('<'))
+                .collect();
+            if !saves && storage.is_none_or(|s| s.items == 0) && stacks.is_empty() {
+                continue;
+            }
+            let mut theirs = be.clone();
+            theirs.fields.clear();
+            theirs.left_out.clear();
+            let mut ticks = false;
+            for c in &chain {
+                let mut part = theirs.clone();
+                part.fields.clear();
+                state_of(scan, c, &mut part);
+                ticks |= part.ticks && c.name == held.name;
+                for x in part.fields {
+                    if !theirs
+                        .fields
+                        .iter()
+                        .any(|y| y.name == x.name || y.key == x.key)
+                    {
+                        theirs.fields.push(x);
+                    }
+                }
+            }
+            // What its holder starts it with: `generatedSpeed.value = DEFAULT_SPEED;`.
+            if let Ok(source) =
+                std::fs::read_to_string(std::path::Path::new(&scan.input).join(&owner.path))
+            {
+                for x in &mut theirs.fields {
+                    let member = x.java.rsplit(' ').next().unwrap_or_default();
+                    let set = format!("{}.{member} = ", f.name);
+                    let Some(at) = source.find(&set) else {
+                        continue;
+                    };
+                    let value = source[at + set.len()..]
+                        .split(';')
+                        .next()
+                        .unwrap_or_default();
+                    if let Some(init) = initial(x.kind, value, owner) {
+                        x.init = Some(init);
+                    }
+                }
+            }
+            let prefix = rust_ident(&f.name);
+            let mut took = false;
+            for mut x in theirs.fields.into_iter().take(24) {
+                x.name = format!("{prefix}_{}", x.name.trim_start_matches("r#"));
+                if !x.saved_by_java {
+                    x.key = format!("{}.{}", f.name, x.key);
+                }
+                x.java = format!("{simple} {}: {}", f.name, x.java);
+                if !be.fields.iter().any(|y| y.name == x.name || y.key == x.key) {
+                    be.fields.push(x);
+                    took = true;
+                }
+            }
+            // Its items, in the order it declares what holds them.
+            let mut its_slots = Vec::new();
+            for g in held.fields.iter().filter(|g| !g.is_static) {
+                if let Some((_, n)) =
+                    storage.and_then(|s| s.inventories.iter().find(|(name, _)| *name == g.name))
+                {
+                    its_slots.push((format!("{}.{}", f.name, g.name), *n));
+                } else if stacks.iter().any(|s| s.name == g.name) {
+                    its_slots.push((format!("{}.{}", f.name, g.name), 1));
+                }
+            }
+            if !took && its_slots.is_empty() {
+                continue;
+            }
+            slots.extend(its_slots);
+            be.ticks |= ticks;
+            be.held.push((f.name.clone(), held.name.clone()));
+            let was = format!("`{} {}`", f.ty, f.name);
+            be.left_out.retain(|l| !l.starts_with(&was));
+        }
+    }
+    if !slots.is_empty() {
+        // After its own slots, where it has any.
+        let mut all = be.inventories.clone();
+        if all.is_empty() && own_slots > 0 {
+            all.push(("its own".to_string(), own_slots));
+        }
+        all.extend(slots);
+        be.items = all.iter().map(|(_, n)| n).sum();
+        be.inventories = all;
     }
 }
 
@@ -540,7 +830,7 @@ pub const BLOCK_ENTITIES: &[(&str, &str, bool)] = &[
 
     for be in entities {
         // Its class, with the base classes it takes state or its tick from.
-        let java = match &be.class {
+        let mut java = match &be.class {
             Some(class) if be.bases.is_empty() => class.clone(),
             Some(class) => format!(
                 "{class}` and what it inherits from `{}",
@@ -548,12 +838,22 @@ pub const BLOCK_ENTITIES: &[(&str, &str, bool)] = &[
             ),
             None => "its Java class (not found)".to_string(),
         };
+        // And what it keeps part of itself in, whose ticks are part of its tick.
+        if !be.held.is_empty() {
+            let held: Vec<&str> = be.held.iter().map(|(_, c)| c.as_str()).collect();
+            let _ = write!(java, "` and what it keeps in `{}", held.join("`, `"));
+        }
         let java = java.as_str();
         let _ = write!(
             r,
-            "\n/// The state of a `{id}` block entity: `{java}`'s fields, saved with the block.{slots}\n#[derive(Clone, Debug, Default, PartialEq)]\npub struct {ty} {{\n",
+            "\n/// The state of a `{id}` block entity: `{java}`'s fields, saved with the block.{slots}\n#[derive(Clone, Debug, {default}PartialEq)]\npub struct {ty} {{\n",
             id = be.id,
             ty = be.rust,
+            default = if be.fields.iter().any(|f| f.init.is_some()) {
+                ""
+            } else {
+                "Default, "
+            },
             slots = if be.inventories.len() > 1 {
                 format!(
                     "\n/// Its item handlers share its item slots, one after another: {} (`world.entity_item(pos, slot)`\n/// in a click, `machine.slots[slot]` in its tick).",
@@ -572,12 +872,18 @@ pub const BLOCK_ENTITIES: &[(&str, &str, bool)] = &[
                     one_line(&f.key)
                 )
             };
-            let how = if f.java.starts_with("BlockPos ") {
+            let how = if f.java.contains("enum ") {
+                format!("{how}; the constant's name (`BELT`), empty before it is set")
+            } else if f.java.starts_with("BlockPos ") {
                 format!("{how}; the position as `x y z` (`4 64 -2`), empty for none (null)")
             } else if f.kind == Kind::Item {
                 format!("{how}; the item's id (`minecraft:bowl`), empty for none")
             } else {
                 how
+            };
+            let how = match &f.init {
+                Some(init) => format!("{how}; it starts as `{init}`"),
+                None => how,
             };
             let _ = writeln!(
                 r,
@@ -588,6 +894,22 @@ pub const BLOCK_ENTITIES: &[(&str, &str, bool)] = &[
             );
         }
         r.push_str("}\n");
+        // What the Java starts its fields with.
+        if be.fields.iter().any(|f| f.init.is_some()) {
+            let _ = write!(
+                r,
+                "\nimpl Default for {} {{\n    /// As a new one is in Java: its fields' own first values.\n    fn default() -> Self {{\n        Self {{\n",
+                be.rust
+            );
+            for f in &be.fields {
+                let value = f
+                    .init
+                    .clone()
+                    .unwrap_or_else(|| "Default::default()".to_string());
+                let _ = writeln!(r, "            {}: {value},", f.name);
+            }
+            r.push_str("        }\n    }\n}\n");
+        }
         if !be.left_out.is_empty() {
             let _ = writeln!(r, "\n// Left out of {}, to port by hand:", be.rust);
             for l in &be.left_out {
@@ -644,6 +966,9 @@ pub const BLOCK_ENTITIES: &[(&str, &str, bool)] = &[
                 }
                 if be.neighbours {
                     has.push("the blocks beside it (`machine.neighbour(Side::Up)`, with their saved state; `machine.set_neighbour(...)` changes one after the tick)".to_string());
+                }
+                if be.far {
+                    has.push("the mod block entities two steps away along each axis too (`machine.at(pos)` for `level.getBlockEntity(pos.above(2))`, each with its block, state and saved values; `machine.set_at(pos, key, value)` changes a saved value of one after the tick)".to_string());
                 }
                 if be.renderer.is_some() {
                     has.push("`machine.sync()`, which sends clients its state again for its renderer (`sendBlockUpdated`)".to_string());
@@ -780,6 +1105,16 @@ pub const BLOCK_ENTITIES: &[(&str, &str, bool)] = &[
         &entities
             .iter()
             .filter(|b| b.neighbours)
+            .map(|b| format!("{:?}", b.id))
+            .collect::<Vec<_>>()
+            .join(", "),
+    );
+    r.push_str("];\n");
+    r.push_str("\n/// Block entities whose tick reaches the ones two steps away along an axis (`machine.at`).\npub const FAR: &[&str] = &[");
+    r.push_str(
+        &entities
+            .iter()
+            .filter(|b| b.far)
             .map(|b| format!("{:?}", b.id))
             .collect::<Vec<_>>()
             .join(", "),
@@ -1255,6 +1590,50 @@ mod tests {
         assert_eq!(camel("r#type"), "Type");
         assert!(has_word("of(X::new, CRANK.get())", "CRANK"));
         assert!(!has_word("of(X::new, CRANK_2.get())", "CRANK"));
+    }
+
+    #[test]
+    fn reads_a_fields_first_value() {
+        let class = ClassInfo {
+            name: "a.Motor".into(),
+            kind: porter_model::ClassKind::Class,
+            path: String::new(),
+            superclass: None,
+            interfaces: Vec::new(),
+            references: Vec::new(),
+            side: porter_model::Side::Common,
+            is_mixin: false,
+            lines: 0,
+            methods: 0,
+            fields: vec![porter_model::FieldInfo {
+                name: "DEFAULT_SPEED".into(),
+                ty: "int".into(),
+                is_static: true,
+                is_final: true,
+                init: Some("16".into()),
+            }],
+            method_names: Vec::new(),
+            saved: Vec::new(),
+        };
+        assert_eq!(initial(Kind::Int, "20", &class).as_deref(), Some("20"));
+        assert_eq!(
+            initial(Kind::Int, " DEFAULT_SPEED", &class).as_deref(),
+            Some("16")
+        );
+        assert_eq!(
+            initial(Kind::Float, "70.0f", &class).as_deref(),
+            Some("70.0")
+        );
+        assert_eq!(initial(Kind::Float, "1f", &class).as_deref(), Some("1.0"));
+        assert_eq!(initial(Kind::Bool, "true", &class).as_deref(), Some("true"));
+        assert_eq!(
+            initial(Kind::Text, "\"idle\"", &class).as_deref(),
+            Some("\"idle\".to_string()")
+        );
+        // Zero is what it starts as anyway; a thing built is not a plain value.
+        assert_eq!(initial(Kind::Int, "0", &class), None);
+        assert_eq!(initial(Kind::Int, "new Random().nextInt()", &class), None);
+        assert_eq!(initial(Kind::Int, "OTHER", &class), None);
     }
 
     #[test]
