@@ -860,7 +860,8 @@ fn prompt(dir: &Path, scan: &ModScan, unit: &Unit) -> Result<Prompt> {
         let simple = class.name.rsplit('.').next().unwrap_or(&class.name);
         simple.ends_with("BlockEntity") || simple.ends_with("TileEntity")
     };
-    used.sort_by_key(|(class, s)| (!its_entity(class), !calls_into(class), s.len()));
+    // (The key reads all the Java: worked out once a class.)
+    used.sort_by_cached_key(|(class, s)| (!its_entity(class), !calls_into(class), s.len()));
     let mut shown: Vec<String> = sent.clone();
     let mut used_chars = 0;
     for (class, source) in used {
@@ -1345,6 +1346,30 @@ fn equivalents(java: &str, stub: &str) -> String {
     out
 }
 
+/// The methods `java` calls on something: each `name` of an `x.name(`.
+fn called_methods(java: &str) -> std::collections::HashSet<&str> {
+    let mut out = std::collections::HashSet::new();
+    let bytes = java.as_bytes();
+    let ident = |b: u8| b.is_ascii_alphanumeric() || b == b'_' || b == b'$';
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'.' {
+            let start = i + 1;
+            let mut end = start;
+            while end < bytes.len() && ident(bytes[end]) {
+                end += 1;
+            }
+            if end > start && bytes.get(end) == Some(&b'(') {
+                out.insert(&java[start..end]);
+            }
+            i = end.max(i + 1);
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
 /// Whether `text` has `word` as a whole identifier.
 fn names_word(text: &str, word: &str) -> bool {
     let ident = |c: char| c.is_alphanumeric() || c == '_' || c == '$';
@@ -1370,18 +1395,24 @@ fn interface_answers(scan: &ModScan, java: &str, shown: &[String], ported: &[Str
         .and_then(|m| m.id.clone())
         .unwrap_or_else(|| "minecraft".into());
     let mut methods: Vec<(String, String)> = Vec::new();
+    // What the code calls on something (`x.name(`) and the words it has, read once: a
+    // large mod has hundreds of interfaces to look up in a long text.
+    let asked = called_methods(java);
+    let words: std::collections::HashSet<&str> = java
+        .split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$'))
+        .collect();
     // The interfaces shown, and those the code names (a helper's `IRotate` it wasn't
     // shown for its size).
     for interface in scan.classes.iter().filter(|c| {
         c.kind == ClassKind::Interface
             && !c.is_mixin
-            && (shown.contains(&c.name) || java.contains(&simple(&c.name)))
+            && (shown.contains(&c.name) || words.contains(simple(&c.name).as_str()))
     }) {
         for m in &interface.method_names {
             if ported.contains(m) {
                 continue;
             }
-            if java.contains(&format!(".{m}(")) && !methods.iter().any(|(_, n)| n == m) {
+            if asked.contains(m.as_str()) && !methods.iter().any(|(_, n)| n == m) {
                 methods.push((simple(&interface.name), m.clone()));
             }
         }
@@ -1593,6 +1624,13 @@ mod tests {
         );
         assert!(!text.contains("### `b`"));
         fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn lists_the_methods_called_on_something() {
+        let asked = called_methods("if (def.hasShaftTowards(w, p, s, f) && own()) x.y.getAxis();");
+        assert!(asked.contains("hasShaftTowards") && asked.contains("getAxis"));
+        assert!(!asked.contains("own") && !asked.contains("y"));
     }
 
     #[test]
