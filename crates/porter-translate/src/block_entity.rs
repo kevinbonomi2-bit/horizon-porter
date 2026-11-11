@@ -387,6 +387,12 @@ pub fn find(scan: &ModScan, ns: &str) -> Vec<BlockEntity> {
                 }
             }
         }
+        // Its block's model is kept out of the world for a renderer the scan didn't
+        // find (a library's, a visual): it still gets a render function, which shows
+        // the block's own model until that is ported, rather than nothing.
+        if be.renderer.is_none() && !be.drawn.is_empty() {
+            be.renderer = Some("its Java renderer (not found)".to_string());
+        }
         out.push(be);
     }
     out
