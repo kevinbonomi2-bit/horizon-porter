@@ -256,6 +256,16 @@ const REACHES: &[(u32, &[&str])] = &[
 /// The newest line of `REACHES`.
 pub const REACH: u32 = 11;
 
+/// For a tick that reaches another block entity: who does what, where the Java has one
+/// of them call code the other registered.
+const CALLBACKS: &str = "Where the Java gives another block entity code to call (a behaviour built with handlers \
+such as `whenItemEnters(..)` and `whileItemHeld(..)`, which the block entity an item rests on calls), nothing calls it \
+here: each tick is ported alone. So the block entity that registers the handlers does their work itself, from its own \
+tick, each tick, on the block entity they would be called for (`machine.at(..)`: its saved values and its item slots, \
+changed with `machine.set_at` and `machine.set_item_at`). And the other one, whose Java only calls handlers it was \
+given (`behaviour.handleReceivedItem(..)`, `handleHeldItem(..)`), leaves that out: say in a comment that the block \
+entity which registers them does it, and write no `// Missing:` note for it.";
+
 /// For a tick that sees its neighbours: how to port a walk over a whole network.
 const NETWORK_STEP: &str = "This tick sees the six blocks beside it (`machine.neighbour(side)`: each one's block, \
 state properties and saved values) and what it sets in them (`machine.set_neighbour`) lands after the tick. Where the \
@@ -946,6 +956,11 @@ fn prompt(dir: &Path, scan: &ModScan, unit: &Unit) -> Result<Prompt> {
                  `min(getSlotLimit(slot), stack.getMaxStackSize())`, which is `world.max_stack(item)` (1 for a tool), \
                  not 64."
             );
+            // A tick that reaches another block entity, where the Java has one of them
+            // call what the other registered.
+            if stub.contains("Machine<'_>") && unit.comment.contains("machine.at(pos)") {
+                let _ = writeln!(p, "{CALLBACKS}\n");
+            }
             // A tick that looks at its neighbours, where the Java walks further.
             if stub.contains("Machine<'_>") && unit.comment.contains("machine.neighbour(") {
                 let connect = if questions.is_empty() {

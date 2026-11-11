@@ -2082,7 +2082,7 @@ impl mod_api::BlockEntityPart for PortedEntity {
                                     .collect()
                             })
                             .unwrap_or_default();
-                        Some(runtime::Neighbour { block, pos: at, properties, entity, values })
+                        Some(runtime::Neighbour { block, pos: at, properties, entity, values, items: Vec::new() })
                     })
                     .collect();
                 // The mod block entities two steps away along each axis, where its tick
@@ -2108,7 +2108,7 @@ impl mod_api::BlockEntityPart for PortedEntity {
                                         .collect()
                                 })
                                 .unwrap_or_default();
-                            Some(runtime::Neighbour { block, pos: at, properties, entity, values })
+                            Some(runtime::Neighbour { block, pos: at, properties, entity, values, items: Vec::new() })
                         })
                         .collect();
                 }

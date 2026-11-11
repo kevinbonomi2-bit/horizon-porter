@@ -968,7 +968,7 @@ pub const BLOCK_ENTITIES: &[(&str, &str, bool)] = &[
                     has.push("the blocks beside it (`machine.neighbour(Side::Up)`, with their saved state; `machine.set_neighbour(...)` changes one after the tick)".to_string());
                 }
                 if be.far {
-                    has.push("the mod block entities two steps away along each axis too (`machine.at(pos)` for `level.getBlockEntity(pos.above(2))`, each with its block, state and saved values; `machine.set_at(pos, key, value)` changes a saved value of one after the tick)".to_string());
+                    has.push("the mod block entities two steps away along each axis too (`machine.at(pos)` for `level.getBlockEntity(pos.above(2))`, each with its block, state, saved values and item slots; `machine.set_at(pos, key, value)` changes a saved value of one after the tick, `machine.set_item_at(pos, slot, stack)` one of its item slots)".to_string());
                 }
                 if be.renderer.is_some() {
                     has.push("`machine.sync()`, which sends clients its state again for its renderer (`sendBlockUpdated`)".to_string());

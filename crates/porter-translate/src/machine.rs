@@ -438,6 +438,8 @@ pub struct Machine<'a> {
     pub far: Vec<Neighbour>,
     /// Saved values to change in a block entity `at` gives, after the tick.
     pub far_writes: Vec<([i32; 3], String, Saved)>,
+    /// Item slots to change in a block entity `at` gives, after the tick.
+    pub item_writes: Vec<([i32; 3], usize, Option<Stack>)>,
     /// Whether to send clients its state again.
     pub sync: bool,
     /// Particles and sounds to play after the tick: see `particles` and `sound`.
@@ -539,6 +541,9 @@ pub struct Neighbour {
     pub properties: Vec<(String, String)>,
     pub entity: Option<String>,
     pub values: Vec<(String, Saved)>,
+    /// Its item slots, when it is one of a mod's block entities (its handler's
+    /// `getStackInSlot(slot)`): what a press reads of the depot under it.
+    pub items: Vec<Option<Stack>>,
 }
 
 impl Neighbour {
@@ -651,6 +656,7 @@ pub struct MachineParts {
     pub transfers: Vec<Transfer>,
     pub neighbour_writes: Vec<(Side, String, Saved)>,
     pub far_writes: Vec<([i32; 3], String, Saved)>,
+    pub item_writes: Vec<([i32; 3], usize, Option<Stack>)>,
     pub sync: bool,
     pub effects: Vec<Effect>,
 }
@@ -711,6 +717,7 @@ impl<'a> Machine<'a> {
             neighbour_writes: Vec::new(),
             far: Vec::new(),
             far_writes: Vec::new(),
+            item_writes: Vec::new(),
             sync: false,
             effects: Vec::new(),
             recipes,
@@ -879,6 +886,7 @@ impl<'a> Machine<'a> {
                 .iter()
                 .map(|(k, v)| (k.to_string(), v.clone()))
                 .collect(),
+            items: self.slots.clone(),
         }
     }
 
@@ -904,6 +912,13 @@ impl<'a> Machine<'a> {
     /// after the tick; clients get it again.
     pub fn set_at(&mut self, pos: [i32; 3], key: &str, value: Saved) {
         self.far_writes.push((pos, key.to_string(), value));
+    }
+
+    /// Puts `stack` (or nothing) in item slot `slot` of the mod block entity at `pos`
+    /// (one `at` gives), after the tick: a press turning the ingot on the depot under
+    /// it into a sheet (`handler.setStackInSlot(slot, stack)`).
+    pub fn set_item_at(&mut self, pos: [i32; 3], slot: usize, stack: Option<Stack>) {
+        self.item_writes.push((pos, slot, stack));
     }
 
     /// Sends clients this block entity's state again after the tick, for its
@@ -936,6 +951,7 @@ impl<'a> Machine<'a> {
             transfers: self.transfers,
             neighbour_writes: self.neighbour_writes,
             far_writes: self.far_writes,
+            item_writes: self.item_writes,
             sync: self.sync,
             effects: self.effects,
         }
@@ -1263,6 +1279,7 @@ pub fn runtime_tests(machines: &[Machine]) -> String {
             properties: vec![("axis".into(), "y".into())],
             entity: Some("demo:shaft".into()),
             values: vec![("Speed".into(), super::Saved::Float(16.0))],
+            items: Vec::new(),
         });
         let up = m.neighbour(super::Side::Up).expect("the block above");
         assert_eq!(up.get("Speed"), Some(super::Saved::Float(16.0)));
@@ -1283,7 +1300,9 @@ pub fn runtime_tests(machines: &[Machine]) -> String {
         });
         assert!(m.at([0, 66, 0]).is_some() && m.at([0, 65, 0]).is_none());
         m.set_at([0, 66, 0], "Running", super::Saved::Byte(1));
-        assert_eq!(m.into_parts().far_writes.len(), 1);
+        m.set_item_at([0, 66, 0], 0, None);
+        let reached = m.into_parts();
+        assert_eq!((reached.far_writes.len(), reached.item_writes.len()), (1, 1));
         assert!(parts.sync);
     }
 

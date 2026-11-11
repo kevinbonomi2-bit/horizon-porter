@@ -1817,8 +1817,17 @@ fn {id}_block_entity_tick(
                         .iter()
                         .filter_map(|(k, tag)| read(tag).map(|v| (k.to_string_lossy(), v)))
                         .collect();
-                    (e.id.clone(), values)
+                    let items: Vec<Option<m::Stack>> = e
+                        .items
+                        .iter()
+                        .map(|s| s.as_ref().map(|s| m::Stack::new(&s.item, s.count)))
+                        .collect();
+                    (e.id.clone(), values, items)
                 }});
+                let (entity, values, items) = match found {{
+                    Some((id, values, items)) => (Some(id), values, items),
+                    None => (None, Vec::new(), Vec::new()),
+                }};
                 Some(m::Neighbour {{
                     block,
                     pos: at,
@@ -1826,8 +1835,9 @@ fn {id}_block_entity_tick(
                         .iter()
                         .filter_map(|key| Some((key.to_string(), game.native_block_property(at, key)?)))
                         .collect(),
-                    entity: found.as_ref().map(|(id, _)| id.clone()),
-                    values: found.map(|(_, v)| v).unwrap_or_default(),
+                    entity,
+                    values,
+                    items,
                 }})
             }})
             .collect()
@@ -1843,13 +1853,18 @@ fn {id}_block_entity_tick(
             .filter_map(|side| {{
                 let [dx, dy, dz] = side.offset();
                 let at = [pos[0] + 2 * dx, pos[1] + 2 * dy, pos[2] + 2 * dz];
-                let (id, values) = game.native_with_mod_block_entity(at, |e| {{
+                let (id, values, items) = game.native_with_mod_block_entity(at, |e| {{
                     let values: Vec<(String, m::Saved)> = e
                         .nbt
                         .iter()
                         .filter_map(|(k, tag)| read(tag).map(|v| (k.to_string_lossy(), v)))
                         .collect();
-                    (e.id.clone(), values)
+                    let items: Vec<Option<m::Stack>> = e
+                        .items
+                        .iter()
+                        .map(|s| s.as_ref().map(|s| m::Stack::new(&s.item, s.count)))
+                        .collect();
+                    (e.id.clone(), values, items)
                 }})?;
                 Some(m::Neighbour {{
                     block: game.native_block(at),
@@ -1860,6 +1875,7 @@ fn {id}_block_entity_tick(
                         .collect(),
                     entity: Some(id),
                     values,
+                    items,
                 }})
             }})
             .collect()
@@ -2198,6 +2214,22 @@ fn {id}_block_entity_tick(
                     break;
                 }}
             }}
+        }}
+    }}
+    // Item slots the tick changed in a block entity it reached.
+    for (at, slot, stack) in std::mem::take(&mut done.item_writes) {{
+        if game
+            .native_with_mod_block_entity(at, |e| {{
+                if e.items.len() <= slot {{
+                    e.items.resize_with(slot + 1, || None);
+                }}
+                e.items[slot] = stack
+                    .as_ref()
+                    .map(|s| horizon_client::items::ItemStack::new(&s.item, s.count));
+            }})
+            .is_some()
+        {{
+            game.native_block_entity_sync(at);
         }}
     }}
     // And in those it reached further off.
