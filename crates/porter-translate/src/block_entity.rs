@@ -50,6 +50,9 @@ pub struct BlockEntity {
     /// The mod's own base classes it takes state or its tick from (Create's
     /// `KineticBlockEntity` for a shaft), nearest first.
     pub bases: Vec<String>,
+    /// Those of its blocks whose own model Java keeps out of the world
+    /// (`getRenderShape`), for it to draw.
+    pub drawn: Vec<String>,
 }
 
 /// A field of the state struct.
@@ -260,6 +263,14 @@ pub fn find(scan: &ModScan, ns: &str) -> Vec<BlockEntity> {
             });
         let snake = rust_ident(name);
         let redstone = block_class_with(scan, &its_blocks, "neighborChanged");
+        let drawn: Vec<String> = its_blocks
+            .iter()
+            .filter(|id| {
+                let name = id.split_once(':').map_or(id.as_str(), |(_, n)| n);
+                porter_content::drawn_by_its_entity(scan, name)
+            })
+            .cloned()
+            .collect();
         let mut be = BlockEntity {
             id: format!("{ns}:{name}"),
             blocks: its_blocks,
@@ -277,6 +288,7 @@ pub fn find(scan: &ModScan, ns: &str) -> Vec<BlockEntity> {
             neighbours: false,
             left_out: Vec::new(),
             bases: Vec::new(),
+            drawn,
         };
         if let Some(class) = class {
             state_of(class, &mut be);
@@ -769,7 +781,23 @@ pub const BLOCK_ENTITIES: &[(&str, &str, bool)] = &[
                 ty = be.rust
             );
         }
-        r.push_str("        _ => {}\n    }\n}\n");
+        r.push_str("        _ => {}\n    }\n");
+        // A block whose model Java keeps out of the world shows it from here until
+        // its renderer is ported (or where that draws nothing).
+        r.push_str("    // A block Java draws from its block entity alone (`getRenderShape`) shows its own\n    // model until its renderer is ported.\n    if draw.ops.is_empty() && DRAWN_BY_ENTITY.contains(&frame.block.as_str()) {\n        let properties: Vec<(&str, &str)> =\n            frame.properties.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();\n        draw.block(&frame.block, &properties);\n    }\n}\n");
+        let mut kept_out: Vec<&str> = entities
+            .iter()
+            .flat_map(|b| b.drawn.iter())
+            .map(String::as_str)
+            .collect();
+        kept_out.sort_unstable();
+        kept_out.dedup();
+        let list: Vec<String> = kept_out.iter().map(|b| format!("{b:?}")).collect();
+        let _ = writeln!(
+            r,
+            "\n/// The blocks whose own model stays out of the world (`getRenderShape`), for their\n/// block entity to draw.\npub const DRAWN_BY_ENTITY: &[&str] = &[{}];",
+            list.join(", ")
+        );
     }
     r.push_str(crate::machine::MACHINE_TYPES);
     if !machines.is_empty() {

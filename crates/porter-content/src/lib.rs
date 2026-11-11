@@ -1094,6 +1094,7 @@ pub fn generate_with(
 
     creative_tabs(scan, ns, name, &mut content);
     convention_tags(&mut content);
+    item_definitions(ns, &mut content);
 
     // Assets alone (a client mod's lang file, its HUD textures) make no content mod:
     // there must be blocks, items or data for the game to load.
@@ -2535,6 +2536,39 @@ fn extends(scan: &ModScan, class: Option<&str>, simple: &str) -> bool {
     false
 }
 
+/// A mod from before 1.21.4 draws an item by `models/item/<name>.json` alone; the game
+/// now asks `items/<name>.json` which model to draw. Each item model of the mod's without
+/// one gets the plain definition that names it, so its items aren't blank in the hand.
+/// (A model's `overrides` aren't carried into it: the item shows its base model.)
+fn item_definitions(ns: &str, content: &mut Content) {
+    // A mod that ships any is from 1.21.4 or later: its other item models are parts.
+    let shipped = format!("assets/{ns}/items/");
+    if content.copies.keys().any(|k| k.starts_with(&shipped)) {
+        return;
+    }
+    let prefix = format!("assets/{ns}/models/item/");
+    let names: Vec<String> = content
+        .copies
+        .keys()
+        .chain(content.files.keys())
+        .filter_map(|k| k.strip_prefix(&prefix)?.strip_suffix(".json"))
+        .filter(|n| !n.contains('/'))
+        .map(str::to_string)
+        .collect();
+    for name in names {
+        let path = format!("assets/{ns}/items/{name}.json");
+        if content.copies.contains_key(&path) || content.files.contains_key(&path) {
+            continue;
+        }
+        content.files.insert(
+            path,
+            pretty(&serde_json::json!({
+                "model": { "type": "minecraft:model", "model": format!("{ns}:item/{name}") }
+            })),
+        );
+    }
+}
+
 /// The loader's common `c:` tags (`#c:crops/carrot`) the mod's data names but doesn't
 /// ship, from Fabric API's (`data/convention-tags.json`, `tools/convention_tags.py`):
 /// on Java the loader provides them, and a recipe naming one matches nothing without it.
@@ -2723,6 +2757,26 @@ fn class_named_like(
         name.push_str(suffix);
         known(&name).map(|_| name)
     })
+}
+
+/// Whether the mod's block `name` (its id's path) keeps its model out of the world, for
+/// its block entity to draw: what its `render_shape` in the content mod says.
+pub fn drawn_by_its_entity(scan: &ModScan, name: &str) -> bool {
+    scan.registrations
+        .iter()
+        .filter(|r| r.registry == "block" && r.id.as_deref() == Some(name))
+        .any(|r| {
+            let simple = r.creates.as_deref();
+            let mut found = scan
+                .classes
+                .iter()
+                .filter(|c| !c.is_mixin && c.name.rsplit('.').next() == simple);
+            let class = match (found.next(), found.next()) {
+                (Some(c), None) => Some(c.name.as_str()),
+                _ => None,
+            };
+            render_shape(scan, class, &r.args).is_some()
+        })
 }
 
 /// How a block's class says it is drawn (`getRenderShape`), from its own up through
@@ -3233,6 +3287,35 @@ fn holds_water(scan: &ModScan, class: Option<&str>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_older_mods_item_models_get_definitions() {
+        let mut content = Content::default();
+        content
+            .copies
+            .insert("assets/spin/models/item/shaft.json".into(), "x".into());
+        content
+            .copies
+            .insert("assets/spin/models/item/wand/core.json".into(), "x".into());
+        item_definitions("spin", &mut content);
+        let made = content
+            .files
+            .get("assets/spin/items/shaft.json")
+            .expect("a definition");
+        assert!(made.contains("\"spin:item/shaft\""), "{made}");
+        // A part in a folder is no item.
+        assert_eq!(content.files.len(), 1);
+        // A mod that ships its own definitions is left alone.
+        let mut newer = Content::default();
+        newer
+            .copies
+            .insert("assets/spin/models/item/shaft.json".into(), "x".into());
+        newer
+            .copies
+            .insert("assets/spin/items/cog.json".into(), "x".into());
+        item_definitions("spin", &mut newer);
+        assert!(newer.files.is_empty());
+    }
 
     #[test]
     fn a_variant_is_named_after_its_class() {

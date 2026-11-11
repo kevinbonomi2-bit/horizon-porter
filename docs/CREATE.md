@@ -9,8 +9,10 @@ one needs from horizon-porter, modkit and Horizon itself.
 but it must not redistribute Create's assets: they have to come from the player's own
 copy of the mod, the way Horizon's launcher handles modpacks.
 
-**Version.** Create's main branch targets Minecraft 1.21.1; Horizon is 26.3. The Java
-mod has to reach 26.3 first.
+**Version.** Create's main branch targets Minecraft 1.21.1; Horizon is 26.3. Its blocks,
+block states and models load as they are. Its items needed the item model definitions the game
+asks for since 1.21.4, which the porter now writes for a mod that ships none; its 1.21.1
+recipes and loot tables weren't checked.
 
 ## What the scanner found
 
@@ -48,6 +50,63 @@ What that changes in the plan:
 | Ponder | Animated tutorial scenes | A Ponder shim: scenes are data plus scripted code | Low priority; can ship without it |
 | Mixins | Dozens of Mixins into vanilla | Mixin translation; each one mapped through the port ledger | Mixins that horizon-mixins can't express yet (`@Redirect`, `@Shadow`) |
 | Networking and config | Custom packets, config spec | modkit networking and config | Straightforward once modkit has them |
+
+## The experiment (2026-11-10)
+
+How far does `horizon-porter` get on Create's 1.21.1 source today, with no hand work? Run on a
+developer's own copy, nothing shared: Create's assets are All Rights Reserved.
+
+**It ports and builds.** `port` reads the source in 16 seconds: 646 blocks, 84 items, 7,759
+resource files, 114 block entity types, 113 tick functions and 101 render functions to
+translate. The bundle builds on Horizon in six to eight minutes, and in the game all **646
+blocks place** with their models, with no faults; 50 of the 60 hand placements tried go
+through. What a block *does* is another matter: there are 625 functions to translate, and the
+check finds 24 of 195 blocks answering a right click with only twenty of them done.
+
+**Rotation carries.** A creative motor with four shafts on it, a cogwheel on the last, two
+more cogwheels meshing above it and a shaft on each:
+
+| Block | `Speed` |
+| --- | --- |
+| Creative motor, the four shafts, the first cogwheel | 16.0 |
+| The cogwheel meshing with it, and its shaft | -16.0 |
+| The third cogwheel, and its shaft | 16.0 |
+| All of them, a few seconds after the motor is taken away | 0.0 |
+
+They turn on screen, drawn by their block entity while their own model stays out of the world.
+Both ticks and both renderers were translated by Claude Haiku from Create's Java: four
+functions, about 13 cents with the try that ran too long.
+
+It took these things the porter didn't do before. None is Create's alone:
+
+| What stood in the way | What the porter does now |
+| --- | --- |
+| A shaft's tick is 20 lines; the work is in `KineticBlockEntity` and `SmartBlockEntity` above it | A block entity takes its fields, saved values and tick from its mod superclasses |
+| The tick hands its work to `RotationPropagator`, a helper the prompt left out for smaller classes | Classes whose static functions the code calls are shown first |
+| The helper walks the whole network in one go; a tick here sees the six blocks beside it | The tick is told to port a walk as its own step every tick: a change travels a block a tick |
+| Whether two blocks connect is asked of the neighbour's class (`IRotate.hasShaftTowards`), in 80 block classes | What each block class answers for the mod's own interfaces is listed in the prompt, and a neighbour's state properties reach the tick |
+| The shaft's model is swapped for a class that draws nothing in the world (`BracketedKineticBlockModel`) | Such a block, and one whose `getRenderShape` says so, gets `render_shape: ENTITYBLOCK_ANIMATED` |
+| Renderers draw Flywheel partial models named through a helper (`block("shaft_half")`) | Those are found and baked: 245 of Create's, from 20 |
+| A cogwheel is registered through a factory of its class (`CogWheelBlock::small`) | The registration is tied to that class |
+| A block its entity draws is blank until the renderer is translated | It shows its own model, still, until then |
+| No item had an icon: a 1.21.1 mod has no `items/*.json` | A definition is written for each item model of a mod that ships none (743 for Create) |
+
+**Where it stops.**
+
+- **Stress.** Speed carries; stress and capacity don't. `KineticNetwork` keeps them for a whole
+  network in memory, by level, and nothing in a port holds state for a level yet.
+- **Diagonals.** A large cogwheel meshes with a small one diagonally, which six neighbours
+  don't reach.
+- **Items drawn by code.** The wrench has no icon: its model is a renderer of Create's own.
+- **One function at a time.** Each tick is translated alone, so the shaft's holds a copy of what
+  every kinetic block answers (377 lines, and one answer ran past the output limit before a
+  second try fit). The next step is to port a mod's own interface once, as a function by block
+  that every tick calls.
+- **Everything after rotation**: the 600 functions left, then the systems in the table above.
+  Belts, fluids, contraptions and trains each need more from Horizon than a hook to paste into.
+
+So: Create is not ported. But "can the tool do anything with Create" has an answer now, and it
+is the first step of the order below, done by the tool rather than by hand.
 
 ## Suggested order
 

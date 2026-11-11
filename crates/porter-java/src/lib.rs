@@ -1210,6 +1210,26 @@ fn created_class(args: &[String]) -> Option<String> {
         }
         from = i + 4;
     }
+    // A factory of the class's own (`CogWheelBlock::small`), where no constructor is named.
+    if best.is_none() {
+        let mut from = 0;
+        while let Some(at) = text[from..].find("::").map(|i| from + i) {
+            from = at + 2;
+            let start = text[..at]
+                .rfind(|c: char| !is_ident(c) && c != '.')
+                .map_or(0, |p| p + 1);
+            let name = text[start..at].rsplit('.').next().unwrap_or("");
+            let method_is_lower = text[at + 2..].starts_with(|c: char| c.is_ascii_lowercase());
+            // Of a class named for what it makes, not a registry's or a helper's own.
+            let makes = ["Block", "Item", "Entity", "Menu"]
+                .iter()
+                .any(|s| name.ends_with(s));
+            if method_is_lower && makes && name.starts_with(|c: char| c.is_ascii_uppercase()) {
+                best = Some((at, name.to_string()));
+                break;
+            }
+        }
+    }
     best.map(|(_, name)| name)
         .filter(|n| n.starts_with(|c: char| c.is_ascii_uppercase()))
 }
@@ -1304,6 +1324,21 @@ pub fn reference_counts(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_registration_creates_the_class_its_factory_belongs_to() {
+        let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            created_class(&args(&["\"crank\"", "CrankBlock::new"])).as_deref(),
+            Some("CrankBlock")
+        );
+        // A factory of the class's own, where no constructor is named.
+        assert_eq!(
+            created_class(&args(&["\"cogwheel\"", "CogWheelBlock::small"])).as_deref(),
+            Some("CogWheelBlock")
+        );
+        assert_eq!(created_class(&args(&["\"plain\""])), None);
+    }
 
     #[test]
     fn reads_the_second_type_argument() {

@@ -256,4 +256,19 @@ The glue also runs, on this API, what it left to horizon-mixins bundles before:
   holds (GraveStone's `Death`) gets item slots of its own for them, so the function can put the
   stacks in the grave and breaking it gives them back.
 
+Checked in the game on that Nightly, with the twelve trial mods built together:
+
+- **A waystone placed by hand stands two blocks high.** Its `setPlacedBy` sets the top half with
+  properties the port's block doesn't have (`origin`, `waterlogged`); the glue names a state whole,
+  so the game refused it. The glue now keeps to the properties the block has.
+- **GraveStone leaves a grave.** A player who dies from a fall with 5 diamonds and 20 logs leaves
+  a `gravestone:gravestone` where they stood, holding both stacks under their name, and nothing on
+  the ground; breaking it gives the stacks back once. (The first port gave them back twice: its
+  code dropped them and the block entity spilled them too. A broken block's code is now told a
+  block entity's own slots drop by themselves.)
+- **A gap in the fork:** a death by `/kill` drops the inventory without `living_drops` being
+  heard, so no grave. The player's combat tracker has no blow for it, and the game only tells the
+  hook when it has one (`drop_death_items`, `source: None`). NeoForge fires `LivingDropsEvent`
+  there with `genericKill`.
+
 Still to give: trades and menus for a player, a mod's own screens as widgets, mob goals.
