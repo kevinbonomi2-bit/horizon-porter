@@ -289,6 +289,36 @@ pub fn find(scan: &ModScan, ns: &str) -> Vec<BlockEntity> {
                 be.energy = s.energy;
                 be.items = s.items;
             }
+            // A class it keeps that holds item lists (a grave's `Death`, with the dead
+            // player's inventory): its items are the block entity's own item slots.
+            if be.items == 0 {
+                for f in class.fields.iter().filter(|f| !f.is_static) {
+                    let ty = f.ty.split(['<', '[']).next().unwrap_or(&f.ty).trim();
+                    let mut of_type = scan
+                        .classes
+                        .iter()
+                        .filter(|c| c.name.rsplit(['.', '$']).next() == Some(ty));
+                    let (Some(held), None) = (of_type.next(), of_type.next()) else {
+                        continue;
+                    };
+                    let Some(s) = scan
+                        .storages
+                        .iter()
+                        .find(|s| s.class == held.name && s.items > 0)
+                    else {
+                        continue;
+                    };
+                    // Room for each of its lists: the largest, and what rides along.
+                    be.items = (s.items + 18).next_multiple_of(9).max(54);
+                    let was = format!("`{} {}`", f.ty, f.name);
+                    be.left_out.retain(|l| !l.starts_with(&was));
+                    be.left_out.push(format!(
+                        "{was}: its item lists are this block entity's own {} item slots (`world.entity_item(pos, slot)`, `world.set_entity_item(pos, slot, ..)`), kept and dropped with the block; its other values have no place yet",
+                        be.items
+                    ));
+                    break;
+                }
+            }
         }
         out.push(be);
     }

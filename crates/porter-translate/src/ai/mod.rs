@@ -219,10 +219,30 @@ const REACHES: &[(u32, &[&str])] = &[
             "love",
         ],
     ),
+    // The prompt names the runtime's call beside the Java it stands for: ports that
+    // overlooked one of reach 8's in the long trait.
+    (
+        9,
+        &[
+            "awardstat",
+            "stats.",
+            "stat award",
+            "no stat",
+            "cooldown",
+            "addeffect",
+            "mobeffectinstance",
+            "caneat",
+            "povhit",
+            "getentitiesofclass",
+            "setinlove",
+        ],
+    ),
+    // A block entity keeps the items of a class it holds in its own slots.
+    (10, &["no rust type"]),
 ];
 
 /// The newest line of `REACHES`.
-pub const REACH: u32 = 8;
+pub const REACH: u32 = 10;
 
 /// Whether a function ported at reach `at`, whose port says `notes` were out of reach,
 /// is worth porting again now.
@@ -836,6 +856,13 @@ fn prompt(dir: &Path, scan: &ModScan, unit: &Unit) -> Result<Prompt> {
                  `min(getSlotLimit(slot), stack.getMaxStackSize())`, which is `world.max_stack(item)` (1 for a tool), \
                  not 64."
             );
+            let hints = equivalents(&java_text, &stub);
+            if !hints.is_empty() {
+                let _ = writeln!(
+                    p,
+                    "The Java calls things this function has a way to do. Use them, and write no `// Missing:` note for them:\n{hints}"
+                );
+            }
         }
         Kind::Helper => {
             let _ = writeln!(p, "Its file, `{}`:\n\n```rust\n{file}```\n", unit.file);
@@ -985,6 +1012,152 @@ fn find_class<'a>(scan: &'a ModScan, name: &str) -> Option<&'a porter_model::Cla
     })
 }
 
+/// What the Java calls, for each call the function's parameters can do: the call a model
+/// overlooks in a long trait, named beside the Java it stands for. A line each.
+fn equivalents(java: &str, stub: &str) -> String {
+    // (what the stub is given, what the Java says, what to use)
+    const TABLE: &[(&str, &str, &str)] = &[
+        (
+            "dyn World",
+            "awardStat(",
+            "`player.awardStat(Stats.ITEM_USED.get(item))` is `world.stat(\"used\", item)`; a custom stat is `world.stat(\"custom\", id)`",
+        ),
+        (
+            "dyn World",
+            "getCooldowns()",
+            "`player.getCooldowns().addCooldown(stack, ticks)` is `world.cooldown(item, ticks)`",
+        ),
+        (
+            "dyn World",
+            ".addEffect(",
+            "`player.addEffect(new MobEffectInstance(effect, ticks, amplifier))` is `world.effect(effect, ticks, amplifier)`",
+        ),
+        (
+            "dyn World",
+            ".canEat(",
+            "`player.canEat(always)` is `world.can_eat(always)`",
+        ),
+        (
+            "dyn World",
+            "getPlayerPOVHitResult",
+            "`getPlayerPOVHitResult(level, player, fluid)` is `world.ray(u.eye, to)`, `to` the eye plus the look times 5.0",
+        ),
+        (
+            "dyn World",
+            ".clip(",
+            "`level.clip(new ClipContext(from, to, ..))` is `world.ray(from, to)`",
+        ),
+        (
+            "dyn World",
+            "getEntitiesOfClass(",
+            "`level.getEntitiesOfClass(X.class, box)` is `world.mobs_in(min, max)`, picked by `kind`",
+        ),
+        (
+            "dyn World",
+            "setInLove(",
+            "`animal.setInLove(player)` is `world.mob_love(mob.id)`",
+        ),
+        (
+            "dyn World",
+            "addFreshEntity(",
+            "`level.addFreshEntity(entity)` is `world.summon(kind, at)`, `summon_baby` for a baby, `launch(kind, at, velocity)` for something thrown or shot",
+        ),
+        (
+            "dyn World",
+            "levelEvent(",
+            "`level.levelEvent(2001, pos, Block.getId(state))` is `world.break_effect(pos, block)`; any other is `world.level_event(id, pos, data)`",
+        ),
+        (
+            "dyn World",
+            "gameEvent(",
+            "`level.gameEvent(.., GameEvent.X, pos)` is `world.game_event(\"minecraft:x\", pos)`",
+        ),
+        (
+            "dyn World",
+            "displayClientMessage(",
+            "`player.displayClientMessage(text, true)` is `world.overlay(text)`; with `false`, `world.chat(text)`",
+        ),
+        (
+            "dyn World",
+            "sendSystemMessage(",
+            "`player.sendSystemMessage(text)` is `world.chat(text)`",
+        ),
+        (
+            "dyn World",
+            "destroyBlock(",
+            "`level.destroyBlock(pos, drop)` is `world.destroy(pos, drop)`",
+        ),
+        (
+            "dyn World",
+            "BlockParticleOption",
+            "particles of a block (`new BlockParticleOption(ParticleTypes.BLOCK, state)`) are `world.block_particles(block, at, spread, speed, count)`",
+        ),
+        (
+            "Machine",
+            "getEntitiesOfClass(",
+            "`level.getEntitiesOfClass(ItemEntity.class, box)` is `machine.dropped_in(min, max)`; of animals or mobs, `machine.mobs_in(min, max)`",
+        ),
+        (
+            "Machine",
+            "setInLove(",
+            "`animal.setInLove(null)` is `machine.love(mob.id)`",
+        ),
+        (
+            "Machine",
+            "addFreshEntity(",
+            "`level.addFreshEntity(entity)` is `machine.summon(kind, at)`, `summon_baby` for a baby; an item is `machine.drop(..)`",
+        ),
+        (
+            "Machine",
+            "hasNeighborSignal(",
+            "`level.hasNeighborSignal(pos)` is `machine.powered`",
+        ),
+        (
+            "",
+            "canSeeSky(",
+            "`level.canSeeSky(pos)` is `world.sees_sky(pos)`",
+        ),
+        (
+            "",
+            "isFaceSturdy(",
+            "`state.isFaceSturdy(level, pos, face)` is `world.sturdy(pos, face)`",
+        ),
+        (
+            "",
+            "canSupportCenter(",
+            "`canSupportCenter(level, pos, UP)` is `world.sturdy(pos, \"up\")`",
+        ),
+        (
+            "",
+            "canSupportRigidBlock(",
+            "`canSupportRigidBlock(level, pos)` is `world.sturdy(pos, \"up\")`",
+        ),
+        (
+            "",
+            "canBeReplaced(",
+            "`level.getBlockState(pos).canBeReplaced(context)` is `world.replaceable(pos)`",
+        ),
+        (
+            "",
+            ".is(BlockTags.",
+            "`state.is(BlockTags.X)` is `world.in_tag(pos, \"minecraft:x\")`",
+        ),
+    ];
+    let mut out = String::new();
+    for (needs, call, hint) in TABLE {
+        // The Blocks queries go by the parameter's name; the rest by its type.
+        let has = if needs.is_empty() {
+            stub.contains("world:")
+        } else {
+            stub.contains(needs)
+        };
+        if has && java.contains(call) {
+            let _ = writeln!(out, "- {hint}");
+        }
+    }
+    out
+}
+
 /// The constants of class `simple` that `code` names (`ModSounds.EGG_HATCH`), each with
 /// the first string its declaration in `source` has, the id it is registered under:
 /// a line each, `- `EGG_HATCH`: "entity.ostrich.egg_hatch"`.
@@ -1032,7 +1205,9 @@ right. Write its body so it does what the Java code it names does, through what 
 Answer with the whole function, its signature unchanged, in one ```rust block, and nothing else in code blocks. \
 Keep the Java's behaviour: its numbers, its order, its edge cases. Where the Java uses something this function \
 has no way to reach, do the part you can and say what is missing in a short `// Missing: ...` comment in the body; never invent \
-APIs that are not in what you are shown. No `unsafe`, no `unwrap` on values that can be absent, no new crates.";
+APIs that are not in what you are shown. A working approximation beats doing nothing: when the main effect can be done \
+without a detail (an entity thrown without its saved data, a sound at the block instead of the player), do it, note the \
+detail, and return what the Java returns when it succeeds. No `unsafe`, no `unwrap` on values that can be absent, no new crates.";
 
 /// The translation state: what happened to each function, for `status` and resuming.
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -1115,6 +1290,20 @@ mod tests {
         );
         assert!(!text.contains("### `b`"));
         fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn hints_name_what_the_java_calls() {
+        let java = "player.awardStat(Stats.ITEM_USED.get(this)); level.canSeeSky(pos);";
+        let click = "fn x_use(u: &ItemUse, world: &mut dyn World) -> bool {";
+        let h = equivalents(java, click);
+        assert!(
+            h.contains("world.stat(") && h.contains("world.sees_sky("),
+            "{h}"
+        );
+        // A tick isn't told of what only a click can do.
+        let tick = "pub fn tick_x(pos: [i32; 3], state: &mut X, machine: &mut Machine<'_>) {";
+        assert!(equivalents(java, tick).is_empty());
     }
 
     #[test]

@@ -13,6 +13,7 @@ pub mod api;
 pub mod block_entity;
 pub mod blocks;
 pub mod bundle;
+pub mod events;
 pub mod machine;
 pub mod netconf;
 pub mod refused;

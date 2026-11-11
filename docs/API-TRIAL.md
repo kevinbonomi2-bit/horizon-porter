@@ -243,5 +243,17 @@ What ported code can reach through it now, beside what it had: `World::stat` (`a
 `getPlayerPOVHitResult`), `mobs_in` (`getEntitiesOfClass`) and `mob_love` (`setInLove`). On
 regular Horizon these do nothing, as its hooks give no way to.
 
-Still to give: the same to a block entity's tick (`Machine`), a "player died, here are the
-drops" function from the `living_drops` hook (a grave), trades and menus for a player.
+A block entity's tick has the mob query too (`machine.mobs_in`, `machine.love`).
+
+The glue also runs, on this API, what it left to horizon-mixins bundles before:
+
+- **A block placed or broken by a player** (`setPlacedBy`, `playerWillDestroy`): `break_block`
+  runs the port's `broken` before the block goes; `entity_place` tells of a placement before the
+  block is written, so the port's `placed` runs from a task a tick later, once it is there.
+- **A dying player's drops** (`LivingDropsEvent`): the classes that hear it, and those that hear an
+  event of the mod's own posted from there, become one function, `on_player_drops`, called from
+  `living_drops`; true takes the drops. A block entity that keeps its items inside a class it
+  holds (GraveStone's `Death`) gets item slots of its own for them, so the function can put the
+  stacks in the grave and breaking it gives them back.
+
+Still to give: trades and menus for a player, a mod's own screens as widgets, mob goals.

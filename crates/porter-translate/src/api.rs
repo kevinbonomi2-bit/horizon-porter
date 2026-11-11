@@ -37,6 +37,7 @@ pub fn files(
     renderers: bool,
     plants: bool,
     particles: &[String],
+    drops: bool,
 ) -> BTreeMap<String, String> {
     let mut out = BTreeMap::new();
     out.insert(
@@ -54,7 +55,9 @@ pub fn files(
     );
     out.insert(
         "api/src/lib.rs".into(),
-        lib_rs(behaviours, entities, machines, renderers, plants, particles),
+        lib_rs(
+            behaviours, entities, machines, renderers, plants, particles, drops,
+        ),
     );
     out
 }
@@ -65,10 +68,11 @@ pub fn wanted(behaviours: &[Behaviour], entities: bool) -> bool {
     entities || behaviours.iter().any(|b| covered(b.kind))
 }
 
-fn covered(kind: Kind) -> bool {
-    !matches!(kind, Kind::Placed | Kind::Destroyed)
+fn covered(_kind: Kind) -> bool {
+    true
 }
 
+#[allow(clippy::too_many_arguments)]
 fn lib_rs(
     behaviours: &[Behaviour],
     entities: bool,
@@ -76,6 +80,7 @@ fn lib_rs(
     renderers: bool,
     plants: bool,
     particles: &[String],
+    drops: bool,
 ) -> String {
     let has = |k: Kind| behaviours.iter().any(|b| b.kind == k);
     let block_kinds = [
@@ -135,7 +140,9 @@ fn lib_rs(
                 .replace("__SCREENS__", if machines { SCREENS } else { "" }),
         );
     }
-    if has(Kind::Use) || has(Kind::ItemUseOn) || has(Kind::ItemUse) || plants {
+    let by_player = has(Kind::Placed) || has(Kind::Destroyed);
+    if has(Kind::Use) || has(Kind::ItemUseOn) || has(Kind::ItemUse) || plants || by_player || drops
+    {
         r.push_str(HERE);
         if entities {
             r.push_str(HERE_ENTITIES);
@@ -213,18 +220,32 @@ fn lib_rs(
     if plants {
         r.push_str(PLANT_FN);
     }
+    if by_player {
+        r.push_str(BY_PLAYER);
+    }
     r.push_str(&register(
         entities,
         plants,
         particles,
         has(Kind::RandomTick) || has(Kind::Tick) || has(Kind::Neighbour),
+        has(Kind::Placed),
+        has(Kind::Destroyed),
+        drops,
     ));
     r
 }
 
 /// The mod's `Hooks`: its parts attached at registration, its block entity types
 /// declared with their blocks, and their containers.
-fn register(entities: bool, plants: bool, particles: &[String], ticks: bool) -> String {
+fn register(
+    entities: bool,
+    plants: bool,
+    particles: &[String],
+    ticks: bool,
+    placed: bool,
+    broken: bool,
+    drops: bool,
+) -> String {
     let mut r = String::from(
         "
 #[derive(Default)]
@@ -315,6 +336,15 @@ impl Hooks for Mod {
     }
 ",
         );
+    }
+    if placed {
+        r.push_str(HOOK_PLACED);
+    }
+    if broken {
+        r.push_str(HOOK_BROKEN);
+    }
+    if drops {
+        r.push_str(HOOK_DROPS);
     }
     if entities {
         r.push_str(
@@ -1292,6 +1322,172 @@ const PART_ANALOG: &str = r#"    fn has_analog_output(&self, level: &dyn LevelHo
         }
     }
 
+"#;
+
+const BY_PLAYER: &str = r#"
+/// The acting player (the one placing or breaking) as the port's `ByPlayer`, for the
+/// block at `pos`.
+fn by_player(host: &mut dyn ServerHost, block: String, pos: [i32; 3]) -> runtime::ByPlayer {
+    let player = host.players().acting_player();
+    let entity = player.map(|p| p.entity());
+    let stack = entity
+        .and_then(|e| host.living(e))
+        .and_then(|l| l.hand_item(&*host, mod_api::Hand::Main));
+    let (held, held_count) = stack
+        .as_ref()
+        .and_then(|s| stack_of(&*host, s))
+        .unwrap_or_else(|| ("minecraft:air".to_string(), 0));
+    let yaw = entity.and_then(|e| e.rotation(&*host)).map_or(0.0, |r| r[0]);
+    runtime::ByPlayer {
+        block,
+        pos,
+        held,
+        held_count,
+        creative: player.and_then(|p| p.is_creative(&*host)).unwrap_or(false),
+        facing: runtime::yaw_direction(yaw).to_string(),
+        sneaking: entity.and_then(|e| e.is_crouching(&*host)).unwrap_or(false),
+    }
+}
+
+/// The mod's blocks placed this tick, with who placed them, until their `setPlacedBy`
+/// code runs: the API tells of a placement before the block is written.
+#[allow(dead_code)]
+static PLACED: std::sync::Mutex<Vec<(Option<u128>, runtime::ByPlayer)>> =
+    std::sync::Mutex::new(Vec::new());
+/// The task that runs them, a tick later.
+#[allow(dead_code)]
+const PLACED_TASK: u64 = 0x706c_6163_6564;
+"#;
+
+const HOOK_PLACED: &str = r#"
+    // A player is about to place one of the mod's blocks: its `setPlacedBy` / `onPlace`
+    // code runs a tick later, once the block is there.
+    fn entity_place(&self, host: &mut dyn ServerHost, event: &mut mod_api::EntityPlaceEvent) -> Flow {
+        let Some(text) = host.block_state_string(event.state) else {
+            return Flow::Continue;
+        };
+        let (block, _) = parse_state(&text);
+        let Some(player) = host.players().acting_player() else {
+            return Flow::Continue;
+        };
+        if runtime::acts_when_placed(&block) {
+            let pos = [event.pos.x, event.pos.y, event.pos.z];
+            let by = by_player(host, block, pos);
+            let uuid = player.entity().uuid(host);
+            if let Ok(mut waiting) = PLACED.lock() {
+                waiting.push((uuid, by));
+            }
+            let _ = host.schedule_task(1, PLACED_TASK);
+        }
+        Flow::Continue
+    }
+
+    fn scheduled_task(&self, host: &mut dyn ServerHost, event: &mut mod_api::ScheduledTaskEvent<'_>) {
+        if event.token != PLACED_TASK {
+            return;
+        }
+        let waiting = PLACED
+            .lock()
+            .map(|mut w| std::mem::take(&mut *w))
+            .unwrap_or_default();
+        for (uuid, by) in waiting {
+            let dimension = host.dimension();
+            let level = host.level(dimension);
+            // Only where the block did get placed.
+            let there = level
+                .and_then(|l| l.block_state(&*host, by.pos))
+                .and_then(|s| host.block_state_string(s))
+                .map(|t| parse_state(&t).0);
+            if there.as_deref() != Some(by.block.as_str()) {
+                continue;
+            }
+            let player = uuid.and_then(|u| host.player(u));
+            let mut here = Here {
+                host: &mut *host,
+                level,
+                dimension,
+                player,
+                hand: mod_api::Hand::Main,
+                seed: seed_of(by.pos),
+            };
+            let _ = runtime::placed(&by, &mut here);
+        }
+    }
+"#;
+
+const HOOK_BROKEN: &str = r#"
+    // A player breaks one of the mod's blocks: its `playerWillDestroy` / `playerDestroy`
+    // code runs before the block goes.
+    fn break_block(&self, host: &mut dyn ServerHost, event: &mut mod_api::BreakBlockEvent<'_>) -> Flow {
+        let Some(text) = host.block_state_string(event.state) else {
+            return Flow::Continue;
+        };
+        let (block, _) = parse_state(&text);
+        if runtime::acts_when_broken(&block) {
+            let by = by_player(host, block, event.pos);
+            let dimension = host.dimension();
+            let level = host.level(dimension);
+            let player = host.players().acting_player();
+            let mut here = Here {
+                host,
+                level,
+                dimension,
+                player,
+                hand: mod_api::Hand::Main,
+                seed: seed_of(event.pos),
+            };
+            let _ = runtime::broken(&by, &mut here);
+        }
+        Flow::Continue
+    }
+"#;
+
+const HOOK_DROPS: &str = r#"
+    // A player died: the mod's code for their drops (a grave) runs, and takes them or not.
+    fn living_drops(&self, host: &mut dyn ServerHost, event: &mut mod_api::LivingDropsEvent<'_>) -> Flow {
+        let Some(uuid) = event.player else {
+            return Flow::Continue;
+        };
+        let Some(player) = host.player(uuid) else {
+            return Flow::Continue;
+        };
+        let entity = player.entity();
+        let at = entity.position(&*host).unwrap_or([0.0; 3]);
+        let yaw = entity.rotation(&*host).map_or(0.0, |r| r[0]);
+        let hex = format!("{uuid:032x}");
+        let died = runtime::PlayerDrops {
+            name: player.name(&*host).unwrap_or_default(),
+            uuid: format!(
+                "{}-{}-{}-{}-{}",
+                &hex[..8],
+                &hex[8..12],
+                &hex[12..16],
+                &hex[16..20],
+                &hex[20..]
+            ),
+            pos: [at[0].floor() as i32, at[1].floor() as i32, at[2].floor() as i32],
+            facing: runtime::yaw_direction(yaw).to_string(),
+            items: event
+                .drops
+                .iter()
+                .filter_map(|d| stack_of(&*host, &d.stack))
+                .collect(),
+        };
+        let dimension = host.dimension();
+        let level = entity.level(&*host).or_else(|| host.level(dimension));
+        let mut here = Here {
+            host,
+            level,
+            dimension,
+            player: Some(player),
+            hand: mod_api::Hand::Main,
+            seed: seed_of(died.pos),
+        };
+        if runtime::player_drops(&died, &mut here) {
+            event.drops.clear();
+        }
+        Flow::Continue
+    }
 "#;
 
 const CLICK_FN: &str = r#"

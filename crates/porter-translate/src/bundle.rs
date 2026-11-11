@@ -260,6 +260,8 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
     }
     // Blocks and items that act in code: placed, used or reshaped by their own Java.
     let behaviours = blocks::find(scan, &ns, &content.blocks, &content.items);
+    // What the mod does with a dying player's drops (a grave).
+    let drops = crate::events::drops(scan);
     for (hook, classes) in blocks::hooks(&behaviours) {
         wired.entry(hook).or_default().extend(classes);
     }
@@ -508,6 +510,7 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
         remainders: &remainders,
         places: &places,
         block_tags: &block_tags,
+        drops: drops.as_ref(),
         statics: &java_statics,
         ledger: horizon.map(|src| (src.to_path_buf(), unmapped_ports(scan, src))),
     };
@@ -562,6 +565,7 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
             wired.contains_key("block_entity_submit"),
             !places.is_empty(),
             &mod_particles(&content),
+            drops.is_some() && (!behaviours.is_empty() || !places.is_empty()),
         )
     } else {
         BTreeMap::new()
@@ -1061,6 +1065,8 @@ struct Ctx<'a> {
     places: &'a [(String, String, String)],
     /// Block tags the ported code may ask about, with their blocks.
     block_tags: &'a [(String, Vec<String>)],
+    /// The mod's code for a dying player's drops.
+    drops: Option<&'a crate::events::Drops>,
     /// The Java statics the mod's code shares.
     statics: &'a [crate::statics::Module],
     /// The Horizon checkout read, and the functions that port each unmapped
@@ -1510,6 +1516,9 @@ pub const STATE_KEYS: &[&str] = &[{}];",
             self.block_tags,
         ));
         if !self.behaviours.is_empty() || !self.places.is_empty() {
+            if let Some(drops) = self.drops {
+                r.push_str(&crate::events::runtime(drops));
+            }
             // Which blocks open a menu when used: a machine's, a chest-like one's.
             let mut checks = Vec::new();
             if !self.machines.is_empty() {
