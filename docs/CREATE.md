@@ -134,23 +134,33 @@ every tick, and a shaft and a cogwheel on it read -32 while it is held and 0 aft
 ported apart and didn't agree before; what changed is that the click's translation now sees the
 block entity's class, and the tick was ported again.
 
-**Six more kinetic blocks, and what they show.** With the shared functions, an encased shaft, an
-encased cogwheel, a gearbox, a clutch, a gearshift and a water wheel were translated (about two
-cents each) and tried:
+**Six more kinetic blocks, and what a block entity passes on.** With the shared functions, an
+encased shaft, an encased cogwheel, a gearbox, a clutch, a gearshift and a water wheel were
+translated (about two cents each). At first they connected and passed speed on unchanged:
 
-| Block | In the port | In Java |
+| Block | First | In Java, and in the port now |
 | --- | --- | --- |
 | Encased shaft | passes 16 on | the same |
-| Gearbox | passes 16 to its three other faces | -16, -16 and 16: each face turns its own way |
-| Clutch | follows redstone (`powered=true`), still passes 16 | passes nothing while powered |
+| Gearbox | 16 to its three other faces | -16, -16 and 16: each face turns its own way |
+| Clutch | follows redstone, still passes 16 | passes nothing while powered |
 | Gearshift | follows redstone, still passes 16 | passes -16 while powered |
 
-Connecting is right; what a block *passes on* is not. In Java that is asked of the block entity
-giving the speed (`SplitShaftBlockEntity.getRotationSpeedModifier(face)`, a gearbox's faces in
-`RotationPropagator.getAxisModifier`), by the one taking it. Here the taker's tick is ported
-alone and doesn't know what its neighbour's class would answer. It is the same shape as the
-blocks' questions, one level up: a mod's questions to a block entity, and the helper that asks
-them, ported once.
+What a block passes on is asked of the block entity giving the speed
+(`SplitShaftBlockEntity.getRotationSpeedModifier(face)`, a gearbox's faces in
+`RotationPropagator.getAxisModifier`), by the one taking it, whose tick is ported alone. So the
+same step was taken one level up. A method the block entities' classes answer differently, and a
+static helper that takes block entities, each become one function of the port too, over a view of
+the block entity (its block, its state, where it is, its saved values):
+
+- `split_shaft_block_entity_get_rotation_speed_modifier(be, face)`, with the clutch's and the
+  gearshift's answers quoted for the translation;
+- `rotation_propagator_get_rotation_speed_modifier(from, to)`, `get_conveyed_speed`,
+  `get_axis_modifier` and `is_connected`, ported from `RotationPropagator` and calling the
+  questions above and each other, as the Java does.
+
+Every kinetic tick now takes its speed through `rotation_propagator_get_conveyed_speed(neighbour,
+me)`: ten ticks, 44 to 146 lines each where the first shaft tick alone was 377, and all of them
+agree, because none carries its own idea of what connects or what is passed on.
 
 **Where it stops.**
 
@@ -159,10 +169,6 @@ them, ported once.
 - **Diagonals.** A large cogwheel meshes with a small one diagonally, which six neighbours
   don't reach.
 - **Items drawn by code.** The wrench has no icon: its model is a renderer of Create's own.
-- **What a block entity passes on.** The table above: the next step is to port the methods a
-  mod asks of its block entities (`getRotationSpeedModifier`), and the static helper that asks
-  them (`RotationPropagator.getRotationSpeedModifier(from, to)`), once each, as the blocks'
-  questions are, so every tick takes its speed through the same function.
 - **One function at a time.** Each kinetic block entity's tick still carries its own copy of
   the step that takes speed from its neighbours: it is `KineticBlockEntity`'s work, the same for
   all hundred of them, and translated again for each (about two cents and 50 to 170 lines a
