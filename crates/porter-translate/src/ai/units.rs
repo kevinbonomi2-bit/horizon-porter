@@ -95,9 +95,36 @@ const GAPS: [&str; 19] = [
     "stands in",
 ];
 
+/// Names a port may have given a state property that no block has: vanilla's
+/// `BlockStateProperties` constants in lower case, where the property's name is another
+/// (`HORIZONTAL_FACING` is `facing`). A block read by one of these never matches, and
+/// one set by it keeps its default.
+const NOT_PROPERTIES: [&str; 13] = [
+    "\"horizontal_facing\"",
+    "\"horizontal_axis\"",
+    "\"facing_hopper\"",
+    "\"vertical_direction\"",
+    "\"double_block_half\"",
+    "\"door_hinge\"",
+    "\"stairs_shape\"",
+    "\"slab_type\"",
+    "\"chest_type\"",
+    "\"attach_face\"",
+    "\"bed_part\"",
+    "\"bell_attachment\"",
+    "\"noteblock_instrument\"",
+];
+
+/// Whether a ported function names a state property by a vanilla constant that isn't
+/// its name.
+pub fn misnames_a_property(function: &str) -> bool {
+    NOT_PROPERTIES.iter().any(|n| function.contains(n))
+}
+
 /// The ported functions of a file worth porting again: those `port --force` marked
-/// outdated, and, with `gaps`, those whose port says it couldn't reach something (what
-/// a newer horizon-porter may now give them). Each with its comment back to its TODO.
+/// outdated, those that name a state property no block has, and, with `gaps`, those
+/// whose port says it couldn't reach something (what a newer horizon-porter may now
+/// give them). Each with its comment back to its TODO.
 pub fn find_again(file: &str, source: &str, gaps: bool) -> Vec<Unit> {
     let kind = if file.ends_with("runtime.rs") {
         Kind::Runtime
@@ -112,7 +139,7 @@ pub fn find_again(file: &str, source: &str, gaps: bool) -> Vec<Unit> {
         }
         let body = &source[item.fn_start..item.end];
         let admits = gaps && GAPS.iter().any(|g| body.contains(g));
-        if !comment.contains(OUTDATED) && !admits {
+        if !comment.contains(OUTDATED) && !admits && !misnames_a_property(body) {
             continue;
         }
         let comment = todo_comment(comment);
@@ -543,10 +570,16 @@ pub fn keep_ported(fresh: &str, existing: &str) -> String {
         let from_then = prev_comment
             .lines()
             .find_map(|l| l.find(PORTED).map(|i| todo_of(&l[i..]).trim().to_string()));
-        let source_changed = matches!(
-            (&from_then, &from_now),
-            (Some(a), Some(b)) if a.contains("(not found)") && !b.contains("(not found)")
-        );
+        // Or one that is to read more Java now: the class of another block entity
+        // that calls the code this one gave it.
+        let source_changed = match (&from_then, &from_now) {
+            (Some(a), Some(b)) => {
+                let then = java_classes(a);
+                (a.contains("(not found)") && !b.contains("(not found)"))
+                    || java_classes(b).iter().any(|c| !then.contains(c))
+            }
+            _ => false,
+        };
         let stale = prev_comment.contains(OUTDATED)
             || (was_ported
                 && (source_changed || described(prev_comment) != described(fresh_comment)));
@@ -812,6 +845,18 @@ pub fn tick_b(pos: [i32; 3]) {
             "{}",
             again[0].comment
         );
+        // Ported from one class, and to read another now (one that calls the code it
+        // gave): marked, and ported again from both.
+        let more = keep_ported(
+            &existing.replace(
+                "Ported by horizon-porter translate (m): the tick of `a.B`. Review it.",
+                "TODO: port the tick of `a.B`, and what `a.Given` is called for by `a.Caller`.",
+            ),
+            existing,
+        );
+        assert!(more.contains(OUTDATED), "{more}");
+        let again = find_again("mixins/m/runtime.rs", &more, false);
+        assert_eq!(again[0].java, ["a.B", "a.Caller", "a.Given"]);
         // The same description: kept as it was, and found only by what it says is missing.
         let same = keep_ported(
             &existing.replace("Ported by horizon-porter translate (m):", "TODO: port"),
@@ -820,6 +865,13 @@ pub fn tick_b(pos: [i32; 3]) {
         assert!(!same.contains(OUTDATED), "{same}");
         assert!(find_again("mixins/m/runtime.rs", &same, false).is_empty());
         assert_eq!(find_again("mixins/m/runtime.rs", &same, true).len(), 1);
+        // One that reads a state property by vanilla's constant: found without being
+        // marked, and without a gap note.
+        let misnamed = same.replace(
+            "// Missing: its slots.",
+            "let _ = machine_state(\"horizontal_facing\");",
+        );
+        assert_eq!(find_again("mixins/m/runtime.rs", &misnamed, false).len(), 1);
         assert!(
             stub_of(
                 "pub fn tick_b(pos: [i32; 3]) {

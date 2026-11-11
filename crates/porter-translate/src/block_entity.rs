@@ -4,7 +4,7 @@
 // `native_block_entity_ticks` says which tick, and `native_block_entity_tick` runs
 // the stub on the server, 20 times a second.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 
 use porter_model::{ClassInfo, ModScan};
@@ -67,6 +67,26 @@ pub struct BlockEntity {
     /// holds each: (`pressingBehaviour`, `com.x.PressingBehaviour`). Their saved
     /// values and lasting fields are in its state, their ticks part of its tick.
     pub held: Vec<(String, String)>,
+    /// The classes of other block entities that take something it holds and call the
+    /// code it gave it: a depot's `DepotBehaviour`, for a press.
+    pub called_by: Vec<Caller>,
+}
+
+/// A class of the mod that takes something a block entity holds and calls the code
+/// that block entity gave it: a depot's `DepotBehaviour`, which gets the
+/// `BeltProcessingBehaviour` of the press two above it and calls its handlers.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Caller {
+    /// What it takes: `com.x.BeltProcessingBehaviour`.
+    pub takes: String,
+    /// The class that calls it: `com.x.DepotBehaviour`.
+    pub class: String,
+    /// How it gets it, as written: `BeltProcessingBehaviour processingBehaviour =
+    /// BlockEntityBehaviour.get(world, pos.above(2), BeltProcessingBehaviour.TYPE)`.
+    pub gets: String,
+    /// The block entities that class is part of, each with its item slots
+    /// ("`heldItem` is slot 0", empty for none): (`demo:depot`, ..).
+    pub entities: Vec<(String, String)>,
 }
 
 /// A field of the state struct.
@@ -314,6 +334,7 @@ pub fn find(scan: &ModScan, ns: &str) -> Vec<BlockEntity> {
             drawn,
             far: false,
             held: Vec::new(),
+            called_by: Vec::new(),
         };
         if let Some(class) = class {
             state_of(scan, class, &mut be);
@@ -454,7 +475,263 @@ pub fn find(scan: &ModScan, ns: &str) -> Vec<BlockEntity> {
         }
         out.push(be);
     }
+    called_by(scan, &mut out);
     out
+}
+
+/// Finds, for each block entity, the classes of other block entities that take
+/// something it holds and call the code it gave it (`Caller`). Java has the one call
+/// the other; here each tick is ported alone, so the one that gave the code is told
+/// who would call it, and does that work itself.
+fn called_by(scan: &ModScan, entities: &mut [BlockEntity]) {
+    let class = |name: &str| scan.classes.iter().find(|c| c.name == name);
+    let simple = |name: &str| name.rsplit(['.', '$']).next().unwrap_or(name).to_string();
+    // What each block entity is made of: its class, the mod's above it, what it holds.
+    let parts: Vec<Vec<String>> = entities
+        .iter()
+        .map(|be| {
+            be.class
+                .iter()
+                .chain(&be.bases)
+                .cloned()
+                .chain(be.held.iter().map(|(_, c)| c.clone()))
+                .collect()
+        })
+        .collect();
+    // What can be taken from one: a class it holds, or one of the mod's above that
+    // (short of a base of many kinds), which keeps code it is given (a field of a
+    // callback type) and has methods that run it (`handleReceivedItem`, whose body is
+    // `return onItemEnter.apply(stack, inventory)`).
+    let read = |c: &ClassInfo| {
+        std::fs::read_to_string(std::path::Path::new(&scan.input).join(&c.path)).ok()
+    };
+    let runs_code = |c: &ClassInfo| -> Vec<String> {
+        const FUNCTIONS: &[&str] = &[
+            "Runnable",
+            "Supplier",
+            "BooleanSupplier",
+            "Consumer",
+            "BiConsumer",
+            "Function",
+            "BiFunction",
+            "Predicate",
+            "BiPredicate",
+            "UnaryOperator",
+            "BinaryOperator",
+        ];
+        let Some(source) = read(c) else {
+            return Vec::new();
+        };
+        let given: Vec<&str> = c
+            .fields
+            .iter()
+            .filter(|f| !f.is_static)
+            .filter(|f| {
+                let ty = simple(f.ty.split(['<', '[']).next().unwrap_or(&f.ty).trim());
+                FUNCTIONS.contains(&ty.as_str())
+                    || has_word(&source, &format!("interface {ty}"))
+                    || scan.classes.iter().any(|o| {
+                        o.kind == porter_model::ClassKind::Interface
+                            && simple(&o.name) == ty
+                            && o.methods == 1
+                    })
+            })
+            .map(|f| f.name.as_str())
+            .collect();
+        c.method_names
+            .iter()
+            .filter(|m| {
+                crate::questions::method_body(&source, m).is_some_and(|body| {
+                    given
+                        .iter()
+                        .any(|f| has_word(&body, f) && body.contains(&format!("{f}.")))
+                })
+            })
+            .cloned()
+            .collect()
+    };
+    // Each with the methods of its that run the code it was given.
+    let mut taken: Vec<Vec<(&ClassInfo, Vec<String>)>> = Vec::new();
+    for be in entities.iter() {
+        let mut mine: Vec<(&ClassInfo, Vec<String>)> = Vec::new();
+        // What it holds, and what its own fields are of (a spout's plain
+        // `BeltProcessingBehaviour`, which saves nothing and so isn't in `held`).
+        let mut holds: Vec<&ClassInfo> = be.held.iter().filter_map(|(_, c)| class(c)).collect();
+        for owner in be.class.iter().chain(&be.bases).filter_map(|c| class(c)) {
+            for f in owner.fields.iter().filter(|f| !f.is_static) {
+                let ty = simple(f.ty.split(['<', '[']).next().unwrap_or(&f.ty).trim());
+                let mut of = scan.classes.iter().filter(|c| simple(&c.name) == ty);
+                if let (Some(c), None) = (of.next(), of.next())
+                    && c.kind == porter_model::ClassKind::Class
+                    && !holds.iter().any(|h| h.name == c.name)
+                {
+                    holds.push(c);
+                }
+            }
+        }
+        for held in holds {
+            let mut next = Some(held);
+            for _ in 0..3 {
+                let Some(c) = next else {
+                    break;
+                };
+                let kinds = scan
+                    .classes
+                    .iter()
+                    .filter(|o| o.superclass.as_deref() == Some(c.name.as_str()))
+                    .count();
+                if kinds > 6 {
+                    break;
+                }
+                if !mine.iter().any(|(m, _)| m.name == c.name) {
+                    let runs = runs_code(c);
+                    if !runs.is_empty() {
+                        mine.push((c, runs));
+                    }
+                }
+                next = c.superclass.as_deref().and_then(class);
+            }
+        }
+        taken.push(mine);
+    }
+    if taken.iter().all(|t| t.is_empty()) {
+        return;
+    }
+    // The sources of the classes block entities are made of, read once.
+    let mut sources: BTreeMap<&str, String> = BTreeMap::new();
+    for name in parts.iter().flatten() {
+        if sources.contains_key(name.as_str()) {
+            continue;
+        }
+        if let Some(text) = class(name).and_then(read) {
+            sources.insert(name.as_str(), text);
+        }
+    }
+    // How `source` takes a `ty` and calls it: a local or a parameter of that type,
+    // with one of the type's methods called on it. Not a class that makes one or
+    // keeps one of its own: that is another one giving it code.
+    let gets = |source: &str, ty: &ClassInfo, runs: &[String]| -> Option<String> {
+        let word = simple(&ty.name);
+        if source.contains(&format!("new {word}(")) {
+            return None;
+        }
+        for (at, _) in source.match_indices(&word) {
+            let before = source[..at].chars().next_back();
+            if before.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.') {
+                continue;
+            }
+            let rest = &source[at + word.len()..];
+            let Some(name) = rest.strip_prefix(' ') else {
+                continue;
+            };
+            let end = name
+                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                .unwrap_or(name.len());
+            let (name, after) = name.split_at(end);
+            // (`x instanceof Handler h` is a look at something it was handed, not a take.)
+            if !name.starts_with(|c: char| c.is_ascii_lowercase())
+                || !after.trim_start().starts_with(['=', ',', ')'])
+                || source[..at].trim_end().ends_with("instanceof")
+            {
+                continue;
+            }
+            // Called with plain values: a call that hands it code of its own (a lambda
+            // to run over its items) is the caller doing its own work through it.
+            let called = runs.iter().any(|m| {
+                let call = format!("{name}.{m}(");
+                source.match_indices(&call).any(|(i, _)| {
+                    let args = &source[i + call.len()..];
+                    let mut depth = 1;
+                    let end = args
+                        .char_indices()
+                        .find(|(_, c)| {
+                            match c {
+                                '(' => depth += 1,
+                                ')' => depth -= 1,
+                                _ => {}
+                            }
+                            depth == 0
+                        })
+                        .map_or(args.len(), |(i, _)| i);
+                    !args[..end].contains("->") && !args[..end].contains("::")
+                })
+            });
+            if !called {
+                continue;
+            }
+            // The statement, for where it looks: up to its `;`, or the parameter alone.
+            let line_start = source[..at].rfind('\n').map_or(0, |i| i + 1);
+            let text = if after.trim_start().starts_with('=') {
+                let stop = source[at..].find(';').map_or(source.len(), |i| at + i);
+                one_line(&source[line_start..stop])
+            } else {
+                format!("{word} {name}")
+            };
+            return Some(text.chars().take(200).collect());
+        }
+        None
+    };
+    for i in 0..entities.len() {
+        let mut found: Vec<Caller> = Vec::new();
+        for (ty, runs) in &taken[i] {
+            let fields_of = |c: &ClassInfo| {
+                c.fields.iter().any(|f| {
+                    simple(f.ty.split(['<', '[']).next().unwrap_or(&f.ty).trim())
+                        == simple(&ty.name)
+                })
+            };
+            for (name, source) in &sources {
+                if parts[i].iter().any(|p| p == name) || *name == ty.name {
+                    continue;
+                }
+                let Some(c) = class(name) else {
+                    continue;
+                };
+                // One that extends it or keeps one is giving code too, not calling it.
+                if c.superclass.as_deref() == Some(ty.name.as_str()) || fields_of(c) {
+                    continue;
+                }
+                let Some(how) = gets(source, ty, runs) else {
+                    continue;
+                };
+                let of: Vec<(String, String)> = entities
+                    .iter()
+                    .zip(&parts)
+                    .filter(|(_, p)| p.iter().any(|p| p == name))
+                    .map(|(be, _)| (be.id.clone(), slot_map(be)))
+                    .collect();
+                if of.is_empty() {
+                    continue;
+                }
+                found.push(Caller {
+                    takes: ty.name.clone(),
+                    class: name.to_string(),
+                    gets: how,
+                    entities: of,
+                });
+            }
+        }
+        found.truncate(4);
+        // Where it sits from them may be two steps off (`pos.above(2)` in their Java).
+        if found.iter().any(|c| {
+            [
+                ".above(2)",
+                ".below(2)",
+                ".north(2)",
+                ".south(2)",
+                ".east(2)",
+                ".west(2)",
+            ]
+            .iter()
+            .any(|far| c.gets.contains(far))
+        }) {
+            entities[i].far = true;
+        }
+        if !found.is_empty() {
+            entities[i].neighbours = true;
+        }
+        entities[i].called_by = found;
+    }
 }
 
 /// Fills in the state fields and whether it ticks, from the Java class.
@@ -696,6 +973,8 @@ fn hold(scan: &ModScan, owners: &[&ClassInfo], be: &mut BlockEntity) {
                 .iter()
                 .filter(|g| !g.is_static)
                 .filter(|g| unique(&g.ty).is_some_and(one_stack) && !g.ty.contains('<'))
+                // (Not what it keeps for drawing: a belt's `lazyClientItem`.)
+                .filter(|g| !g.name.to_ascii_lowercase().contains("client"))
                 .collect();
             if !saves && storage.is_none_or(|s| s.items == 0) && stacks.is_empty() {
                 continue;
@@ -993,8 +1272,10 @@ pub const BLOCK_ENTITIES: &[(&str, &str, bool)] = &[
                     } else {
                         ""
                     },
-                    animate = animate_doc(be) + &redstone_doc(be) + &lands_doc(be),
-                    animate_todo = animate_todo(be) + &redstone_todo(be) + &lands_todo(be),
+                    animate =
+                        animate_doc(be) + &redstone_doc(be) + &lands_doc(be) + &called_doc(be),
+                    animate_todo =
+                        animate_todo(be) + &redstone_todo(be) + &lands_todo(be) + &called_todo(be),
                     snake = be.snake,
                     ty = be.rust
                 );
@@ -1246,6 +1527,57 @@ fn lands_todo(be: &BlockEntity) -> String {
         }
         None => String::new(),
     }
+}
+
+/// The tick's word on the block entities that call code it gave: nothing calls across
+/// block entities here, so it does that work on them itself.
+fn called_doc(be: &BlockEntity) -> String {
+    if be.called_by.is_empty() {
+        return String::new();
+    }
+    let simple = |name: &str| name.rsplit(['.', '$']).next().unwrap_or(name).to_string();
+    let who: Vec<String> = be
+        .called_by
+        .iter()
+        .map(|c| {
+            let ids: Vec<String> = c
+                .entities
+                .iter()
+                .take(6)
+                .map(|(id, _)| format!("`{id}`"))
+                .collect();
+            let slots = c
+                .entities
+                .iter()
+                .map(|(_, s)| s.as_str())
+                .find(|s| !s.is_empty())
+                .map(|s| format!("; item slots: {s}"))
+                .unwrap_or_default();
+            format!(
+                "`{}` of {} takes its `{}` (`{}`{slots})",
+                simple(&c.class),
+                ids.join(", "),
+                simple(&c.takes),
+                c.gets
+            )
+        })
+        .collect();
+    format!(
+        "\n/// Other block entities of the mod call code this one gave: {}. Nothing calls across\n/// block entities here, so this tick does that work itself, each tick: it finds that block\n/// entity where it would look for this one from (`machine.at(..)`; `pos.above(2)` there is\n/// `pos.below(2)` here), and does to it and to itself what that code does when called.",
+        who.join("; ")
+    )
+}
+
+/// The TODO's mention of what calls it, so translate reads those classes.
+fn called_todo(be: &BlockEntity) -> String {
+    let mut out = String::new();
+    for c in &be.called_by {
+        out.push_str(&format!(
+            ", and what `{}` is called for by `{}`",
+            c.takes, c.class
+        ));
+    }
+    out
 }
 
 /// Which of its slots each of its item handlers has: "`inputInv` is slot 0, `outputInv`

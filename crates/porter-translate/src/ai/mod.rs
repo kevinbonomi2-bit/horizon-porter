@@ -251,10 +251,24 @@ const REACHES: &[(u32, &[&str])] = &[
             "neighbour's block state",
         ],
     ),
+    // A tick does the work of the code it gave other block entities to call, on them;
+    // and config values come with their declared defaults.
+    (
+        12,
+        &[
+            "config",
+            "handler",
+            "callback",
+            "belt mode",
+            "on a belt",
+            "on the belt",
+            "depot",
+        ],
+    ),
 ];
 
 /// The newest line of `REACHES`.
-pub const REACH: u32 = 11;
+pub const REACH: u32 = 12;
 
 /// For a tick that reaches another block entity: who does what, where the Java has one
 /// of them call code the other registered.
@@ -265,6 +279,21 @@ tick, each tick, on the block entity they would be called for (`machine.at(..)`:
 changed with `machine.set_at` and `machine.set_item_at`). And the other one, whose Java only calls handlers it was \
 given (`behaviour.handleReceivedItem(..)`, `handleHeldItem(..)`), leaves that out: say in a comment that the block \
 entity which registers them does it, and write no `// Missing:` note for it.";
+
+/// For a tick whose comment names the block entities that call code it gave them: how
+/// to do that work from this tick.
+const CALLED: &str = "This function's comment names block entities that call code this one gave them, and the Java \
+classes that do (shown above). Nothing calls that code here, so write it into this tick as a part of its own; a tick \
+that leaves it out does nothing for them. Each tick: (1) find the caller where its Java looks for this block entity \
+from (`pos.above(2)` in the caller's code is `machine.at([x, y - 2, z])` here) and check its `entity` is one of the \
+ids named; (2) apply the caller's own conditions for calling, then do what the code it would call does, with the \
+caller's thing as its argument (the item it holds is `n.items[slot]`, by the slots the comment gives). Where the \
+caller calls one handler first and another once the first answered that it holds the thing, tell the two apart by \
+this block entity's own state (not started: the first; started: the second); (3) what that code does to the caller \
+through what it is handed (`handler.handleProcessingOnItem(..)`: read the caller's Java for what it does with the \
+result) is `machine.set_item_at(pos, slot, stack)` for its item slots and `machine.set_at(pos, key, value)` for its \
+saved values. A flag the caller keeps on its own thing that this module has no place for (an item's `locked`) is left \
+out with a `// Missing:` note; the work itself is not.";
 
 /// For a tick that sees its neighbours: how to port a walk over a whole network.
 const NETWORK_STEP: &str = "This tick sees the six blocks beside it (`machine.neighbour(side)`: each one's block, \
@@ -308,7 +337,11 @@ pub fn outdated(dir: &Path) -> Result<Vec<Unit>> {
             let notes = units::gap_notes(
                 &units::function_source(&source, &unit.function).unwrap_or_default(),
             );
-            if marked || reach_grew_for(reach, &notes) {
+            // (One that names a state property no block has is wrong whatever it
+            // reached: ported again whenever asked.)
+            let misnamed = units::function_source(&source, &unit.function)
+                .is_some_and(|f| units::misnames_a_property(&f));
+            if marked || misnamed || reach_grew_for(reach, &notes) {
                 out.push(unit);
             }
         }
@@ -588,6 +621,17 @@ fn translate_one(
             );
             continue;
         }
+        if let Some((constant, name)) = prompt.properties.iter().find(|(constant, _)| {
+            function.contains(&format!("\"{}\"", constant.to_ascii_lowercase()))
+        }) {
+            let wrong = constant.to_ascii_lowercase();
+            feedback = format!(
+                "Your last answer uses a state property `\"{wrong}\"`, which no block has: the Java constant \
+                 `{constant}` is the property `\"{name}\"`. Use `\"{name}\"` wherever the Java has `{constant}`, \
+                 and check the other properties you named the same way. Your answer was:\n```rust\n{function}\n```"
+            );
+            continue;
+        }
         let comment = ported_comment(&unit.comment, &model.name());
         let Some(updated) = units::replace_function(&original, &unit.function, &comment, &function)
         else {
@@ -717,6 +761,10 @@ pub struct Prompt {
     pub text: String,
     /// What it had to leave out, and why.
     pub notes: Vec<String>,
+    /// State properties the Java names by a constant that isn't their name:
+    /// (`HORIZONTAL_FACING`, `facing`). An answer that reads `"horizontal_facing"`
+    /// reads a property no block has, and is sent back.
+    pub properties: Vec<(String, String)>,
 }
 
 impl Prompt {
@@ -930,6 +978,32 @@ fn prompt(dir: &Path, scan: &ModScan, unit: &Unit) -> Result<Prompt> {
              it for both blocks of a pair: a block left out of it never connects.\n\n{answers}"
         );
     }
+    let config = config_values(scan, &java_text, &shown);
+    if !config.is_empty() {
+        let _ = writeln!(
+            p,
+            "Config values the code above reads, as the mod declares them. A port has no config file, so each \
+             one is its default, always: write only the branch the default takes (a value that is `false` by \
+             default never runs its `if` side), say in a comment which setting it was, and never guess a \
+             default:\n{config}"
+        );
+    }
+    let properties = property_names(scan, &format!("{}\n{java_text}", unit.comment));
+    if !properties.is_empty() {
+        let named: Vec<String> = properties
+            .iter()
+            .map(|(constant, name)| format!("`{constant}` is `\"{name}\"`"))
+            .collect();
+        let _ = writeln!(
+            p,
+            "A block's state has its properties by name, and the Java names them by constant. These are not their \
+             constant in lower case: {}. Read and set each by its name (`\"{}\"`, never `\"{}\"`); every other \
+             property the Java names is its constant in lower case.\n",
+            named.join(", "),
+            properties[0].1,
+            properties[0].0.to_ascii_lowercase()
+        );
+    }
     for (mixin, member) in &unit.members {
         let _ = writeln!(
             p,
@@ -958,7 +1032,8 @@ fn prompt(dir: &Path, scan: &ModScan, unit: &Unit) -> Result<Prompt> {
             );
             // A tick that reaches another block entity, where the Java has one of them
             // call what the other registered.
-            if stub.contains("Machine<'_>") && unit.comment.contains("machine.at(pos)") {
+            let called = unit.comment.contains("call code this one gave");
+            if stub.contains("Machine<'_>") && unit.comment.contains("machine.at(pos)") && !called {
                 let _ = writeln!(p, "{CALLBACKS}\n");
             }
             // A tick that looks at its neighbours, where the Java walks further.
@@ -972,6 +1047,9 @@ fn prompt(dir: &Path, scan: &ModScan, unit: &Unit) -> Result<Prompt> {
                      (below): call them rather than working it out again."
                 };
                 let _ = writeln!(p, "{NETWORK_STEP} {connect}\n");
+            }
+            if stub.contains("Machine<'_>") && called {
+                let _ = writeln!(p, "{CALLED}\n");
             }
             // The mod's own questions to a block, ported once: said last, where it is
             // read closest to the answer, or a tick writes out its own copy of them.
@@ -1009,6 +1087,7 @@ fn prompt(dir: &Path, scan: &ModScan, unit: &Unit) -> Result<Prompt> {
             }
         }
     }
+    out.properties = properties;
     Ok(out)
 }
 
@@ -1485,6 +1564,196 @@ fn interface_answers(scan: &ModScan, java: &str, shown: &[String], ported: &[Str
     out
 }
 
+/// Config values `java` reads through a getter (`AllConfigs.server().recipes.bulkPressing
+/// .get()`) that a class not shown declares: a line each with the declaration, whose
+/// default is the value a port runs with.
+fn config_values(scan: &ModScan, java: &str, shown: &[String]) -> String {
+    let word = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    let mut names: Vec<&str> = Vec::new();
+    for (at, _) in java.match_indices(".get") {
+        // `.name.get()`, `.name.getF()`, `.name.getAsBoolean()`: no arguments.
+        let rest = &java[at + 4..];
+        let end = rest.find(|c: char| !word(c)).unwrap_or(rest.len());
+        if !rest[end..].starts_with("()") {
+            continue;
+        }
+        let start = java[..at].rfind(|c: char| !word(c)).map_or(0, |i| i + 1);
+        let name = &java[start..at];
+        if name.is_empty()
+            || !name.starts_with(|c: char| c.is_ascii_alphabetic())
+            || !java[..start].ends_with('.')
+            || names.contains(&name)
+        {
+            continue;
+        }
+        names.push(name);
+    }
+    let mut out = String::new();
+    let mut lines = 0;
+    for name in names {
+        let mut found = scan
+            .classes
+            .iter()
+            .filter(|c| !shown.contains(&c.name))
+            .filter_map(|c| {
+                let field = c
+                    .fields
+                    .iter()
+                    .find(|f| f.name == name && f.init.is_some())?;
+                let config = c.path.to_ascii_lowercase().contains("config")
+                    || field.ty.contains("Config")
+                    || field.ty.contains("Value");
+                config.then_some((c, field))
+            });
+        let (Some((class, field)), None) = (found.next(), found.next()) else {
+            continue;
+        };
+        let simple = class.name.rsplit(['.', '$']).next().unwrap_or(&class.name);
+        let init = field.init.as_deref().unwrap_or_default();
+        let default = config_default(init)
+            .map(|d| format!(", `{d}` by default"))
+            .unwrap_or_default();
+        let _ = writeln!(
+            out,
+            "- `{name}` is `{simple}.{name}`{default}: `{} {name} = {}`",
+            field.ty,
+            init.split_whitespace().collect::<Vec<_>>().join(" ")
+        );
+        lines += 1;
+        if lines >= 16 {
+            break;
+        }
+    }
+    out
+}
+
+/// State properties `java` reads or sets by a constant that isn't the property's
+/// name in lower case: `state.getValue(HORIZONTAL_FACING)` reads `facing`. The name is
+/// the mod's own where it declares the constant (`AXIS_ALONG_FIRST_COORDINATE =
+/// BooleanProperty.create("axis_along_first")`), else vanilla's.
+fn property_names(scan: &ModScan, java: &str) -> Vec<(String, String)> {
+    let constant = |text: &str| -> Option<String> {
+        let end = text
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '.'))
+            .unwrap_or(text.len());
+        let name = text[..end].rsplit('.').next().unwrap_or_default();
+        let upper = !name.is_empty()
+            && name.starts_with(|c: char| c.is_ascii_uppercase())
+            && name
+                .chars()
+                .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_');
+        upper.then(|| name.to_string())
+    };
+    let mut found: Vec<String> = Vec::new();
+    for call in [
+        "getValue(",
+        "setValue(",
+        "hasProperty(",
+        "trySetValue(",
+        "getOptionalValue(",
+        "cycle(",
+    ] {
+        for (at, _) in java.match_indices(call) {
+            if let Some(name) = constant(&java[at + call.len()..])
+                && !found.contains(&name)
+            {
+                found.push(name);
+            }
+        }
+    }
+    // What the mod's own declaration says, followed through a renaming
+    // (`FACING = BlockStateProperties.HORIZONTAL_FACING`).
+    let declared = |name: &str| -> Option<String> {
+        let mut names: Vec<String> = scan
+            .classes
+            .iter()
+            .flat_map(|c| c.fields.iter())
+            .filter(|f| f.name == name && f.is_static)
+            .filter_map(|f| {
+                let init = f.init.as_deref()?;
+                if init.contains(".create(\"") {
+                    return init.split('"').nth(1).map(str::to_string);
+                }
+                let other = constant(init.rsplit('.').next()?)?;
+                init.contains("Properties.")
+                    .then(|| porter_content::vanilla_property_name(&other))
+            })
+            .collect();
+        names.dedup();
+        match names.as_slice() {
+            [one] => Some(one.clone()),
+            _ => None,
+        }
+    };
+    found
+        .into_iter()
+        .filter_map(|c| {
+            let name = declared(&c).unwrap_or_else(|| porter_content::vanilla_property_name(&c));
+            (name != c.to_ascii_lowercase()).then_some((c, name))
+        })
+        .collect()
+}
+
+/// The default a config value's declaration gives: the first argument that isn't its
+/// name or comment (`b(false, "bulk", ..)`, `i(60, 5, "frequency")`, `BUILDER.define(
+/// "bulk", true)`, `.defineInRange("reach", 2, 0, 8)`). None where that isn't a plain
+/// value.
+fn config_default(init: &str) -> Option<&str> {
+    // The last call of the chain that has arguments is the one that defines it: of
+    // the calls of the chain itself, not of those inside their arguments.
+    let mut open = None;
+    let mut nested = 0;
+    let mut in_text = false;
+    for (i, c) in init.char_indices() {
+        match c {
+            '"' => in_text = !in_text,
+            '(' if !in_text => {
+                if nested == 0 && !init[i + 1..].trim_start().starts_with(')') {
+                    open = Some(i);
+                }
+                nested += 1;
+            }
+            ')' if !in_text => nested -= 1,
+            _ => {}
+        }
+    }
+    let open = open?;
+    let args = &init[open + 1..];
+    let mut depth = 0;
+    let mut quoted = false;
+    let mut start = 0;
+    let mut parts = Vec::new();
+    for (i, c) in args.char_indices() {
+        match c {
+            '"' => quoted = !quoted,
+            '(' | '[' | '{' if !quoted => depth += 1,
+            ')' | ']' | '}' if !quoted => {
+                if depth == 0 {
+                    parts.push(args[start..i].trim());
+                    start = args.len();
+                    break;
+                }
+                depth -= 1;
+            }
+            ',' if !quoted && depth == 0 => {
+                parts.push(args[start..i].trim());
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    if start < args.len() {
+        parts.push(args[start..].trim());
+    }
+    let value = parts
+        .into_iter()
+        .find(|a| !a.is_empty() && !a.starts_with('"'))?;
+    let plain = value
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || "._-".contains(c));
+    plain.then_some(value)
+}
+
 /// The constants of class `simple` that `code` names (`ModSounds.EGG_HATCH`), each with
 /// the first string its declaration in `source` has, the id it is registered under:
 /// a line each, `- `EGG_HATCH`: "entity.ostrich.egg_hatch"`.
@@ -1617,6 +1886,38 @@ mod tests {
         );
         assert!(!text.contains("### `b`"));
         fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn reads_a_config_values_default() {
+        assert_eq!(
+            config_default("b(false, \"bulkPressing\", Comments.bulkPressing)"),
+            Some("false")
+        );
+        assert_eq!(
+            config_default("i(60, 5, \"frequency\", Comments.f)"),
+            Some("60")
+        );
+        assert_eq!(
+            config_default("BUILDER.comment(\"Whole stacks\").define(\"bulk\", true)"),
+            Some("true")
+        );
+        assert_eq!(
+            config_default("BUILDER.defineInRange(\"reach\", 2, 0, 8)"),
+            Some("2")
+        );
+        assert_eq!(
+            config_default("e(Mode.FAST, \"mode\", \"How it runs\")"),
+            Some("Mode.FAST")
+        );
+        // Not a plain value: nothing to say.
+        assert_eq!(config_default("new ArrayList<>()"), None);
+        assert_eq!(config_default("list(() -> defaults(), \"names\")"), None);
+        // A call among its arguments isn't the one that defines it.
+        assert_eq!(
+            config_default("b(true, \"enable\", Comments.get(\"enable\"))"),
+            Some("true")
+        );
     }
 
     #[test]

@@ -125,6 +125,56 @@ fn ports_a_block_entity_tick_and_fixes_compile_errors() {
 }
 
 #[test]
+fn a_tick_called_by_another_block_entity_is_shown_the_caller_and_config_defaults() {
+    let (dir, scan) = ported("neoforge-press-demo", "called");
+    let model = Scripted::new(&[
+        // A property read by its Java constant: sent back.
+        "```rust
+pub fn tick_press(pos: [i32; 3], state: &mut Press, machine: &mut Machine<'_>) {
+    let _ = (pos, machine.properties.iter().find(|(k, _)| k == \"horizontal_facing\"));
+    state.stamping_ticks += 1;
+}
+```",
+        "```rust
+pub fn tick_press(pos: [i32; 3], state: &mut Press, machine: &mut Machine<'_>) {
+    let _ = (pos, machine);
+    state.stamping_ticks += 1;
+}
+```",
+    ]);
+    let opts = Options {
+        only: Some("tick_press".into()),
+        ..Default::default()
+    };
+    let out = ai::translate(&dir, &scan, &model, &opts, |_| {}).unwrap();
+    assert_eq!(out[0].status, Status::Ported, "{:?}", out[0].status);
+    let prompts = model.prompts.borrow();
+    let prompt = &prompts[0];
+    // The class it gave code to, the class that calls it, and how to do that work here.
+    assert!(prompt.contains("public class ProcessBehaviour"), "{prompt}");
+    assert!(prompt.contains("public class TrayBehaviour"));
+    assert!(prompt.contains("names block entities that call code this one gave them"));
+    // The config value its Java reads is in a class the prompt doesn't show: its
+    // declaration, for the default.
+    assert!(!prompt.contains("public class StampRecipes"));
+    assert!(prompt.contains(
+        "- `bulk` is `StampRecipes.bulk`, `false` by default: `ConfigBool bulk = b(false, \"bulk\", \"Stamp a whole stack at a time.\")`"
+    ));
+    // State properties whose name isn't their Java constant, vanilla's and the mod's.
+    assert!(
+        prompt.contains(
+            "These are not their constant in lower case: `HORIZONTAL_FACING` is `\"facing\"`, `LOWERED` is `\"down\"`."
+        ),
+        "{prompt}"
+    );
+    assert_eq!(out[0].attempts, 2);
+    assert!(prompts[1].contains(
+        "uses a state property `\"horizontal_facing\"`, which no block has: the Java constant `HORIZONTAL_FACING` is the property `\"facing\"`"
+    ));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn leaves_a_function_as_it_was_when_no_answer_works() {
     let (dir, scan) = ported("neoforge-demo", "fail");
     let before = std::fs::read_to_string(dir.join("mixins/demo/runtime.rs")).unwrap();

@@ -1996,7 +1996,7 @@ const BOOLEAN_PROPERTIES: &[&str] = &[
 
 /// The name a vanilla `BlockStateProperties` constant has in a blockstate:
 /// `HORIZONTAL_FACING` is `facing`, `DOOR_HINGE` `hinge`, `OPEN` `open`.
-fn vanilla_property_name(constant: &str) -> String {
+pub fn vanilla_property_name(constant: &str) -> String {
     match constant {
         "HORIZONTAL_FACING" | "FACING_HOPPER" | "VERTICAL_DIRECTION" => "facing".into(),
         "DOOR_HINGE" => "hinge".into(),
@@ -2577,7 +2577,9 @@ fn convention_tags(content: &mut Content) {
     let table = TAGS.get_or_init(|| {
         serde_json::from_str(include_str!("../data/convention-tags.json")).unwrap_or_default()
     });
-    // Every `#c:..` the mod's data files name.
+    // Every `#c:..` the mod's data files name, and every `"tag": "c:.."` (how a
+    // recipe's ingredient names a tag before 1.21.2, and a mod's own recipe types
+    // after it).
     let mut wanted: Vec<String> = Vec::new();
     for (path, file) in &content.copies {
         if !path.starts_with("data/") || !path.ends_with(".json") {
@@ -2586,8 +2588,14 @@ fn convention_tags(content: &mut Content) {
         let Ok(text) = std::fs::read_to_string(file) else {
             continue;
         };
-        for part in text.split('"').skip(1).step_by(2) {
-            if let Some(tag) = part.strip_prefix("#c:")
+        let quoted: Vec<&str> = text.split('"').skip(1).step_by(2).collect();
+        for (i, part) in quoted.iter().enumerate() {
+            let named = part.strip_prefix("#c:").or_else(|| {
+                (i > 0 && quoted[i - 1] == "tag")
+                    .then(|| part.strip_prefix("c:"))
+                    .flatten()
+            });
+            if let Some(tag) = named
                 && !wanted.iter().any(|w| w == tag)
             {
                 wanted.push(tag.to_string());
@@ -3287,6 +3295,46 @@ fn holds_water(scan: &ModScan, class: Option<&str>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn adds_the_loaders_common_tags_a_recipe_names() {
+        let dir = std::env::temp_dir().join(format!("porter-ctags-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // The form before 1.21.2 and of a mod's own recipe types, and the newer one.
+        let old = dir.join("sheet.json");
+        std::fs::write(
+            &old,
+            r#"{"type": "demo:pressing", "ingredients": [{"tag": "c:ingots/iron"}], "results": [{"id": "demo:sheet"}]}"#,
+        )
+        .unwrap();
+        let new = dir.join("rod.json");
+        std::fs::write(
+            &new,
+            r##"{"type": "minecraft:crafting_shapeless", "ingredients": ["#c:gems/diamond"], "result": {"id": "demo:rod"}}"##,
+        )
+        .unwrap();
+        let mut content = Content::default();
+        content
+            .copies
+            .insert("data/demo/recipe/sheet.json".into(), old);
+        content
+            .copies
+            .insert("data/demo/recipe/rod.json".into(), new);
+        convention_tags(&mut content);
+        let iron = content
+            .files
+            .get("data/c/tags/item/ingots/iron.json")
+            .expect("the tag an older recipe names");
+        assert!(iron.contains("\"minecraft:iron_ingot\""), "{iron}");
+        assert!(
+            content
+                .files
+                .contains_key("data/c/tags/item/gems/diamond.json")
+        );
+        // A tag of another namespace under a "tag" key isn't the loader's.
+        assert_eq!(content.files.len(), 2, "{:?}", content.files.keys());
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn an_older_mods_item_models_get_definitions() {

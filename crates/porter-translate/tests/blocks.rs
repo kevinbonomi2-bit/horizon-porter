@@ -357,6 +357,36 @@ fn ports_a_registrate_kinetic_mod() {
 }
 
 #[test]
+fn tells_a_tick_which_block_entities_call_the_code_it_gave() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../porter-java/tests/fixtures/neoforge-press-demo");
+    let scan = porter_java::scan(&path).unwrap();
+    let b = bundle::generate(&scan, &bundle::load_lang(&scan));
+    let runtime = &b.files["mixins/stamp/runtime.rs"];
+    // The tray takes the press's behaviour from two blocks under it and calls what the
+    // press gave it: the press's tick is told, with how the tray gets it and its slots.
+    assert!(
+        runtime.contains(
+            "/// Other block entities of the mod call code this one gave: `TrayBehaviour` of `stamp:tray` takes its `ProcessBehaviour` (`ProcessBehaviour above = Behaviours.get(level, pos.above(2), ProcessBehaviour.TYPE)`; item slots: `tray.held` is slot 0). Nothing calls across"
+        ),
+        "{runtime}"
+    );
+    // Its TODO names both classes, so translate reads them.
+    assert!(runtime.contains(
+        "/// TODO: port the tick of `net.stamp.PressBlockEntity` and what it keeps in `net.stamp.StampBehaviour`, and what `net.stamp.ProcessBehaviour` is called for by `net.stamp.TrayBehaviour`.
+pub fn tick_press("
+    ));
+    // The tray's own tick isn't called by anything.
+    let tray = &runtime[runtime
+        .find("/// A server tick of the `stamp:tray`")
+        .unwrap()..];
+    let tray = &tray[..tray.find("pub fn tick_tray(").unwrap()];
+    assert!(!tray.contains("call code this one gave"));
+    // Both reach two steps: the tray looks up for the press, the press down for it.
+    assert!(runtime.contains("pub const FAR: &[&str] = &[\"stamp:press\", \"stamp:tray\"];"));
+}
+
+#[test]
 fn ports_pipes_and_blocks_that_are_not_full_cubes() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../porter-java/tests/fixtures/neoforge-wrapper-demo");
