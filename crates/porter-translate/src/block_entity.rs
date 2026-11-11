@@ -94,6 +94,8 @@ impl Kind {
             "float" | "Float" => Kind::Float,
             "double" | "Double" => Kind::Double,
             "String" => Kind::Text,
+            // A position (a source, a controller, a link): kept as text, `x y z`.
+            "BlockPos" => Kind::Text,
             "ItemStack" | "ItemStackTemplate" => Kind::Item,
             _ => return None,
         })
@@ -531,7 +533,9 @@ pub const BLOCK_ENTITIES: &[(&str, &str, bool)] = &[
                     one_line(&f.key)
                 )
             };
-            let how = if f.kind == Kind::Item {
+            let how = if f.java.starts_with("BlockPos ") {
+                format!("{how}; the position as `x y z` (`4 64 -2`), empty for none (null)")
+            } else if f.kind == Kind::Item {
                 format!("{how}; the item's id (`minecraft:bowl`), empty for none")
             } else {
                 how
@@ -891,6 +895,8 @@ pub struct Frame {
     /// The block (`grind:crusher`) and its `facing`, if it has one.
     pub block: String,
     pub facing: Option<String>,
+    /// Its state properties (`be.getBlockState().getValue(AXIS)`): see `state`.
+    pub properties: Vec<(String, String)>,
     /// The frame's partial tick, 0 to 1, and the level's game time.
     pub partial: f32,
     pub game_time: i64,
@@ -900,6 +906,12 @@ pub struct Frame {
 }
 
 impl Frame {
+    /// Its block's state property `key` (`getValue(AXIS)`): `"y"` for a pillar's
+    /// `axis`, `"true"` for `lit`.
+    pub fn state(&self, key: &str) -> Option<&str> {
+        self.properties.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
+    }
+
     /// Ticks since the world began, smooth between ticks: for animations.
     pub fn time(&self) -> f32 {
         (self.game_time % 24_000) as f32 + self.partial

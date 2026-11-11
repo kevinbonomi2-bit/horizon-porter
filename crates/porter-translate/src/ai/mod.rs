@@ -239,10 +239,35 @@ const REACHES: &[(u32, &[&str])] = &[
     ),
     // A block entity keeps the items of a class it holds in its own slots.
     (10, &["no rust type"]),
+    // A neighbour's state, a renderer's block state, and a network walk as each block
+    // entity's own step.
+    (
+        11,
+        &[
+            "propagat",
+            "torque network",
+            "kinetic network",
+            "neighbour's state",
+            "neighbour's block state",
+        ],
+    ),
 ];
 
 /// The newest line of `REACHES`.
-pub const REACH: u32 = 10;
+pub const REACH: u32 = 11;
+
+/// For a tick that sees its neighbours: how to port a walk over a whole network.
+const NETWORK_STEP: &str = "This tick sees the six blocks beside it (`machine.neighbour(side)`: each one's block, \
+state properties and saved values) and what it sets in them (`machine.set_neighbour`) lands after the tick. Where the \
+Java reaches further in one go (a helper that walks a network of connected block entities and sets values in each: \
+rotation, energy, a signal), port it as this block entity's own step: every tick, work out from the neighbours what \
+the walk would have given this one (a connected neighbour's saved speed or charge, and which neighbour it came from), \
+keep it in `state`, drop it when that neighbour no longer gives it, and let the neighbours' own ticks carry it on. \
+Keep which neighbour gave it too (in the field the Java keeps its source in, where `state` has one), and take nothing \
+from a neighbour whose own came from this block: two blocks would keep each other going after their source is gone. A \
+change then travels one block a tick instead of at once: say so in a comment, and write no `// Missing:` note for the \
+walk. Whether two blocks connect is in the Java of their block classes (which face has a shaft, which axis turns): \
+read it from their state properties.";
 
 /// Whether a function ported at reach `at`, whose port says `notes` were out of reach,
 /// is worth porting again now.
@@ -793,7 +818,22 @@ fn prompt(dir: &Path, scan: &ModScan, unit: &Unit) -> Result<Prompt> {
             }
         }
     }
-    used.sort_by_key(|(_, s)| s.len());
+    // Those whose static functions the code calls come first (`RotationPropagator.
+    // handleAdded(..)`: what the tick hands its work to), then the smallest.
+    let calls_into = |class: &porter_model::ClassInfo| {
+        let simple = class.name.rsplit('.').next().unwrap_or(&class.name);
+        java_text
+            .match_indices(&format!("{simple}."))
+            .any(|(i, m)| {
+                let rest = &java_text[i + m.len()..];
+                let name = rest
+                    .find(|c: char| !(c.is_alphanumeric() || c == '_'))
+                    .unwrap_or(rest.len());
+                rest.starts_with(|c: char| c.is_ascii_lowercase()) && rest[name..].starts_with('(')
+            })
+    };
+    used.sort_by_key(|(class, s)| (!calls_into(class), s.len()));
+    let mut shown: Vec<String> = sent.clone();
     let mut used_chars = 0;
     for (class, source) in used {
         if used_chars + source.len() > USED_BUDGET || java_chars + source.len() > JAVA_BUDGET {
@@ -823,12 +863,26 @@ fn prompt(dir: &Path, scan: &ModScan, unit: &Unit) -> Result<Prompt> {
         }
         used_chars += source.len();
         java_chars += source.len();
+        shown.push(class.name.clone());
         let _ = writeln!(
             p,
             "A class of the mod that code uses, `{}` ({}), for what its calls do:\n\n```java\n{source}\n```\n",
             class.name, class.path
         );
         java_text.push_str(&source);
+    }
+    // What the mod's blocks answer for its own interfaces (`IRotate.hasShaftTowards`),
+    // where the code asks a block it meets: they are in classes this function isn't from.
+    let answers = interface_answers(scan, &java_text, &shown);
+    if !answers.is_empty() {
+        let _ = writeln!(
+            p,
+            "The code above asks blocks it meets questions through the mod's own interfaces. What each block class of \
+             the mod answers (the Java of its method, and the blocks registered with that class or one that inherits \
+             it), so a neighbour of another kind can be judged from its block and state properties. Write each \
+             question as one check over (block, state properties, face) with a case for every class listed, and use \
+             it for both blocks of a pair: a block left out of it never connects.\n\n{answers}"
+        );
     }
     for (mixin, member) in &unit.members {
         let _ = writeln!(
@@ -856,6 +910,10 @@ fn prompt(dir: &Path, scan: &ModScan, unit: &Unit) -> Result<Prompt> {
                  `min(getSlotLimit(slot), stack.getMaxStackSize())`, which is `world.max_stack(item)` (1 for a tool), \
                  not 64."
             );
+            // A tick that looks at its neighbours, where the Java walks further.
+            if stub.contains("Machine<'_>") && unit.comment.contains("machine.neighbour(") {
+                let _ = writeln!(p, "{NETWORK_STEP}\n");
+            }
             let hints = equivalents(&java_text, &stub);
             if !hints.is_empty() {
                 let _ = writeln!(
@@ -1208,6 +1266,142 @@ fn equivalents(java: &str, stub: &str) -> String {
     out
 }
 
+/// The most the interface answers add to a prompt, in characters.
+const ANSWERS_BUDGET: usize = 24_000;
+
+/// For each method of the mod's own interfaces in `shown` that `java` calls on something
+/// (`definition.hasShaftTowards(..)`): the body each of the mod's block classes gives it,
+/// with the blocks registered with that class or with one that inherits the answer.
+/// Shortest bodies first, within `ANSWERS_BUDGET`.
+fn interface_answers(scan: &ModScan, java: &str, shown: &[String]) -> String {
+    use porter_model::ClassKind;
+    let class = |name: &str| scan.classes.iter().find(|c| c.name == name);
+    let simple = |name: &str| name.rsplit('.').next().unwrap_or(name).to_string();
+    let ns = scan
+        .main_metadata()
+        .and_then(|m| m.id.clone())
+        .unwrap_or_else(|| "minecraft".into());
+    let mut methods: Vec<(String, String)> = Vec::new();
+    // The interfaces shown, and those the code names (a helper's `IRotate` it wasn't
+    // shown for its size).
+    for interface in scan.classes.iter().filter(|c| {
+        c.kind == ClassKind::Interface
+            && !c.is_mixin
+            && (shown.contains(&c.name) || java.contains(&simple(&c.name)))
+    }) {
+        for m in &interface.method_names {
+            if java.contains(&format!(".{m}(")) && !methods.iter().any(|(_, n)| n == m) {
+                methods.push((simple(&interface.name), m.clone()));
+            }
+        }
+    }
+    if methods.is_empty() {
+        return String::new();
+    }
+    // Each registered block's class, by simple name as registrations give it.
+    let mut blocks: Vec<(String, &porter_model::ClassInfo)> = Vec::new();
+    for r in scan.registrations.iter().filter(|r| r.registry == "block") {
+        let (Some(id), Some(creates)) = (r.id.as_deref(), r.creates.as_deref()) else {
+            continue;
+        };
+        let mut found = scan.classes.iter().filter(|c| simple(&c.name) == creates);
+        if let (Some(c), None) = (found.next(), found.next()) {
+            let id = if id.contains(':') {
+                id.to_string()
+            } else {
+                format!("{ns}:{id}")
+            };
+            blocks.push((id, c));
+        }
+    }
+    let mut entries: Vec<(String, String)> = Vec::new();
+    for (interface, method) in &methods {
+        // The class that decides it for each block: its own, or the nearest one above.
+        let mut by_class: Vec<(&porter_model::ClassInfo, Vec<&str>)> = Vec::new();
+        for (id, own) in &blocks {
+            let mut next = Some(*own);
+            let mut depth = 0;
+            while let Some(c) = next {
+                if c.kind != ClassKind::Interface && c.method_names.iter().any(|n| n == method) {
+                    match by_class.iter_mut().find(|(k, _)| k.name == c.name) {
+                        Some((_, ids)) => ids.push(id),
+                        None => by_class.push((c, vec![id])),
+                    }
+                    break;
+                }
+                depth += 1;
+                next = (depth < 12)
+                    .then(|| c.superclass.as_deref().and_then(class))
+                    .flatten();
+            }
+        }
+        for (c, ids) in by_class {
+            let Ok(source) = fs::read_to_string(Path::new(&scan.input).join(&c.path)) else {
+                continue;
+            };
+            let Some(body) = method_body(&source, method) else {
+                continue;
+            };
+            let mut list = ids
+                .iter()
+                .take(8)
+                .map(|i| format!("`{i}`"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            if ids.len() > 8 {
+                let _ = write!(list, " and {} more", ids.len() - 8);
+            }
+            entries.push((
+                format!("{interface}.{method}"),
+                format!("- `{}.{method}` ({list}): `{}`", simple(&c.name), body),
+            ));
+        }
+    }
+    entries.sort_by_key(|(m, line)| (m.clone(), line.len()));
+    let mut out = String::new();
+    for (_, line) in entries {
+        if out.len() + line.len() > ANSWERS_BUDGET {
+            continue;
+        }
+        let _ = writeln!(out, "{line}");
+    }
+    out
+}
+
+/// The body of method `name` as `source` declares it, on one line: `return face ==
+/// state.getValue(FACING);`. None for a body past 600 characters, or one not found.
+fn method_body(source: &str, name: &str) -> Option<String> {
+    let mut from = 0;
+    while let Some(at) = source[from..].find(&format!(" {name}(")).map(|i| from + i) {
+        from = at + 1;
+        let rest = &source[at..];
+        let open = rest.find('{')?;
+        // A declaration: its body opens before any statement ends.
+        if rest[..open].contains(';') {
+            continue;
+        }
+        let mut depth = 0usize;
+        for (i, c) in rest[open..].char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        let body = rest[open + 1..open + i]
+                            .split_whitespace()
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        return (body.len() <= 600).then_some(body);
+                    }
+                }
+                _ => {}
+            }
+        }
+        return None;
+    }
+    None
+}
+
 /// The constants of class `simple` that `code` names (`ModSounds.EGG_HATCH`), each with
 /// the first string its declaration in `source` has, the id it is registered under:
 /// a line each, `- `EGG_HATCH`: "entity.ostrich.egg_hatch"`.
@@ -1340,6 +1534,16 @@ mod tests {
         );
         assert!(!text.contains("### `b`"));
         fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn reads_a_methods_body_on_one_line() {
+        let source = "class Motor {\n    @Override\n    public boolean hasShaftTowards(LevelReader world, BlockPos pos, BlockState state, Direction face) {\n        return face == state.getValue(FACING);\n    }\n    void other() { hasShaftTowards(null, null, null, null); }\n}";
+        assert_eq!(
+            method_body(source, "hasShaftTowards").as_deref(),
+            Some("return face == state.getValue(FACING);")
+        );
+        assert_eq!(method_body(source, "getRotationAxis"), None);
     }
 
     #[test]

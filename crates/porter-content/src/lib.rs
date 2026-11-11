@@ -524,6 +524,17 @@ pub fn generate_with(
             json["thickness"] = thickness.into();
             pipes.push((block_name.to_string(), class.clone()));
         }
+        // `getRenderShape`: a block its block entity draws every frame (a turning
+        // shaft) keeps its model out of the world, and hides nothing behind it.
+        if !properties.contains_key("render_shape")
+            && let Some(shape) = render_shape(scan, class.as_deref(), &reg.args)
+        {
+            properties.insert("render_shape".into(), shape.into());
+            properties
+                .entry("occludes".to_string())
+                .or_insert(false.into());
+            template_from.push_str("; drawn by its block entity");
+        }
         if !properties.is_empty() {
             json["properties"] = serde_json::Value::Object(properties.clone());
         }
@@ -2712,6 +2723,36 @@ fn class_named_like(
         name.push_str(suffix);
         known(&name).map(|_| name)
     })
+}
+
+/// How a block's class says it is drawn (`getRenderShape`), from its own up through
+/// the mod's superclasses, when not by its model: `ENTITYBLOCK_ANIMATED`, `INVISIBLE`.
+fn render_shape(scan: &ModScan, class: Option<&str>, args: &str) -> Option<String> {
+    // Its model swapped for a class of the mod's that draws nothing in the world
+    // (`.onRegister(blockModel(() -> BracketedKineticBlockModel::new))`).
+    let swapped = scan.render_shapes.iter().find(|(c, shape)| {
+        let simple = c.rsplit('.').next().unwrap_or(c);
+        shape != "MODEL"
+            && (args.contains(&format!("{simple}::")) || args.contains(&format!("new {simple}(")))
+    });
+    if let Some((_, shape)) = swapped {
+        return Some(shape.clone());
+    }
+    let mut next = class.map(str::to_string);
+    for _ in 0..12 {
+        let Some(name) = next.take() else {
+            break;
+        };
+        if let Some((_, shape)) = scan.render_shapes.iter().find(|(c, _)| *c == name) {
+            return (shape != "MODEL").then(|| shape.clone());
+        }
+        next = scan
+            .classes
+            .iter()
+            .find(|c| c.name == name)
+            .and_then(|c| c.superclass.clone());
+    }
+    None
 }
 
 /// An entity type's classes by simple name, from its own up to the first vanilla one.

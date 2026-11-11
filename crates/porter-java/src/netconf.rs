@@ -256,6 +256,61 @@ pub fn standalone_models(source: &str, mod_id: Option<&str>) -> Vec<String> {
             }
         }
     }
+    // A helper of the class's own that adds the folder: `block("shaft_half")`, for
+    // `PartialModel block(String path) { return PartialModel.of(asResource("block/" + path)); }`.
+    for (helper, prefix) in prefixing_helpers(source) {
+        for args in calls(source, &helper) {
+            if let Some(path) = string_literal(&args) {
+                keep(mod_id.unwrap_or("minecraft"), &format!("{prefix}{path}"));
+            }
+        }
+    }
+    out
+}
+
+/// A class's one-string functions that put a folder before their argument
+/// (`"block/" + path`): (name, folder).
+fn prefixing_helpers(source: &str) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    let mut from = 0;
+    while let Some(at) = source[from..].find("(String ").map(|i| from + i) {
+        from = at + 1;
+        let name: String = source[..at]
+            .chars()
+            .rev()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        let rest = &source[at + "(String ".len()..];
+        let Some(close) = rest.find(')') else {
+            continue;
+        };
+        let param = rest[..close].trim();
+        let word = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_alphanumeric() || c == '_');
+        if !word(&name) || !word(param) {
+            continue;
+        }
+        let Some(open) = rest[close..].find('{').map(|i| close + i) else {
+            continue;
+        };
+        if rest[close..open].contains(';') {
+            continue;
+        }
+        let end = rest[open..].find('}').map_or(rest.len(), |i| open + i);
+        let body = &rest[open..end];
+        let Some(i) = body.find(&format!("\" + {param}")) else {
+            continue;
+        };
+        let Some(quote) = body[..i].rfind('"') else {
+            continue;
+        };
+        let prefix = &body[quote + 1..i];
+        if prefix.ends_with('/') && !out.iter().any(|(n, _)| *n == name) {
+            out.push((name, prefix.to_string()));
+        }
+    }
     out
 }
 
@@ -663,6 +718,25 @@ public class BeautifyConfig implements ConfigData {
         assert_eq!(tabs[1].id, None);
         assert_eq!(tabs[1].title.as_deref(), Some("Gems"));
         assert!(tabs[1].items.is_empty());
+    }
+
+    #[test]
+    fn finds_models_named_through_a_helper_that_adds_the_folder() {
+        let source = r#"
+            public class AllPartialModels {
+                public static final PartialModel SHAFT_HALF = block("shaft_half"), ARM = entity("arm");
+                private static PartialModel block(String path) {
+                    return PartialModel.of(Create.asResource("block/" + path));
+                }
+                private static PartialModel entity(String path) {
+                    return PartialModel.of(Create.asResource("entity/" + path));
+                }
+            }
+        "#;
+        assert_eq!(
+            standalone_models(source, Some("create")),
+            ["create:block/shaft_half", "create:entity/arm"]
+        );
     }
 
     #[test]

@@ -2040,10 +2040,10 @@ impl mod_api::BlockEntityPart for PortedEntity {
                     .map(|side| {
                         let [dx, dy, dz] = side.offset();
                         let at = [pos[0] + dx, pos[1] + dy, pos[2] + dz];
-                        let block = level
+                        let (block, properties) = level
                             .block_state(reader, at)
                             .and_then(|s| reader.block_state_string(s))
-                            .map_or_else(|| "minecraft:air".to_string(), |t| parse_state(&t).0);
+                            .map_or_else(|| ("minecraft:air".to_string(), Vec::new()), |t| parse_state(&t));
                         let found = if reads { reader.block_entity(level, at) } else { None };
                         let entity = found.and_then(|e| e.kind(reader)).map(|k| k.id(reader));
                         let values = found
@@ -2054,7 +2054,7 @@ impl mod_api::BlockEntityPart for PortedEntity {
                                     .collect()
                             })
                             .unwrap_or_default();
-                        Some(runtime::Neighbour { block, entity, values })
+                        Some(runtime::Neighbour { block, properties, entity, values })
                     })
                     .collect();
             }
@@ -2377,6 +2377,7 @@ const SUBMIT: &str = r#"
             pos: event.pos,
             block: event.block.to_string(),
             facing: props.iter().find(|(k, _)| k == "facing").map(|(_, v)| v.clone()),
+            properties: props,
             partial: event.draw.partial(),
             game_time: event.draw.game_time(),
             items: (0..slots)

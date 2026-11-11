@@ -265,6 +265,10 @@ pub struct ModScan {
     /// `context.getHorizontalDirection().getOpposite()` is 2 (toward the player).
     #[serde(default)]
     pub placements: Vec<(String, u8)>,
+    /// How block classes say they are drawn where they override `getRenderShape` with
+    /// one answer: (class, `ENTITYBLOCK_ANIMATED`), for a block its block entity draws.
+    #[serde(default)]
+    pub render_shapes: Vec<(String, String)>,
     /// The mod's creative inventory tabs, in the order its code builds them.
     #[serde(default)]
     pub creative_tabs: Vec<CreativeTabInfo>,

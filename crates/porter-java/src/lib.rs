@@ -263,6 +263,12 @@ fn network_and_config(root: &Path, scan: &mut ModScan) {
             scan.placements.push((name.clone(), turns));
         }
     }
+    // Blocks their block entity draws, or nothing does.
+    for (name, text) in &sources {
+        if let Some(shape) = machines::render_shape(text) {
+            scan.render_shapes.push((name.clone(), shape));
+        }
+    }
     // Creative tabs.
     for (_, text) in &sources {
         scan.creative_tabs.extend(netconf::creative_tabs(text));
@@ -453,6 +459,7 @@ fn assemble(
         renderers: Vec::new(),
         custom_screens: Vec::new(),
         standalone_models: Vec::new(),
+        render_shapes: Vec::new(),
         creative_tabs: Vec::new(),
         placements: Vec::new(),
         state_definitions: Vec::new(),

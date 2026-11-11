@@ -957,6 +957,70 @@ fn state_value(text: &str) -> Option<String> {
     Some(last.to_ascii_lowercase())
 }
 
+/// How a block class says it is drawn, where it overrides `getRenderShape` with one
+/// answer: `ENTITYBLOCK_ANIMATED` (its block entity draws it: a turning shaft),
+/// `INVISIBLE`, `MODEL`. None where it doesn't, or answers by state.
+pub(crate) fn render_shape(source: &str) -> Option<String> {
+    let mut from = 0;
+    while let Some(at) = source[from..].find("getRenderShape(").map(|i| from + i) {
+        from = at + 1;
+        let rest = &source[at..];
+        // A declaration: a body opens before any statement ends.
+        let Some(open) = rest.find('{') else {
+            break;
+        };
+        if rest[..open].contains(';') {
+            continue;
+        }
+        let mut depth = 0usize;
+        let mut end = rest.len();
+        for (i, c) in rest[open..].char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = open + i;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let body = &rest[open..end];
+        let mut shapes: Vec<&str> = body
+            .split("RenderShape.")
+            .skip(1)
+            .map(|s| {
+                let n = s
+                    .find(|c: char| !(c.is_ascii_uppercase() || c == '_'))
+                    .unwrap_or(s.len());
+                &s[..n]
+            })
+            .filter(|s| !s.is_empty())
+            .collect();
+        shapes.dedup();
+        if let [one] = shapes[..] {
+            return Some(one.to_string());
+        }
+        return None;
+    }
+    // A model class of the mod's own that draws nothing of the block in the world
+    // (its `getQuads` answers an empty list there, and gathers no faces of its own):
+    // the block it is swapped in for is drawn by its block entity (Create's shaft, by
+    // its renderer or a Flywheel visual).
+    if source.contains("BakedModel")
+        && source.contains("getQuads(")
+        && source.contains("Collections.emptyList()")
+        && !["addAll(", "new ArrayList", ".add("]
+            .iter()
+            .any(|m| source.contains(m))
+    {
+        return Some("ENTITYBLOCK_ANIMATED".to_string());
+    }
+    None
+}
+
 /// How a block class turns its `facing` from the player's look when placed, in
 /// quarter turns clockwise: its `getStateForPlacement` sets `FACING` to
 /// `context.getHorizontalDirection()` (0, away from the player), with
@@ -1109,6 +1173,28 @@ fn first_int(text: &str) -> Option<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_how_a_block_says_it_is_drawn() {
+        let animated = "class Crank extends Block {\n    @Override\n    public RenderShape getRenderShape(BlockState state) {\n        return RenderShape.ENTITYBLOCK_ANIMATED;\n    }\n}";
+        assert_eq!(
+            render_shape(animated).as_deref(),
+            Some("ENTITYBLOCK_ANIMATED")
+        );
+        // By state: no one answer.
+        let by_state = "public RenderShape getRenderShape(BlockState s) { return s.getValue(CASING) ? RenderShape.MODEL : RenderShape.ENTITYBLOCK_ANIMATED; }";
+        assert_eq!(render_shape(by_state), None);
+        // A call, not an override.
+        assert_eq!(
+            render_shape("if (state.getRenderShape() == RenderShape.MODEL) { draw(); }"),
+            None
+        );
+        // A model class that draws nothing of the block in the world.
+        let empty = "class ShaftModel extends BakedModelWrapper<BakedModel> { public List<BakedQuad> getQuads(BlockState s) { if (!virtual) return Collections.emptyList(); return super.getQuads(s); } }";
+        assert_eq!(render_shape(empty).as_deref(), Some("ENTITYBLOCK_ANIMATED"));
+        let adds = "class TankModel extends BakedModelWrapper<BakedModel> { public List<BakedQuad> getQuads(BlockState s) { if (side != null) return Collections.emptyList(); quads.addAll(super.getQuads(s)); return quads; } }";
+        assert_eq!(render_shape(adds), None);
+    }
 
     #[test]
     fn reads_a_librarys_screen_and_a_menu_with_armour_slots() {

@@ -518,11 +518,14 @@ pub struct Dropped {
     pub at: [f64; 3],
 }
 
-/// A block beside a block entity: its block, and its block entity's id and saved
-/// values when it is one of a mod's.
+/// A block beside a block entity: its block and state, and its block entity's id and
+/// saved values when it is one of a mod's.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Neighbour {
     pub block: String,
+    /// Its state properties (`level.getBlockState(pos.relative(side)).getValue(AXIS)`):
+    /// see `state`.
+    pub properties: Vec<(String, String)>,
     pub entity: Option<String>,
     pub values: Vec<(String, Saved)>,
 }
@@ -531,6 +534,11 @@ impl Neighbour {
     /// One of its saved values: `State::load(|k| neighbour.get(k))` reads its state.
     pub fn get(&self, key: &str) -> Option<Saved> {
         self.values.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone())
+    }
+
+    /// Its state property `key` (`getValue(AXIS)`, `getValue(FACING)`): `"y"`, `"north"`.
+    pub fn state(&self, key: &str) -> Option<&str> {
+        self.properties.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
     }
 }
 
@@ -1162,11 +1170,13 @@ pub fn runtime_tests(machines: &[Machine]) -> String {
         let mut m = super::Machine::new(vec![], vec![], &none);
         m.neighbours[1] = Some(super::Neighbour {
             block: "demo:shaft".into(),
+            properties: vec![("axis".into(), "y".into())],
             entity: Some("demo:shaft".into()),
             values: vec![("Speed".into(), super::Saved::Float(16.0))],
         });
         let up = m.neighbour(super::Side::Up).expect("the block above");
         assert_eq!(up.get("Speed"), Some(super::Saved::Float(16.0)));
+        assert_eq!(up.state("axis"), Some("y"));
         assert!(m.neighbour(super::Side::Down).is_none());
         m.set_neighbour(super::Side::Up, "Speed", super::Saved::Float(8.0));
         m.sync();

@@ -1810,6 +1810,10 @@ fn {id}_block_entity_tick(
                 }});
                 Some(m::Neighbour {{
                     block,
+                    properties: m::STATE_KEYS
+                        .iter()
+                        .filter_map(|key| Some((key.to_string(), game.native_block_property(at, key)?)))
+                        .collect(),
                     entity: found.as_ref().map(|(id, _)| id.clone()),
                     values: found.map(|(_, v)| v).unwrap_or_default(),
                 }})
@@ -2571,6 +2575,10 @@ fn {id}_block_entity_submit(
         pos,
         block: block.to_string(),
         facing: game.native_block_state_property(state, "facing").map(str::to_string),
+        properties: m::STATE_KEYS
+            .iter()
+            .filter_map(|key| Some((key.to_string(), game.native_block_state_property(state, key)?.to_string())))
+            .collect(),
         partial: draw.partial,
         game_time: draw.game_time,
         // Its items, as the update tag carries them.
