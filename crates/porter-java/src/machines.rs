@@ -621,11 +621,143 @@ pub fn block_shape(class: &str, superclass: Option<&str>, source: &str) -> Optio
     })
 }
 
+/// The mod's own classes that hold items or fluids for whoever makes one: an item
+/// handler of its own (`BasinInventory extends SmartInventory implements
+/// IItemHandlerModifiable`, made with its slot count) and a holder of tanks
+/// (`SmartFluidTankBehaviour(type, be, int tanks, int tankCapacity, ..)`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OwnHandlers {
+    /// Item handler classes, by simple name: their first argument is the slot count.
+    pub items: Vec<String>,
+    /// Tank classes, by simple name, with which argument counts the tanks (one tank
+    /// where none does) and which is each tank's capacity.
+    pub tanks: Vec<(String, Option<usize>, usize)>,
+}
+
+/// Finds them among a mod's classes (`sources`: each class's name and its text).
+pub fn own_handlers(
+    classes: &[porter_model::ClassInfo],
+    sources: &[(String, String)],
+) -> OwnHandlers {
+    const ITEM_TYPES: &[&str] = &[
+        "ItemStackHandler",
+        "SimpleContainer",
+        "IItemHandler",
+        "IItemHandlerModifiable",
+        "ItemStacksResourceHandler",
+    ];
+    let simple = |name: &str| name.rsplit(['.', '$']).next().unwrap_or(name).to_string();
+    let base = |ty: &str| simple(ty.split('<').next().unwrap_or(ty).trim());
+    let source_of = |name: &str| {
+        sources
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, t)| t.as_str())
+    };
+    // A class's constructors: each one's parameters, as (type, name).
+    let constructors = |name: &str| -> Vec<Vec<(String, String)>> {
+        let Some(text) = source_of(name) else {
+            return Vec::new();
+        };
+        let word = simple(name);
+        let mut out = Vec::new();
+        let mut from = 0;
+        while let Some(at) = text[from..].find(&format!("{word}(")).map(|i| from + i) {
+            from = at + word.len();
+            // A declaration: after a modifier or at the start of its line, and with a
+            // body after its parameters (not `new Name(..)` or `this.name(..)`).
+            let before = text[..at].trim_end();
+            let declared = before.ends_with("public")
+                || before.ends_with("protected")
+                || before.ends_with("private")
+                || text[..at].ends_with(['\t', '\n'])
+                || text[..at].ends_with("    ");
+            let Some(params) = balanced(&text[at + word.len()..]) else {
+                continue;
+            };
+            let after = text[at + word.len() + params.len() + 2..].trim_start();
+            if !declared || !(after.starts_with('{') || after.starts_with("throws")) {
+                continue;
+            }
+            out.push(
+                split_top(params)
+                    .iter()
+                    .filter_map(|p| {
+                        let p = p.trim().trim_start_matches("final ").trim();
+                        let (ty, name) = p.rsplit_once(char::is_whitespace)?;
+                        Some((ty.trim().to_string(), name.trim().to_string()))
+                    })
+                    .collect(),
+            );
+        }
+        out
+    };
+    let mut out = OwnHandlers::default();
+    for class in classes
+        .iter()
+        .filter(|c| c.kind == porter_model::ClassKind::Class)
+    {
+        // An item handler: one of its own, or of the mod's above it, is one.
+        let mut chain = vec![class];
+        let mut parent = class.superclass.as_deref();
+        for _ in 0..4 {
+            let Some(up) = parent.and_then(|n| classes.iter().find(|c| c.name == n)) else {
+                break;
+            };
+            chain.push(up);
+            parent = up.superclass.as_deref();
+        }
+        let handles_items = chain.iter().any(|c| {
+            c.superclass
+                .as_deref()
+                .is_some_and(|s| ITEM_TYPES.contains(&base(s).as_str()))
+                || c.interfaces
+                    .iter()
+                    .any(|i| ITEM_TYPES.contains(&base(i).as_str()))
+        });
+        let made = constructors(&class.name);
+        if handles_items
+            && made
+                .iter()
+                .any(|params| params.first().is_some_and(|(ty, _)| ty == "int"))
+        {
+            out.items.push(simple(&class.name));
+            continue;
+        }
+        // A holder of tanks: it deals in fluids, and is made with a capacity.
+        let fluids = source_of(&class.name)
+            .is_some_and(|t| t.contains("FluidTank") || t.contains("IFluidHandler"));
+        if !fluids {
+            continue;
+        }
+        let sized = made.iter().find_map(|params| {
+            let capacity = params.iter().position(|(ty, name)| {
+                ty == "int" && name.to_ascii_lowercase().contains("capacity")
+            })?;
+            let count = params.iter().position(|(ty, name)| {
+                let name = name.to_ascii_lowercase();
+                ty == "int" && (name == "tanks" || name.contains("count"))
+            });
+            Some((count, capacity))
+        });
+        if let Some((count, capacity)) = sized {
+            out.tanks.push((simple(&class.name), count, capacity));
+        }
+    }
+    out
+}
+
 /// A class's fluid tanks and energy buffer, from the handlers it builds:
 /// NeoForge's `FluidStacksResourceHandler(tanks, capacity)` and
 /// `SimpleEnergyHandler(capacity, maxInsert, maxExtract)`, the older `FluidTank`
-/// and `EnergyStorage`, and Team Reborn's `SimpleEnergyStorage` (Fabric).
-pub fn storage(class: &str, source: &str, fields: &[String]) -> Option<StorageInfo> {
+/// and `EnergyStorage`, and Team Reborn's `SimpleEnergyStorage` (Fabric); and from
+/// the mod's own handler classes (`own`).
+pub fn storage(
+    class: &str,
+    source: &str,
+    fields: &[String],
+    own: &OwnHandlers,
+) -> Option<StorageInfo> {
     let ints = |args: &str| -> Vec<i32> {
         split_top(args)
             .iter()
@@ -635,12 +767,27 @@ pub fn storage(class: &str, source: &str, fields: &[String]) -> Option<StorageIn
     };
     let mut tanks = Vec::new();
     for args in calls(source, "new FluidTank") {
-        if let Some(cap) = ints(&args).first() {
+        // (`new FluidTank(0)` stands in where there is none: it holds nothing.)
+        if let Some(cap) = ints(&args).first().filter(|cap| **cap > 0) {
             tanks.push(*cap);
         }
     }
     for args in calls(source, "new FluidStacksResourceHandler") {
         if let [n, cap, ..] = ints(&args)[..] {
+            tanks.extend(std::iter::repeat_n(cap, n.clamp(0, 16) as usize));
+        }
+    }
+    // A tank class of the mod's own: `new SmartFluidTankBehaviour(INPUT, this, 2, 1000, true)`.
+    for (name, count, capacity) in &own.tanks {
+        for args in calls(source, &format!("new {name}")) {
+            let args = split_top(&args);
+            let Some(cap) = args.get(*capacity).and_then(|a| constant(a, source)) else {
+                continue;
+            };
+            let n = count
+                .and_then(|i| args.get(i))
+                .and_then(|a| constant(a, source))
+                .unwrap_or(1);
             tanks.extend(std::iter::repeat_n(cap, n.clamp(0, 16) as usize));
         }
     }
@@ -664,12 +811,16 @@ pub fn storage(class: &str, source: &str, fields: &[String]) -> Option<StorageIn
     let mut items = 0usize;
     // Those a field is given, by where: `inputInv = new ItemStackHandler(1)`.
     let mut kept: Vec<(usize, String, usize)> = Vec::new();
+    let own_items: Vec<String> = own.items.iter().map(|n| format!("new {n}")).collect();
     for name in [
         "new ItemStackHandler",
         "new SimpleContainer",
         "NonNullList.withSize",
         "new ItemStacksResourceHandler",
-    ] {
+    ]
+    .into_iter()
+    .chain(own_items.iter().map(String::as_str))
+    {
         let mut from = 0;
         while let Some(i) = source[from..].find(name).map(|i| from + i) {
             from = i + name.len();
@@ -677,6 +828,10 @@ pub fn storage(class: &str, source: &str, fields: &[String]) -> Option<StorageIn
                 .chars()
                 .next_back()
                 .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
+            {
+                continue;
+            }
+            if source[i + name.len()..].starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_')
             {
                 continue;
             }
@@ -705,7 +860,17 @@ pub fn storage(class: &str, source: &str, fields: &[String]) -> Option<StorageIn
                     .into_iter()
                     .rev()
                     .collect();
-                if fields.contains(&target) && !kept.iter().any(|(_, k, _)| *k == target) {
+                // (`if (handler == null) handler = new ItemStackHandler();` stands in
+                // where there is none: not a handler of its own.)
+                let stand_in = before
+                    .trim_end()
+                    .strip_suffix(target.as_str())
+                    .map(|b| b.trim_end().trim_end_matches("this.").trim_end())
+                    .is_some_and(|b| b.ends_with("== null)"));
+                if fields.contains(&target)
+                    && !stand_in
+                    && !kept.iter().any(|(_, k, _)| *k == target)
+                {
                     kept.push((i, target, n));
                 }
             }
@@ -1400,22 +1565,135 @@ public class InfuserScreen extends AbstractWidgetsContainerScreen<InfuserMenu> i
             private final FluidTank lava = new FluidTank(CAPACITY);
             private final SimpleEnergyHandler energy = new SimpleEnergyHandler(10000, 200, 0);
         "#;
-        let s = storage("Boiler", source, &[]).unwrap();
+        let s = storage("Boiler", source, &[], &OwnHandlers::default()).unwrap();
         assert_eq!(s.tanks, [8000, 4000, 4000]);
         assert_eq!(s.energy, Some([10000, 200, 0]));
-        assert_eq!(storage("Plain", "class Plain {}", &[]), None);
+        assert_eq!(
+            storage("Plain", "class Plain {}", &[], &OwnHandlers::default()),
+            None
+        );
         // An input and an output handler: their slots follow one another. A handler
         // made for a moment (no field of its own) doesn't count.
         let mill = "class Mill { ItemStackHandler inputInv; ItemStackHandler outputInv; Mill() { inputInv = new ItemStackHandler(1); this.outputInv = new ItemStackHandler(9); } void f() { SimpleContainer tmp = new SimpleContainer(3); } }";
-        let s = storage("Mill", mill, &["inputInv".into(), "outputInv".into()]).unwrap();
+        let s = storage(
+            "Mill",
+            mill,
+            &["inputInv".into(), "outputInv".into()],
+            &OwnHandlers::default(),
+        )
+        .unwrap();
         assert_eq!(s.items, 10);
         assert_eq!(
             s.inventories,
             [("inputInv".to_string(), 1), ("outputInv".to_string(), 9)]
         );
+        // Handlers of the mod's own: an inventory class that is an item handler, made
+        // with its slot count, and a tank class made with a count and a capacity.
+        let class =
+            |name: &str, superclass: Option<&str>, interfaces: &[&str]| porter_model::ClassInfo {
+                name: name.to_string(),
+                kind: porter_model::ClassKind::Class,
+                path: String::new(),
+                superclass: superclass.map(str::to_string),
+                interfaces: interfaces.iter().map(|i| i.to_string()).collect(),
+                references: Vec::new(),
+                side: porter_model::Side::Common,
+                is_mixin: false,
+                lines: 0,
+                methods: 0,
+                fields: Vec::new(),
+                method_names: Vec::new(),
+                saved: Vec::new(),
+            };
+        let classes = [
+            class("m.SmartInventory", None, &["IItemHandlerModifiable"]),
+            class("m.BasinInventory", Some("m.SmartInventory"), &[]),
+            class("m.TankBehaviour", None, &[]),
+            class("m.Plain", None, &[]),
+        ];
+        let sources = [
+            (
+                "m.SmartInventory".to_string(),
+                "class SmartInventory implements IItemHandlerModifiable {
+	public SmartInventory(int slots, Object be) {
+	}
+}"
+                .to_string(),
+            ),
+            (
+                "m.BasinInventory".to_string(),
+                "class BasinInventory extends SmartInventory {
+	public BasinInventory(int slots, Object be) {
+		super(slots, be);
+	}
+}"
+                .to_string(),
+            ),
+            (
+                "m.TankBehaviour".to_string(),
+                "class TankBehaviour {
+	IFluidHandler capability;
+	public static TankBehaviour single(Object be, int capacity) {
+		return new TankBehaviour(TYPE, be, 1, capacity, false);
+	}
+	public TankBehaviour(Object type, Object be, int tanks, int tankCapacity, boolean enforceVariety) {
+	}
+}"
+                .to_string(),
+            ),
+            (
+                "m.Plain".to_string(),
+                "class Plain {
+	public Plain(int size) {
+	}
+}"
+                .to_string(),
+            ),
+        ];
+        let own = own_handlers(&classes, &sources);
+        assert_eq!(own.items, ["SmartInventory", "BasinInventory"]);
+        assert_eq!(own.tanks, [("TankBehaviour".to_string(), Some(2), 3)]);
+        let basin = "class Basin { BasinInventory inputInventory; SmartInventory outputInventory; Basin() { inputInventory = new BasinInventory(9, this); outputInventory = new BasinInventory(9, this).forbidInsertion(); itemCapability = new CombinedInvWrapper(inputInventory, outputInventory); inputTank = new TankBehaviour(INPUT, this, 2, 1000, true); outputTank = new TankBehaviour(OUTPUT, this, 2, 1000, true); } }";
+        let s = storage(
+            "Basin",
+            basin,
+            &["inputInventory".into(), "outputInventory".into()],
+            &own,
+        )
+        .unwrap();
+        assert_eq!(s.items, 18);
+        assert_eq!(
+            s.inventories,
+            [
+                ("inputInventory".to_string(), 9),
+                ("outputInventory".to_string(), 9)
+            ]
+        );
+        assert_eq!(s.tanks, [1000, 1000, 1000, 1000]);
+        // What stands in where a capability is missing is no storage of its own.
+        let guarded = format!(
+            "{} void f() {{ if (itemCapability == null) itemCapability = new ItemStackHandler(); if (fluidCapability == null) fluidCapability = new FluidTank(0); }} }}",
+            basin.trim_end_matches('}')
+        );
+        let s = storage(
+            "Basin",
+            &guarded,
+            &[
+                "inputInventory".into(),
+                "outputInventory".into(),
+                "itemCapability".into(),
+            ],
+            &own,
+        )
+        .unwrap();
+        assert_eq!(s.items, 18);
+        assert_eq!(s.inventories.len(), 2);
+        assert_eq!(s.tanks, [1000, 1000, 1000, 1000]);
+        // The tank class itself makes one from what it is given: no storage of its own.
+        assert_eq!(storage("TankBehaviour", &sources[2].1, &[], &own), None);
         // One handler: as before.
         let pot = "class Pot { ItemStackHandler inventory = new ItemStackHandler(9); }";
-        let s = storage("Pot", pot, &["inventory".into()]).unwrap();
+        let s = storage("Pot", pot, &["inventory".into()], &OwnHandlers::default()).unwrap();
         assert_eq!(s.items, 9);
         assert_eq!(s.inventories, [("inventory".to_string(), 9)]);
     }

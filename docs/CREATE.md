@@ -199,6 +199,33 @@ translation wrote the comment for one item a cycle and the code for all of them)
 `locked` flag has nowhere to live, so a funnel could take an item mid-press; items on a belt under
 the press aren't reached, belts not being ported; and the basin under a press is the next step.
 
+**A mixer over a basin** (2026-11-12). A basin, a mechanical mixer two blocks over it, a cogwheel
+beside the mixer on a motor set to 64:
+
+| | |
+| --- | --- |
+| The mixer's `Speed` | -64.0: it meshes with the cogwheel as the small cog it is |
+| Andesite and iron nuggets dropped into the basin | taken into its input slots; the mixer is told and starts |
+| Every 2.3 seconds (46 ticks: `log2(512 / speed) * 15 + 1`) | one andesite alloy in the basin's output slots |
+| Below 30 RPM | the mixer's tick holds off, by its code (not tried in the game): `mediumSpeed`, read from Create's config class |
+| A right click with an empty hand | everything in the player's inventory, the basin empty |
+
+Six functions from Haiku (about 20 cents), and again what it took was in the porter:
+
+| What stood in the way | What the porter does now |
+| --- | --- |
+| The basin's inventories are a class of Create's own (`BasinInventory extends SmartInventory`), and its tanks sit in a behaviour made with a count and a capacity. The scan gave the basin 2 slots and an empty tank | A mod's own item handler classes and tank holders are found, and making one makes storage: 9 input slots, 9 output slots, four 1000 mB tanks. A handler that only stands in where a capability is missing (`if (x == null) x = new ItemStackHandler()`) is none |
+| The basin tells the mixer its contents changed (`getOperator().basinChecker.scheduleUpdate()`); its tick had no way to know the key the mixer keeps that flag under | A tick is shown the saved keys of the other block entities its Java names: the basin sets `NeedsUpdate` in the mixer two blocks up |
+| "Is it a small cog" was ported as "not a large cog", for every block: two shafts side by side would have driven each other | A question to a block now says which blocks are of its interface at all, and that Java never asks the others |
+| A function ported again kept its old mistakes: its last port was still in the prompt, as part of the module shown | It isn't shown. The mixer's speed limit went from a guessed 32 to the config's 30 on the next try |
+
+What it doesn't do yet: fluids (the basin has its tanks, but a tick can't yet reach the tanks of
+another block entity, so recipes with a fluid don't run), heated recipes (no blaze burner),
+the basin passing its output on to a depot or belt beside it, and the press on a basin. That last
+one is the limit of one function at a time: asked for depot, world and basin modes together, the
+press's tick ran past 48,000 tokens of answer and was left as it was. `BasinRecipe`'s matching
+and applying want to be ported once and called by both, as the questions are.
+
 **Where it stops.**
 
 - **Stress.** Speed carries; stress and capacity don't. `KineticNetwork` keeps them for a whole

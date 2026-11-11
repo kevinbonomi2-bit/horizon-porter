@@ -1637,7 +1637,7 @@ pub fn storage_text(be: &BlockEntity) -> String {
             format!("its fluid tank ({}, `machine.tanks[0]`)", caps[0])
         } else {
             format!(
-                "its {} fluid tanks ({}, `machine.tanks`)",
+                "its {} fluid tanks ({}, `machine.tanks`, in the order its Java makes them)",
                 be.tanks.len(),
                 caps.join(", ")
             )

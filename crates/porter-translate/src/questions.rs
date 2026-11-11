@@ -66,6 +66,10 @@ pub struct Question {
     pub answers: Vec<Answer>,
     /// How many of the mod's classes ask it.
     pub asked: usize,
+    /// For a question to a block: the blocks that are of the interface without a class
+    /// of theirs answering (they take the interface's own answer). A block in neither
+    /// list isn't of the interface, and Java never asks it.
+    pub others: Vec<String>,
 }
 
 /// One class's answer.
@@ -126,6 +130,31 @@ pub fn find(scan: &ModScan, ns: &str, entities: &[BlockEntity]) -> Vec<Question>
         }
         out
     };
+    // Whether a class (by its chain) is of `interface`: one of its classes implements
+    // it, or an interface that extends it (`ICogWheel extends IRotate`).
+    let is_a = |chain: &[&ClassInfo], interface: &ClassInfo| -> bool {
+        let wanted = simple(&interface.name);
+        let mut names: Vec<String> = chain
+            .iter()
+            .flat_map(|c| c.interfaces.iter())
+            .map(|i| simple(i.split('<').next().unwrap_or(i)))
+            .collect();
+        // What those interfaces extend, a few steps up.
+        for _ in 0..3 {
+            let more: Vec<String> = names
+                .iter()
+                .filter_map(|n| scan.classes.iter().find(|c| simple(&c.name) == *n))
+                .flat_map(|c| c.interfaces.iter().chain(c.superclass.iter()))
+                .map(|i| simple(i.split('<').next().unwrap_or(i)))
+                .filter(|n| !names.contains(n))
+                .collect();
+            if more.is_empty() {
+                break;
+            }
+            names.extend(more);
+        }
+        names.contains(&wanted)
+    };
     let chains: Vec<(&BlockEntity, Vec<&ClassInfo>)> = entities
         .iter()
         .filter_map(|e| Some((e, chain(e.class.as_deref()?))))
@@ -164,6 +193,13 @@ pub fn find(scan: &ModScan, ns: &str, entities: &[BlockEntity]) -> Vec<Question>
             if by_class.is_empty() {
                 continue;
             }
+            // The blocks of the interface none of those classes covers.
+            let others: Vec<String> = blocks
+                .iter()
+                .filter(|(id, _)| !by_class.iter().any(|(_, ids)| ids.contains(id)))
+                .filter(|(_, own)| is_a(&chain(&own.name), interface))
+                .map(|(id, _)| id.clone())
+                .collect();
             let Some(text) = source(interface) else {
                 continue;
             };
@@ -184,6 +220,7 @@ pub fn find(scan: &ModScan, ns: &str, entities: &[BlockEntity]) -> Vec<Question>
                 default: decl.body.filter(|b| b.len() <= BODY_LIMIT),
                 answers: answers(by_class, method, &source),
                 asked: asked[method],
+                others,
             });
         }
     }
@@ -297,6 +334,7 @@ pub fn find(scan: &ModScan, ns: &str, entities: &[BlockEntity]) -> Vec<Question>
             default: None,
             answers: answers(by_class, method, &source),
             asked: core[*method],
+            others: Vec::new(),
         });
     }
     // The most answered first: what many classes override is what gets asked.
@@ -344,6 +382,7 @@ pub fn find(scan: &ModScan, ns: &str, entities: &[BlockEntity]) -> Vec<Question>
                 answers: Vec::new(),
                 // Asked inside its own class too, where it is called bare.
                 asked: text.matches(&format!("{method}(")).count(),
+                others: Vec::new(),
             });
         }
     }
@@ -440,13 +479,29 @@ pub fn runtime(questions: &[Question]) -> String {
         }
         match q.asks {
             Asks::Block => {
+                let default = match &q.default {
+                    Some(body) => format!("`{}`", one_line(body)),
+                    None => "it gives none, so the plainest answer".to_string(),
+                };
+                let interface = simple(&q.owner);
+                if q.others.is_empty() {
+                    let _ = writeln!(
+                        r,
+                        "/// No other block is a `{interface}` (what the interface itself answers is {default})."
+                    );
+                } else {
+                    let ids: Vec<String> =
+                        q.others.iter().take(40).map(|b| format!("`{b}`")).collect();
+                    let _ = writeln!(
+                        r,
+                        "/// These are `{interface}`s too, and answer as the interface does ({default}): {}{}.",
+                        ids.join(", "),
+                        if q.others.len() > 40 { " and more" } else { "" }
+                    );
+                }
                 let _ = writeln!(
                     r,
-                    "/// Any other block answers as the interface does: {}.",
-                    match &q.default {
-                        Some(body) => format!("`{}`", one_line(body)),
-                        None => "it gives none, so the plainest answer".to_string(),
-                    }
+                    "/// A block that isn't a `{interface}` is never asked in Java (`block instanceof {interface} && ..`):\n/// for it the answer is the plainest one (`false`, zero, none), whatever the interface's own is."
                 );
             }
             Asks::Entity => {
@@ -1084,6 +1139,7 @@ mod tests {
                 body: Some("return face == state.getValue(FACING);".into()),
             }],
             asked: 3,
+            others: vec!["spin:crank".into()],
         }
     }
 
@@ -1117,6 +1173,18 @@ mod tests {
             text.contains(
                 "- `MotorBlock` (`spin:motor`): `return face == state.getValue(FACING);`"
             ),
+            "{text}"
+        );
+        // The blocks of the interface no class answers for, and what a block outside it
+        // answers: Java asks only blocks that are of the interface.
+        assert!(
+            text.contains(
+                "/// These are `IRotate`s too, and answer as the interface does (it gives none, so the plainest answer): `spin:crank`."
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains("/// A block that isn't a `IRotate` is never asked in Java"),
             "{text}"
         );
         assert!(

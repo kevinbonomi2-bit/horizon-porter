@@ -281,6 +281,8 @@ fn network_and_config(root: &Path, scan: &mut ModScan) {
             }
         }
     }
+    // The mod's own item handler and tank classes: making one makes storage too.
+    let own = machines::own_handlers(&scan.classes, &sources);
     for (name, text) in &sources {
         scan.config.extend(netconf::config(name, text, &enums));
         scan.config.extend(netconf::field_config(name, text));
@@ -299,7 +301,7 @@ fn network_and_config(root: &Path, scan: &mut ModScan) {
                     .collect()
             })
             .unwrap_or_default();
-        if let Some(s) = machines::storage(name, text, &fields) {
+        if let Some(s) = machines::storage(name, text, &fields, &own) {
             scan.storages.push(s);
         }
         let superclass = scan

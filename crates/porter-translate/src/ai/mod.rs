@@ -865,6 +865,8 @@ fn prompt(dir: &Path, scan: &ModScan, unit: &Unit) -> Result<Prompt> {
         sent.push(class.name.clone());
         java_text.push_str(&source);
     }
+    // The Java it is ported from, without the classes shown beside it.
+    let own_java = java_text.clone();
     if sent.is_empty() {
         let _ = writeln!(
             p,
@@ -941,11 +943,14 @@ fn prompt(dir: &Path, scan: &ModScan, unit: &Unit) -> Result<Prompt> {
     used.sort_by_cached_key(|(class, s)| (!its_entity(class), !calls_into(class), s.len()));
     let mut shown: Vec<String> = sent.clone();
     let mut used_chars = 0;
+    // The Java of the classes too long to show.
+    let mut unseen_java = String::new();
     for (class, source) in used {
         if used_chars + source.len() > USED_BUDGET || java_chars + source.len() > JAVA_BUDGET {
             // Too long to show (a registry class: `ModItems`, `ModSounds`): the ids of
             // its constants the code names, so `ModSounds.EGG_HATCH` isn't a guess.
             let simple = class.name.rsplit('.').next().unwrap_or(&class.name);
+            unseen_java.push_str(&source);
             let named = named_constants(simple, &source, &java_text);
             if named.is_empty() {
                 out.notes.push(format!(
@@ -997,7 +1002,15 @@ fn prompt(dir: &Path, scan: &ModScan, unit: &Unit) -> Result<Prompt> {
              it for both blocks of a pair: a block left out of it never connects.\n\n{answers}"
         );
     }
-    let config = config_values(scan, &java_text, &shown);
+    // (Read from the classes left out for length too: a setting read two calls away.)
+    let config = config_values(
+        scan,
+        &format!(
+            "{java_text}
+{unseen_java}"
+        ),
+        &shown,
+    );
     if !config.is_empty() {
         let _ = writeln!(
             p,
@@ -1051,6 +1064,19 @@ fn prompt(dir: &Path, scan: &ModScan, unit: &Unit) -> Result<Prompt> {
             );
             // A tick that reaches another block entity, where the Java has one of them
             // call what the other registered.
+            let reached = reached_keys(&file, &own_java, &stub);
+            if !reached.is_empty() {
+                let _ = writeln!(
+                    p,
+                    "Other block entities of the mod this code names, and the key each of their values is \
+                     saved under: what `n.get(key)` reads of one (`machine.neighbour(side)`, \
+                     `machine.at(pos)`, a click's `world.entity_value`) and what `machine.set_at(pos, key, \
+                     value)` or `machine.set_neighbour` changes in one (a `bool` is `Saved::Byte(1)` or \
+                     `Saved::Byte(0)`, an `i32` `Saved::Int`, an `f32` `Saved::Float`, a `String` \
+                     `Saved::Text`). A flag the Java sets on another block entity \
+                     (`other.checker.scheduleUpdate()`) is set this way, by its key:\n{reached}"
+                );
+            }
             let called = unit.comment.contains("call code this one gave");
             if stub.contains("Machine<'_>") && unit.comment.contains("machine.at(pos)") && !called {
                 let _ = writeln!(p, "{CALLBACKS}\n");
@@ -1188,6 +1214,11 @@ fn module_context(module: &str, stub: &str, function: &str, java: &str) -> Strin
         let is_fn = first_code.starts_with("fn ") || first_code.starts_with("pub fn ");
         let own = first_code.starts_with(&format!("fn {function}("))
             || first_code.starts_with(&format!("pub fn {function}("));
+        // The function itself is shown above, as it is to be ported: its last port, where
+        // it has one, isn't shown again here (it would be copied, mistakes and all).
+        if own {
+            continue;
+        }
         let long = chunk.lines().count();
         // Another Java class's function (to port, or ported): this one can call it only
         // when its own Java names that class (a subclass calling `super`). A large mod has
@@ -1652,6 +1683,128 @@ fn config_values(scan: &ModScan, java: &str, shown: &[String]) -> String {
     out
 }
 
+/// The saved keys of the mod's other block entities whose classes `java` names (its
+/// own, one it inherits, or one it keeps part of itself in): a line a block entity,
+/// from the state structs of `module`. `stub` is the function, whose own state is left
+/// out. So a tick that sets a flag in another block entity knows the key it is under.
+fn reached_keys(module: &str, java: &str, stub: &str) -> String {
+    let mut out = String::new();
+    // Each block entity's id, struct, classes and keys.
+    let mut found: Vec<(&str, &str, Vec<&str>, Vec<String>)> = Vec::new();
+    let lines: Vec<&str> = module.lines().collect();
+    let mut i = 0;
+    while i < lines.len() {
+        let Some(head) = lines[i].strip_prefix("/// The state of a `") else {
+            i += 1;
+            continue;
+        };
+        let id = head.split('`').next().unwrap_or_default();
+        // Its classes: every dotted name in backticks on that line.
+        // (Not the classes it keeps parts of itself in: many block entities share those.)
+        let classes: Vec<&str> = head
+            .split(" and what it keeps in ")
+            .next()
+            .unwrap_or(head)
+            .split('`')
+            .step_by(2)
+            .skip(1)
+            .filter(|c| c.contains('.'))
+            .collect();
+        // To its struct, and through its fields.
+        let mut j = i + 1;
+        while j < lines.len() && !lines[j].starts_with("pub struct ") {
+            j += 1;
+        }
+        let Some(name) = lines
+            .get(j)
+            .and_then(|l| l.strip_prefix("pub struct "))
+            .map(|l| l.trim_end_matches(['{', ' ']))
+        else {
+            break;
+        };
+        let mut keys: Vec<String> = Vec::new();
+        let mut k = j + 1;
+        while k + 1 < lines.len() && lines[k] != "}" {
+            let doc = lines[k].trim();
+            let field = lines[k + 1].trim();
+            if let (Some(doc), Some(field)) = (doc.strip_prefix("/// "), field.strip_prefix("pub "))
+            {
+                let key = ["saved as `", "kept as `"]
+                    .iter()
+                    .find_map(|m| doc.split_once(m))
+                    .and_then(|(_, rest)| rest.split('`').next());
+                let ty = field
+                    .split_once(": ")
+                    .map_or("", |(_, t)| t.trim_end_matches(','));
+                let java_field = doc.split('`').nth(1).unwrap_or_default();
+                if let Some(key) = key {
+                    keys.push(format!("`{key}` ({ty}, `{java_field}`)"));
+                }
+                k += 2;
+            } else {
+                k += 1;
+            }
+        }
+        i = k;
+        found.push((id, name, classes, keys));
+    }
+    // The function's own state, and the classes it is made of: a class it shares with
+    // another block entity (a base of both) doesn't name that one.
+    let is_own = |name: &str| {
+        stub.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .any(|w| w == name)
+    };
+    let own_classes: Vec<&str> = found
+        .iter()
+        .filter(|(_, name, _, _)| is_own(name))
+        .flat_map(|(_, _, classes, _)| classes.iter().copied())
+        .collect();
+    // Those the Java names most come first.
+    let mentions = |class: &str| {
+        let simple = class.rsplit('.').next().unwrap_or(class);
+        java.match_indices(simple)
+            .filter(|(at, _)| {
+                let before = java[..*at].chars().next_back();
+                let after = java[at + simple.len()..].chars().next();
+                let part =
+                    |c: Option<char>| c.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_');
+                !part(before) && !part(after)
+            })
+            .count()
+    };
+    let mut named: Vec<(usize, &str, Vec<&str>, Vec<String>)> = found
+        .iter()
+        .filter(|(_, name, _, keys)| !is_own(name) && !keys.is_empty())
+        .filter_map(|(id, _, classes, keys)| {
+            let mut by: Vec<(usize, &str)> = classes
+                .iter()
+                .filter(|c| !own_classes.contains(c))
+                .map(|c| (mentions(c), *c))
+                .filter(|(n, _)| *n > 0)
+                .collect();
+            by.sort_by_key(|(n, _)| std::cmp::Reverse(*n));
+            let most = by.first()?.0;
+            Some((
+                most,
+                *id,
+                by.into_iter().map(|(_, c)| c).collect(),
+                keys.clone(),
+            ))
+        })
+        .collect();
+    named.sort_by_key(|(n, _, _, _)| std::cmp::Reverse(*n));
+    for (_, id, classes, mut keys) in named.into_iter().take(6) {
+        let which: Vec<String> = classes
+            .iter()
+            .take(2)
+            .map(|c| format!("`{}`", c.rsplit('.').next().unwrap_or(c)))
+            .collect();
+        keys.truncate(40);
+        let _ = writeln!(out, "- `{id}` ({}): {}", which.join(", "), keys.join(", "));
+    }
+    out
+}
+
 /// State properties `java` reads or sets by a constant that isn't the property's
 /// name in lower case: `state.getValue(HORIZONTAL_FACING)` reads `facing`. The name is
 /// the mod's own where it declares the constant (`AXIS_ALONG_FIRST_COORDINATE =
@@ -1911,6 +2064,45 @@ mod tests {
         );
         assert!(!text.contains("### `b`"));
         fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn lists_the_saved_keys_of_block_entities_the_java_names() {
+        let module = "/// The state of a `demo:mixer` block entity: `net.demo.MixerBlockEntity` and what it inherits from `net.demo.OperatingBlockEntity` and what it keeps in `net.demo.Deferral`'s fields, saved with the block.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Mixer {
+    /// `float speed`, saved as `Speed`.
+    pub speed: f32,
+    /// `Deferral checker: boolean needsUpdate`, saved as `NeedsUpdate`.
+    pub checker_needs_update: bool,
+    /// `int lazy`, not saved by the Java mod: kept as `lazy` so it lasts between ticks.
+    pub lazy: i32,
+}
+
+/// The state of a `demo:basin` block entity: `net.demo.BasinBlockEntity`'s fields, saved with the block.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Basin {
+    /// `boolean changed`, saved as `Changed`.
+    pub changed: bool,
+}
+
+/// The state of a `demo:lamp` block entity: `net.demo.LampBlockEntity`'s fields, saved with the block.
+pub struct Lamp {
+    /// `boolean lit`, saved as `Lit`.
+    pub lit: bool,
+}
+";
+        let java = "class BasinBlockEntity { void changed() { getOperator().ifPresent(be -> be.checker.scheduleUpdate()); } Optional<OperatingBlockEntity> getOperator() { return null; } }";
+        let stub =
+            "pub fn tick_basin(pos: [i32; 3], state: &mut Basin, machine: &mut Machine<'_>) {}";
+        let keys = reached_keys(module, java, stub);
+        // The mixer inherits the class the basin's Java names; the basin's own state and
+        // a block entity it doesn't name are left out.
+        assert_eq!(
+            keys,
+            "- `demo:mixer` (`OperatingBlockEntity`): `Speed` (f32, `float speed`), `NeedsUpdate` (bool, `Deferral checker: boolean needsUpdate`), `lazy` (i32, `int lazy`)
+"
+        );
     }
 
     #[test]
