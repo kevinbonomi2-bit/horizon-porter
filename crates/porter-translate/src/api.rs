@@ -1327,9 +1327,15 @@ const PART_ANALOG: &str = r#"    fn has_analog_output(&self, level: &dyn LevelHo
 const BY_PLAYER: &str = r#"
 /// The acting player (the one placing or breaking) as the port's `ByPlayer`, for the
 /// block at `pos`.
-fn by_player(host: &mut dyn ServerHost, block: String, pos: [i32; 3]) -> runtime::ByPlayer {
-    let player = host.players().acting_player();
-    let entity = player.map(|p| p.entity());
+fn by_player(
+    host: &mut dyn ServerHost,
+    entity: Option<mod_api::EntityRef>,
+    block: String,
+    pos: [i32; 3],
+) -> runtime::ByPlayer {
+    let player = entity
+        .and_then(|e| e.uuid(host))
+        .and_then(|u| host.player(u));
     let stack = entity
         .and_then(|e| host.living(e))
         .and_then(|l| l.hand_item(&*host, mod_api::Hand::Main));
@@ -1367,13 +1373,14 @@ const HOOK_PLACED: &str = r#"
             return Flow::Continue;
         };
         let (block, _) = parse_state(&text);
-        let Some(player) = host.players().acting_player() else {
-            return Flow::Continue;
-        };
+        // The placer the event names, else whoever is acting.
+        let placer = event
+            .placer
+            .or_else(|| host.players().acting_player().map(|p| p.entity()));
         if runtime::acts_when_placed(&block) {
             let pos = [event.pos.x, event.pos.y, event.pos.z];
-            let by = by_player(host, block, pos);
-            let uuid = player.entity().uuid(host);
+            let by = by_player(host, placer, block, pos);
+            let uuid = placer.and_then(|e| e.uuid(host));
             if let Ok(mut waiting) = PLACED.lock() {
                 waiting.push((uuid, by));
             }
@@ -1424,10 +1431,10 @@ const HOOK_BROKEN: &str = r#"
         };
         let (block, _) = parse_state(&text);
         if runtime::acts_when_broken(&block) {
-            let by = by_player(host, block, event.pos);
+            let player = host.players().acting_player();
+            let by = by_player(host, player.map(|p| p.entity()), block, event.pos);
             let dimension = host.dimension();
             let level = host.level(dimension);
-            let player = host.players().acting_player();
             let mut here = Here {
                 host,
                 level,
@@ -1448,15 +1455,18 @@ const HOOK_DROPS: &str = r#"
         let Some(uuid) = event.player else {
             return Flow::Continue;
         };
-        let Some(player) = host.player(uuid) else {
+        let player = host.player(uuid);
+        let Some(entity) = host.entity(event.entity).or_else(|| player.map(|p| p.entity())) else {
             return Flow::Continue;
         };
-        let entity = player.entity();
         let at = entity.position(&*host).unwrap_or([0.0; 3]);
         let yaw = entity.rotation(&*host).map_or(0.0, |r| r[0]);
         let hex = format!("{uuid:032x}");
         let died = runtime::PlayerDrops {
-            name: player.name(&*host).unwrap_or_default(),
+            name: player
+                .and_then(|p| p.name(&*host))
+                .or_else(|| entity.name(&*host))
+                .unwrap_or_default(),
             uuid: format!(
                 "{}-{}-{}-{}-{}",
                 &hex[..8],
@@ -1479,7 +1489,7 @@ const HOOK_DROPS: &str = r#"
             host,
             level,
             dimension,
-            player: Some(player),
+            player,
             hand: mod_api::Hand::Main,
             seed: seed_of(died.pos),
         };

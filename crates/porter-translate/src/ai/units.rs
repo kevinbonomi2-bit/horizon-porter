@@ -606,7 +606,7 @@ fn replace_item(source: &str, name: &str, comment: &str, item: &str) -> Option<S
 
 /// Java classes a TODO comment names: `net.compasshud.CompassHudClient`, and the
 /// classes in `(in PlayerMixin, GuiMixin)`.
-fn java_classes(comment: &str) -> Vec<String> {
+pub(super) fn java_classes(comment: &str) -> Vec<String> {
     let mut out = BTreeSet::new();
     for word in
         comment.split(|c: char| !(c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '$'))

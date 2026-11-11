@@ -958,6 +958,56 @@ fn module_context(module: &str, stub: &str, function: &str, java: &str) -> Strin
         if other_state || other_tick || unused_statics {
             continue;
         }
+        let is_fn = first_code.starts_with("fn ") || first_code.starts_with("pub fn ");
+        let own = first_code.starts_with(&format!("fn {function}("))
+            || first_code.starts_with(&format!("pub fn {function}("));
+        let long = chunk.lines().count();
+        // Another Java class's function (to port, or ported): this one can call it only
+        // when its own Java names that class (a subclass calling `super`). A large mod has
+        // hundreds; they would be most of the prompt.
+        if is_fn && !own {
+            let from = chunk
+                .lines()
+                .filter(|l| l.contains(units::TODO) || l.contains(units::PORTED))
+                .flat_map(units::java_classes)
+                .collect::<Vec<_>>();
+            if !from.is_empty()
+                && !from.iter().any(|class| {
+                    let simple = class.rsplit(['.', '$']).next().unwrap_or(class);
+                    java.split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+                        .any(|w| w == simple)
+                })
+            {
+                continue;
+            }
+            // A generated dispatch (a match over every block): its head says enough.
+            if from.is_empty() && long > 60 {
+                for line in chunk
+                    .lines()
+                    .take_while(|l| l.starts_with("//") || l.starts_with("#["))
+                {
+                    out.push_str(line);
+                    out.push('\n');
+                }
+                let head = first_code.trim_end_matches('{').trim_end();
+                let _ = writeln!(out, "{head} {{ /* {long} lines, generated */ }}\n");
+                continue;
+            }
+        }
+        // A long list of blocks or items for another function: its length says enough.
+        if (first_code.starts_with("const ") || first_code.starts_with("pub const "))
+            && first_code.ends_with("&[")
+            && long > 14
+            && !first_code.starts_with("pub const BLOCK_TAGS:")
+            && !first_code.contains(&format!(" {}:", function.to_ascii_uppercase()))
+        {
+            for line in chunk.lines().take_while(|l| l.starts_with("//")) {
+                out.push_str(line);
+                out.push('\n');
+            }
+            let _ = writeln!(out, "{first_code}/* {} entries */];\n", long - 2);
+            continue;
+        }
         // The tag table: its tags' names say what `in_tag` knows; their blocks would
         // only fill the prompt.
         if first_code.starts_with("pub const BLOCK_TAGS:") {

@@ -47,6 +47,9 @@ pub struct BlockEntity {
     pub redstone: Option<String>,
     /// Java fields the state leaves out, with why.
     pub left_out: Vec<String>,
+    /// The mod's own base classes it takes state or its tick from (Create's
+    /// `KineticBlockEntity` for a shaft), nearest first.
+    pub bases: Vec<String>,
 }
 
 /// A field of the state struct.
@@ -271,16 +274,50 @@ pub fn find(scan: &ModScan, ns: &str) -> Vec<BlockEntity> {
             animate,
             neighbours: false,
             left_out: Vec::new(),
+            bases: Vec::new(),
         };
         if let Some(class) = class {
             state_of(class, &mut be);
+            // What it inherits from the mod's own base classes: their saved values, the
+            // fields that last between ticks, and the tick itself when it is theirs
+            // (a shaft's speed and its spreading are `KineticBlockEntity`'s).
+            let mut parent = class.superclass.clone();
+            for _ in 0..6 {
+                let Some(base) = parent
+                    .take()
+                    .and_then(|n| scan.classes.iter().find(|c| c.name == n))
+                else {
+                    break;
+                };
+                let mut theirs = be.clone();
+                theirs.fields.clear();
+                theirs.left_out.clear();
+                state_of(base, &mut theirs);
+                let mut took = theirs.ticks && !be.ticks;
+                be.ticks |= theirs.ticks;
+                // A base class that looks at the blocks beside it (it uses `Direction`).
+                be.neighbours |= base
+                    .references
+                    .iter()
+                    .any(|r| r == "net.minecraft.core.Direction");
+                for f in theirs.fields {
+                    if !be.fields.iter().any(|x| x.name == f.name || x.key == f.key) {
+                        be.fields.push(f);
+                        took = true;
+                    }
+                }
+                if took {
+                    be.bases.push(base.name.clone());
+                }
+                parent = base.superclass.clone();
+            }
             let simple = class.name.rsplit('.').next().unwrap_or(&class.name);
             be.renderer = scan
                 .renderers
                 .iter()
                 .find(|r| r.entity == simple)
                 .map(|r| r.class.clone());
-            be.neighbours = class
+            be.neighbours |= class
                 .references
                 .iter()
                 .any(|r| r == "net.minecraft.core.Direction");
@@ -453,7 +490,16 @@ pub const BLOCK_ENTITIES: &[(&str, &str, bool)] = &[
     r.push_str("];\n");
 
     for be in entities {
-        let java = be.class.as_deref().unwrap_or("its Java class (not found)");
+        // Its class, with the base classes it takes state or its tick from.
+        let java = match &be.class {
+            Some(class) if be.bases.is_empty() => class.clone(),
+            Some(class) => format!(
+                "{class}` and what it inherits from `{}",
+                be.bases.join("`, `")
+            ),
+            None => "its Java class (not found)".to_string(),
+        };
+        let java = java.as_str();
         let _ = write!(
             r,
             "\n/// The state of a `{id}` block entity: `{java}`'s fields, saved with the block.\n#[derive(Clone, Debug, Default, PartialEq)]\npub struct {ty} {{\n",
