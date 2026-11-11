@@ -755,7 +755,25 @@ pub fn renderer(class: &str, source: &str) -> Option<RendererInfo> {
             });
         }
     }
-    None
+    // A renderer built on a base of the mod's own or a library's:
+    // `class HandCrankRenderer extends KineticBlockEntityRenderer<HandCrankBlockEntity>`.
+    // One that takes any entity (`class ShaftRenderer<T extends ..>`) names none.
+    let simple = class.rsplit(['.', '$']).next()?;
+    let at = source.find(&format!("class {simple} extends "))?;
+    let decl = &source[at..];
+    let decl = &decl[..decl.find('{')?];
+    let open = decl.find("Renderer<")? + "Renderer<".len();
+    let entity: String = decl[open..]
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '.')
+        .collect();
+    let entity = entity.rsplit('.').next().unwrap_or(&entity).to_string();
+    (entity.len() > 1 && entity.starts_with(|c: char| c.is_ascii_uppercase())).then(|| {
+        RendererInfo {
+            class: class.to_string(),
+            entity,
+        }
+    })
 }
 
 /// The property fields a block class adds, and its (field, default value) pairs.

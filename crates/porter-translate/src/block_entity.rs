@@ -317,6 +317,22 @@ pub fn find(scan: &ModScan, ns: &str) -> Vec<BlockEntity> {
                 .iter()
                 .find(|r| r.entity == simple)
                 .map(|r| r.class.clone());
+            // Registrate names the renderer in the type's own chain, for any entity it
+            // fits: `.renderer(() -> ShaftRenderer::new)`.
+            if let Some(i) = reg.args.find(".renderer(") {
+                let named: String = reg.args[i + ".renderer(".len()..]
+                    .trim_start_matches(|c: char| !c.is_ascii_alphabetic())
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                    .collect();
+                let mut of_name = scan
+                    .classes
+                    .iter()
+                    .filter(|c| c.name.rsplit(['.', '$']).next() == Some(named.as_str()));
+                if let (Some(found), None) = (of_name.next(), of_name.next()) {
+                    be.renderer = Some(found.name.clone());
+                }
+            }
             be.neighbours |= class
                 .references
                 .iter()

@@ -438,6 +438,18 @@ fn parse_state(text: &str) -> (String, Vec<(String, String)>) {
 }
 
 /// A state's full name, from its block and properties.
+/// `props` without those `block` doesn't have, going by its default state's text: a
+/// property the Java sets that the port's block lacks is left out, as the game's own
+/// property setter leaves it, where a state named whole would be refused.
+fn known_props(default: &str, props: &[(String, String)]) -> Vec<(String, String)> {
+    let (_, has) = parse_state(default);
+    props
+        .iter()
+        .filter(|(k, _)| has.iter().any(|(h, _)| h == k))
+        .cloned()
+        .collect()
+}
+
 fn state_text(block: &str, props: &[(String, String)]) -> String {
     if props.is_empty() {
         return block.to_string();
@@ -678,7 +690,12 @@ impl Here<'_> {
     }
 
     fn write(&mut self, pos: [i32; 3], block: &str, props: &[(String, String)], bits: i32) -> bool {
-        let text = state_text(block, props);
+        let default = self
+            .host
+            .block_state_id(block)
+            .and_then(|s| self.host.block_state_string(s))
+            .unwrap_or_default();
+        let text = state_text(block, &known_props(&default, props));
         let (Some(level), Some(state)) = (self.level, self.host.block_state_id(&text)) else {
             return false;
         };
@@ -1080,7 +1097,15 @@ impl runtime::World for Level<'_> {
                 (k.to_string(), v)
             })
             .collect();
-        let Some(state) = self.level.block_state_id(&state_text(block, &props)) else {
+        let default = self
+            .level
+            .block_state_id(block)
+            .and_then(|s| self.level.state_string(s))
+            .unwrap_or_default();
+        let Some(state) = self
+            .level
+            .block_state_id(&state_text(block, &known_props(&default, &props)))
+        else {
             return false;
         };
         self.level.set_block(pos, state, flags(bits))
