@@ -385,6 +385,11 @@ pub struct StorageInfo {
     /// `NonNullList.withSize(9, ItemStack.EMPTY)`), 0 for none.
     #[serde(default)]
     pub items: usize,
+    /// Its item handlers by the field each is kept in, in the order it makes them,
+    /// when it has more than one: `("inputInv", 1)`, `("outputInv", 9)`. Their slots
+    /// follow one another, so `items` is their sum.
+    #[serde(default)]
+    pub inventories: Vec<(String, usize)>,
 }
 
 /// A screen of the mod's own that isn't a container's: a guidebook, a menu opened

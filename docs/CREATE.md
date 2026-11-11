@@ -91,6 +91,32 @@ It took these things the porter didn't do before. None is Create's alone:
 | A block its entity draws is blank until the renderer is translated | It shows its own model, still, until then |
 | No item had an icon: a 1.21.1 mod has no `items/*.json` | A definition is written for each item model of a mod that ships none (743 for Create) |
 
+**A machine that works: the millstone** (2026-11-11). A creative motor under a shaft under a
+millstone, four wheat dropped on top:
+
+| | |
+| --- | --- |
+| The millstone's `Speed` | 16.0, from the shaft below |
+| Wheat dropped on it | taken into its input slot |
+| Every 7.5 seconds (150 ticks at that speed) | one wheat ground |
+| After four | 6 wheat flour and 1 wheat seeds in its output slots: the recipe's one flour each, and its two 25% extras rolled |
+| A right click with an empty hand | all of it in the player's inventory, the millstone empty |
+
+Its tick, click and renderer are three more functions from Haiku (about five cents). It took
+four more things, again none of them Create's alone:
+
+| What stood in the way | What the porter does now |
+| --- | --- |
+| The millstone keeps an input handler and an output handler; the port gave it the larger one's slots | A block entity's item handlers each get their own slots, one after another, and the tick and the click are told which is which |
+| A milling recipe lists several results, each with a chance; a ported `Recipe` had one result | `Recipe::results`, every stack with its chance (it gives Farmer's Delight's cutting board its other cuts too) |
+| Items are fed by dropping them on it (`updateEntityAfterFallOn`), which Horizon has no hook for | The block entity's tick is told to take in what is dropped on it |
+| The click only tells its block entity what to do (`withBlockEntityDo(.., be -> ..)`), and that class is in the same package, so no import named it | Classes of the same package that the code names are shown to the translator |
+
+Two things found on the way were mistakes of the translation, not of what it was given, and both
+are now said plainly to it: turns compose as on a pose stack (the motor's own half shaft tumbled
+where it should turn), and a library's helper whose source the mod doesn't carry
+(`CachedBuffers.partialFacing`) has to be spelled out.
+
 **Where it stops.**
 
 - **Stress.** Speed carries; stress and capacity don't. `KineticNetwork` keeps them for a whole
@@ -102,11 +128,15 @@ It took these things the porter didn't do before. None is Create's alone:
   every kinetic block answers (377 lines, and one answer ran past the output limit before a
   second try fit). The next step is to port a mod's own interface once, as a function by block
   that every tick calls.
-- **Everything after rotation**: the 600 functions left, then the systems in the table above.
+- **Functions that have to agree.** The hand crank's click reaches its block entity (its counter
+  moves) and nothing turns: in Java the click calls a method that updates the rotation at once,
+  and the click here can only leave values for the tick, which looks at another moment.
+- **Everything after this**: the 600 functions left, then the systems in the table above.
   Belts, fluids, contraptions and trains each need more from Horizon than a hook to paste into.
 
-So: Create is not ported. But "can the tool do anything with Create" has an answer now, and it
-is the first step of the order below, done by the tool rather than by hand.
+So: Create is not ported. But "can the tool do anything with Create" has an answer now: the
+first step of the order below and the first machine of the second, done by the tool rather than
+by hand.
 
 ## Suggested order
 

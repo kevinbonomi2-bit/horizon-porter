@@ -287,7 +287,19 @@ fn network_and_config(root: &Path, scan: &mut ModScan) {
         if let Some(r) = machines::renderer(name, text) {
             scan.renderers.push(r);
         }
-        if let Some(s) = machines::storage(name, text) {
+        let fields: Vec<String> = scan
+            .classes
+            .iter()
+            .find(|c| c.name == *name)
+            .map(|c| {
+                c.fields
+                    .iter()
+                    .filter(|f| !f.is_static)
+                    .map(|f| f.name.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        if let Some(s) = machines::storage(name, text, &fields) {
             scan.storages.push(s);
         }
         let superclass = scan

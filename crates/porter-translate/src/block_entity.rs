@@ -37,6 +37,9 @@ pub struct BlockEntity {
     pub energy: Option<[i32; 3]>,
     /// How many item slots it holds (`new ItemStackHandler(1)`), 0 for none.
     pub items: usize,
+    /// Its item handlers by field, when it has several, their slots one after another:
+    /// `("inputInv", 1)`, `("outputInv", 9)`.
+    pub inventories: Vec<(String, usize)>,
     /// The class of its block whose `animateTick` plays effects on the client
     /// (a pot's bubbles, a skillet's sizzle), fully qualified: its tick sends them.
     pub animate: Option<String>,
@@ -45,6 +48,10 @@ pub struct BlockEntity {
     pub neighbours: bool,
     /// Its blocks' class with a `neighborChanged` (redstone turning it on or off).
     pub redstone: Option<String>,
+    /// Its blocks' class that acts on what lands on or enters the block, and the
+    /// method (`updateEntityAfterFallOn`, `entityInside`): a millstone taking in the
+    /// items dropped on it.
+    pub lands: Option<(String, &'static str)>,
     /// Java fields the state leaves out, with why.
     pub left_out: Vec<String>,
     /// The mod's own base classes it takes state or its tick from (Create's
@@ -263,6 +270,9 @@ pub fn find(scan: &ModScan, ns: &str) -> Vec<BlockEntity> {
             });
         let snake = rust_ident(name);
         let redstone = block_class_with(scan, &its_blocks, "neighborChanged");
+        let lands = ["updateEntityAfterFallOn", "entityInside"]
+            .into_iter()
+            .find_map(|m| block_class_with(scan, &its_blocks, m).map(|c| (c, m)));
         let drawn: Vec<String> = its_blocks
             .iter()
             .filter(|id| {
@@ -283,7 +293,9 @@ pub fn find(scan: &ModScan, ns: &str) -> Vec<BlockEntity> {
             tanks: Vec::new(),
             energy: None,
             items: 0,
+            inventories: Vec::new(),
             redstone,
+            lands,
             animate,
             neighbours: false,
             left_out: Vec::new(),
@@ -355,6 +367,7 @@ pub fn find(scan: &ModScan, ns: &str) -> Vec<BlockEntity> {
                 be.tanks = s.tanks.clone();
                 be.energy = s.energy;
                 be.items = s.items;
+                be.inventories = s.inventories.clone();
             }
             // A class it keeps that holds item lists (a grave's `Death`, with the dead
             // player's inventory): its items are the block entity's own item slots.
@@ -538,9 +551,17 @@ pub const BLOCK_ENTITIES: &[(&str, &str, bool)] = &[
         let java = java.as_str();
         let _ = write!(
             r,
-            "\n/// The state of a `{id}` block entity: `{java}`'s fields, saved with the block.\n#[derive(Clone, Debug, Default, PartialEq)]\npub struct {ty} {{\n",
+            "\n/// The state of a `{id}` block entity: `{java}`'s fields, saved with the block.{slots}\n#[derive(Clone, Debug, Default, PartialEq)]\npub struct {ty} {{\n",
             id = be.id,
-            ty = be.rust
+            ty = be.rust,
+            slots = if be.inventories.len() > 1 {
+                format!(
+                    "\n/// Its item handlers share its item slots, one after another: {} (`world.entity_item(pos, slot)`\n/// in a click, `machine.slots[slot]` in its tick).",
+                    slot_map(be)
+                )
+            } else {
+                String::new()
+            }
         );
         for f in &be.fields {
             let how = if f.saved_by_java {
@@ -647,8 +668,8 @@ pub const BLOCK_ENTITIES: &[(&str, &str, bool)] = &[
                     } else {
                         ""
                     },
-                    animate = animate_doc(be) + &redstone_doc(be),
-                    animate_todo = animate_todo(be) + &redstone_todo(be),
+                    animate = animate_doc(be) + &redstone_doc(be) + &lands_doc(be),
+                    animate_todo = animate_todo(be) + &redstone_todo(be) + &lands_todo(be),
                     snake = be.snake,
                     ty = be.rust
                 );
@@ -870,6 +891,44 @@ fn redstone_todo(be: &BlockEntity) -> String {
     }
 }
 
+/// The tick's word on what lands on its block: Horizon gives ported code no hook
+/// there, so a block that takes in dropped items does it from its tick.
+fn lands_doc(be: &BlockEntity) -> String {
+    match &be.lands {
+        Some((class, method)) => format!(
+            "\n/// Its block's `{method}` ({}) acts on what lands on it in Java, which Horizon gives\n/// ported code no hook for. Where that is taking in dropped items (`ItemEntity`), do it\n/// here each tick: `machine.dropped_in(min, max)` over the block and the one above it,\n/// the items put in its slots as the Java's insert would, and `machine.take_dropped(id,\n/// count)` for what went in.",
+            class.rsplit('.').next().unwrap_or(class)
+        ),
+        None => String::new(),
+    }
+}
+
+/// The TODO's mention of its block's landing method, so translate reads that class.
+fn lands_todo(be: &BlockEntity) -> String {
+    match &be.lands {
+        Some((class, method)) => {
+            format!(", and what `{class}`'s `{method}` does with dropped items")
+        }
+        None => String::new(),
+    }
+}
+
+/// Which of its slots each of its item handlers has: "`inputInv` is slot 0, `outputInv`
+/// slots 1 to 9". Nothing for one handler.
+fn slot_map(be: &BlockEntity) -> String {
+    let mut at = 0;
+    let mut parts = Vec::new();
+    for (field, n) in &be.inventories {
+        parts.push(match n {
+            0 => continue,
+            1 => format!("`{field}` is slot {at}"),
+            _ => format!("`{field}` slots {at} to {}", at + n - 1),
+        });
+        at += n;
+    }
+    parts.join(", ")
+}
+
 /// The TODO's mention of its block's `animateTick`, so translate reads that class.
 fn animate_todo(be: &BlockEntity) -> String {
     match &be.animate {
@@ -886,6 +945,7 @@ pub fn takes_machine(be: &BlockEntity) -> bool {
         || be.renderer.is_some()
         || be.neighbours
         || be.items > 0
+        || be.lands.is_some()
 }
 
 /// "its 2 fluid tanks (4000 mB each) and its energy (10000 FE)", or nothing.
@@ -894,6 +954,12 @@ pub fn storage_text(be: &BlockEntity) -> String {
     if be.items > 0 {
         parts.push(if be.items == 1 {
             "its item slot (`machine.slots[0]`, the stack its handler holds)".to_string()
+        } else if be.inventories.len() > 1 {
+            format!(
+                "its {} item slots (`machine.slots`: {})",
+                be.items,
+                slot_map(be)
+            )
         } else {
             format!("its {} item slots (`machine.slots`)", be.items)
         });

@@ -625,7 +625,7 @@ pub fn block_shape(class: &str, superclass: Option<&str>, source: &str) -> Optio
 /// NeoForge's `FluidStacksResourceHandler(tanks, capacity)` and
 /// `SimpleEnergyHandler(capacity, maxInsert, maxExtract)`, the older `FluidTank`
 /// and `EnergyStorage`, and Team Reborn's `SimpleEnergyStorage` (Fabric).
-pub fn storage(class: &str, source: &str) -> Option<StorageInfo> {
+pub fn storage(class: &str, source: &str, fields: &[String]) -> Option<StorageInfo> {
     let ints = |args: &str| -> Vec<i32> {
         split_top(args)
             .iter()
@@ -662,29 +662,72 @@ pub fn storage(class: &str, source: &str) -> Option<StorageInfo> {
     }
     // Item slots: the largest handler or list it makes.
     let mut items = 0usize;
+    // Those a field is given, by where: `inputInv = new ItemStackHandler(1)`.
+    let mut kept: Vec<(usize, String, usize)> = Vec::new();
     for name in [
         "new ItemStackHandler",
         "new SimpleContainer",
         "NonNullList.withSize",
         "new ItemStacksResourceHandler",
     ] {
-        for args in calls(source, name) {
+        let mut from = 0;
+        while let Some(i) = source[from..].find(name).map(|i| from + i) {
+            from = i + name.len();
+            if source[..i]
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
+            {
+                continue;
+            }
+            let Some(args) = balanced(source[i + name.len()..].trim_start()) else {
+                continue;
+            };
             // `new ItemStackHandler()` holds one.
             let n = if args.trim().is_empty() {
                 Some(1)
             } else {
-                split_top(&args).first().and_then(|a| constant(a, source))
+                split_top(args).first().and_then(|a| constant(a, source))
             };
-            if let Some(n) = n {
-                items = items.max(n.clamp(0, 256) as usize);
+            let Some(n) = n else {
+                continue;
+            };
+            let n = n.clamp(0, 256) as usize;
+            items = items.max(n);
+            // The field it goes to: `name =` (or `this.name =`) just before it.
+            if let Some(before) = source[..i].trim_end().strip_suffix('=') {
+                let target: String = before
+                    .trim_end()
+                    .chars()
+                    .rev()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect();
+                if fields.contains(&target) && !kept.iter().any(|(_, k, _)| *k == target) {
+                    kept.push((i, target, n));
+                }
             }
         }
+    }
+    // Several handlers of its own (an input and an output): their slots follow one
+    // another, in the order it makes them.
+    kept.sort_by_key(|(at, _, _)| *at);
+    let inventories: Vec<(String, usize)> = if kept.len() > 1 {
+        kept.into_iter().map(|(_, name, n)| (name, n)).collect()
+    } else {
+        Vec::new()
+    };
+    if !inventories.is_empty() {
+        items = inventories.iter().map(|(_, n)| n).sum();
     }
     (!tanks.is_empty() || energy.is_some() || items > 0).then(|| StorageInfo {
         class: class.to_string(),
         tanks,
         energy,
         items,
+        inventories,
     })
 }
 
@@ -1360,10 +1403,23 @@ public class InfuserScreen extends AbstractWidgetsContainerScreen<InfuserMenu> i
             private final FluidTank lava = new FluidTank(CAPACITY);
             private final SimpleEnergyHandler energy = new SimpleEnergyHandler(10000, 200, 0);
         "#;
-        let s = storage("Boiler", source).unwrap();
+        let s = storage("Boiler", source, &[]).unwrap();
         assert_eq!(s.tanks, [8000, 4000, 4000]);
         assert_eq!(s.energy, Some([10000, 200, 0]));
-        assert_eq!(storage("Plain", "class Plain {}"), None);
+        assert_eq!(storage("Plain", "class Plain {}", &[]), None);
+        // An input and an output handler: their slots follow one another. A handler
+        // made for a moment (no field of its own) doesn't count.
+        let mill = "class Mill { ItemStackHandler inputInv; ItemStackHandler outputInv; Mill() { inputInv = new ItemStackHandler(1); this.outputInv = new ItemStackHandler(9); } void f() { SimpleContainer tmp = new SimpleContainer(3); } }";
+        let s = storage("Mill", mill, &["inputInv".into(), "outputInv".into()]).unwrap();
+        assert_eq!(s.items, 10);
+        assert_eq!(
+            s.inventories,
+            [("inputInv".to_string(), 1), ("outputInv".to_string(), 9)]
+        );
+        // One handler: as before.
+        let pot = "class Pot { ItemStackHandler inventory = new ItemStackHandler(9); }";
+        let s = storage("Pot", pot, &["inventory".into()]).unwrap();
+        assert_eq!((s.items, s.inventories.len()), (9, 0));
     }
 
     const MENU: &str = r#"

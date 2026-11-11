@@ -1591,6 +1591,7 @@ const ENTITY_WORLD: &str = r#"    impl m::BlockEntities for Here<'_, '_> {
                         id: format!("{kind}/{result}"),
                         ingredients: vec![items(serde_json::Value::String((*input).into()))],
                         result: Some(m::Stack::new(result, *count)),
+                        results: vec![(m::Stack::new(result, *count), 1.0)],
                         values: vec![("cookingtime".into(), ticks.to_string())],
                     })
                     .collect();
@@ -1680,6 +1681,39 @@ const ENTITY_WORLD: &str = r#"    impl m::BlockEntities for Here<'_, '_> {
                         let stack = game.native_recipe_result(&v)?;
                         Some(m::Stack::new(&stack.item, stack.count))
                     });
+                    // Every result with its chance: `results`, or a `result` that is a list.
+                    let results: Vec<(m::Stack, f32)> = json
+                        .get("results")
+                        .or_else(|| json.get("result").filter(|v| v.is_array()))
+                        .and_then(|v| v.as_array())
+                        .map(|list| {
+                            list.iter()
+                                .filter_map(|v| {
+                                    let chance = v.get("chance").and_then(|c| c.as_f64()).unwrap_or(1.0) as f32;
+                                    let mut v = match v {
+                                        serde_json::Value::String(s) => serde_json::json!({ "id": s }),
+                                        serde_json::Value::Object(o) if !o.contains_key("id") => match o.get("item") {
+                                            Some(serde_json::Value::Object(inner)) => serde_json::Value::Object(inner.clone()),
+                                            Some(item) => {
+                                                let mut o = o.clone();
+                                                o.remove("item");
+                                                o.insert("id".into(), item.clone());
+                                                serde_json::Value::Object(o)
+                                            }
+                                            None => serde_json::Value::Object(o.clone()),
+                                        },
+                                        other => other.clone(),
+                                    };
+                                    if let Some(o) = v.as_object_mut() {
+                                        o.remove("chance");
+                                    }
+                                    let stack = game.native_recipe_result(&v)?;
+                                    Some((m::Stack::new(&stack.item, stack.count), chance))
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_else(|| result.iter().cloned().map(|s| (s, 1.0)).collect());
+                    let result = result.or_else(|| results.first().map(|(s, _)| s.clone()));
                     let values = json
                         .as_object()
                         .into_iter()
@@ -1694,6 +1728,7 @@ const ENTITY_WORLD: &str = r#"    impl m::BlockEntities for Here<'_, '_> {
                         id: r.id.clone(),
                         ingredients,
                         result,
+                        results,
                         values,
                     }
                 })

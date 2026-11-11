@@ -1847,6 +1847,7 @@ fn recipes(host: &dyn mod_api::Host, kind: &str) -> Vec<runtime::Recipe> {
                 id: format!("{kind}/{result}"),
                 ingredients: vec![items(&format!("{input:?}"))],
                 result: Some(runtime::Stack::new(result, *count)),
+                results: vec![(runtime::Stack::new(result, *count), 1.0)],
                 values: vec![("cookingtime".into(), ticks.to_string())],
             })
             .collect();
@@ -1913,7 +1914,34 @@ fn recipes(host: &dyn mod_api::Host, kind: &str) -> Vec<runtime::Recipe> {
                     values.push(("cookingtime".into(), t.to_string()));
                 }
             }
-            runtime::Recipe { id: r.id.clone(), ingredients, result, values }
+            // Every result with its chance: `results`, or a `result` that is a list.
+            let listed = r
+                .json
+                .get("results")
+                .or_else(|| r.json.get("result").filter(|v| v.is_array()))
+                .and_then(|v| v.as_array());
+            let results: Vec<(runtime::Stack, f32)> = match listed {
+                Some(list) => list
+                    .iter()
+                    .filter_map(|v| {
+                        let chance = v.get("chance").and_then(|c| c.as_f64()).unwrap_or(1.0) as f32;
+                        let json = match (v.as_str(), v.get("id"), v.get("item")) {
+                            (Some(id), _, _) => format!("{{\"id\": {id:?}}}"),
+                            (None, None, Some(item)) if item.is_object() => item.to_string(),
+                            (None, id, item) => {
+                                let id = id.or(item)?;
+                                let count = v.get("count").and_then(|c| c.as_u64()).unwrap_or(1);
+                                format!("{{\"id\": {id}, \"count\": {count}}}")
+                            }
+                        };
+                        let stack = host.recipe_result(&json).ok().flatten()?;
+                        stack_of(host, &stack).map(|(i, c)| (runtime::Stack::new(&i, c), chance))
+                    })
+                    .collect(),
+                None => result.iter().cloned().map(|s| (s, 1.0)).collect(),
+            };
+            let result = result.or_else(|| results.first().map(|(s, _)| s.clone()));
+            runtime::Recipe { id: r.id.clone(), ingredients, result, results, values }
         })
         .collect()
 }

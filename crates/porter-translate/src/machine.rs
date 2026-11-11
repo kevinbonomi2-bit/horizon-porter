@@ -385,8 +385,12 @@ pub struct Recipe {
     /// What each ingredient accepts (`ingredient`, or each of `ingredients`), as
     /// items: tags are resolved.
     pub ingredients: Vec<Vec<String>>,
-    /// Its `result`.
+    /// Its `result` (the first, where it lists several).
     pub result: Option<Stack>,
+    /// Every stack it gives, each with its chance: `results`, or a `result` that is a
+    /// list (Create's processing recipes, Farmer's Delight's cutting); 1.0 where one
+    /// names no `chance`. What a `rollResults(random)` rolls over.
+    pub results: Vec<(Stack, f32)>,
     /// Its other plain values (`"time": 100`), as written.
     pub values: Vec<(String, String)>,
 }

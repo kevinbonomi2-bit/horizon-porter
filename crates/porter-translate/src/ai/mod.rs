@@ -1251,6 +1251,16 @@ fn equivalents(java: &str, stub: &str) -> String {
         ),
         (
             "dyn World",
+            "placeItemBackInInventory(",
+            "`player.getInventory().placeItemBackInInventory(stack)` is `world.give(item, count)`, which answers how many fit; Java drops what doesn't at the player's feet, so `world.drop` the rest there",
+        ),
+        (
+            "Machine",
+            ".rollResults(",
+            "`recipe.rollResults(random)` goes over `recipe.results`, each `(stack, chance)`: a stack with chance 1.0 is given whole; for a lower chance each item of its count is drawn on its own (`machine.random() <= chance`), as `ProcessingOutput.rollOutput` does",
+        ),
+        (
+            "dyn World",
             "withBlockEntityDo(",
             "`withBlockEntityDo(level, pos, be -> be.method(..))` (and `level.getBlockEntity(pos)` then a call on it) can't run the block entity's code from here: do what that method does to its fields with `world.save_entity(pos, &[(key, value)])`, by the keys its state struct saves them under. Where the method goes on to call another of the entity's own (an update its tick also makes), set the field its tick watches for that, so the tick does it on its next turn",
         ),
