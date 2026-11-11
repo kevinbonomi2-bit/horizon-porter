@@ -117,6 +117,23 @@ are now said plainly to it: turns compose as on a pose stack (the motor's own ha
 where it should turn), and a library's helper whose source the mod doesn't carry
 (`CachedBuffers.partialFacing`) has to be spelled out.
 
+**The mod's own questions, ported once** (2026-11-11). Whether two blocks connect is asked
+through Create's own interfaces (`IRotate.hasShaftTowards`, `getRotationAxis`,
+`ICogWheel.isSmallCog`), answered by some thirty block classes. The first shaft tick carried its
+own copy of every answer. Now each such method becomes one function of the port, over the block
+and its state properties, with every class's answer quoted in its comment for the translation:
+
+| | Before | After |
+| --- | --- | --- |
+| The shaft and cogwheel tick | 377 lines, one answer cut off at the output limit | 158 lines, asking `i_rotate_has_shaft_towards` of both blocks |
+| What decides a connection | each tick's own table, differing from tick to tick | seven shared functions, about four cents to port |
+| A millstone or a crank beside something new | connects only to what its own table knew | connects to anything the shared functions know |
+
+The hand crank turns with it: its click sets its counter, its tick takes its speed from that
+every tick, and a shaft and a cogwheel on it read -32 while it is held and 0 after. Both were
+ported apart and didn't agree before; what changed is that the click's translation now sees the
+block entity's class, and the tick was ported again.
+
 **Where it stops.**
 
 - **Stress.** Speed carries; stress and capacity don't. `KineticNetwork` keeps them for a whole
@@ -124,13 +141,10 @@ where it should turn), and a library's helper whose source the mod doesn't carry
 - **Diagonals.** A large cogwheel meshes with a small one diagonally, which six neighbours
   don't reach.
 - **Items drawn by code.** The wrench has no icon: its model is a renderer of Create's own.
-- **One function at a time.** Each tick is translated alone, so the shaft's holds a copy of what
-  every kinetic block answers (377 lines, and one answer ran past the output limit before a
-  second try fit). The next step is to port a mod's own interface once, as a function by block
-  that every tick calls.
-- **Functions that have to agree.** The hand crank's click reaches its block entity (its counter
-  moves) and nothing turns: in Java the click calls a method that updates the rotation at once,
-  and the click here can only leave values for the tick, which looks at another moment.
+- **One function at a time.** Each kinetic block entity's tick still carries its own copy of
+  the step that takes speed from its neighbours: it is `KineticBlockEntity`'s work, the same for
+  all hundred of them, and translated again for each. The next step is to port a base class's
+  tick once, for every block entity that inherits it.
 - **Everything after this**: the 600 functions left, then the systems in the table above.
   Belts, fluids, contraptions and trains each need more from Horizon than a hook to paste into.
 

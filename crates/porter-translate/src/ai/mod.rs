@@ -266,8 +266,7 @@ keep it in `state`, drop it when that neighbour no longer gives it, and let the 
 Keep which neighbour gave it too (in the field the Java keeps its source in, where `state` has one), and take nothing \
 from a neighbour whose own came from this block: two blocks would keep each other going after their source is gone. A \
 change then travels one block a tick instead of at once: say so in a comment, and write no `// Missing:` note for the \
-walk. Whether two blocks connect is in the Java of their block classes (which face has a shaft, which axis turns): \
-read it from their state properties.";
+walk.";
 
 /// Whether a function ported at reach `at`, whose port says `notes` were out of reach,
 /// is worth porting again now.
@@ -902,7 +901,14 @@ fn prompt(dir: &Path, scan: &ModScan, unit: &Unit) -> Result<Prompt> {
     }
     // What the mod's blocks answer for its own interfaces (`IRotate.hasShaftTowards`),
     // where the code asks a block it meets: they are in classes this function isn't from.
-    let answers = interface_answers(scan, &java_text, &shown);
+    // Those the module already has a function for are named instead: ported once.
+    let questions = crate::questions::ported(&file, &java_text, &unit.function);
+    let answers = if crate::questions::is_question(&file, &unit.function) {
+        // Its own comment lists them.
+        String::new()
+    } else {
+        interface_answers(scan, &java_text, &shown, &crate::questions::methods(&file))
+    };
     if !answers.is_empty() {
         let _ = writeln!(
             p,
@@ -941,7 +947,24 @@ fn prompt(dir: &Path, scan: &ModScan, unit: &Unit) -> Result<Prompt> {
             );
             // A tick that looks at its neighbours, where the Java walks further.
             if stub.contains("Machine<'_>") && unit.comment.contains("machine.neighbour(") {
-                let _ = writeln!(p, "{NETWORK_STEP}\n");
+                let connect = if questions.is_empty() {
+                    "Whether two blocks connect is in the Java of their block classes (which face has a \
+                     shaft, which axis turns): read it from their state properties."
+                } else {
+                    "Whether two blocks connect is what the mod's own questions answer, and those are \
+                     functions of this module already (below): ask them of both blocks."
+                };
+                let _ = writeln!(p, "{NETWORK_STEP} {connect}\n");
+            }
+            // The mod's own questions to a block, ported once: said last, where it is
+            // read closest to the answer, or a tick writes out its own copy of them.
+            if !questions.is_empty() {
+                let _ = writeln!(
+                    p,
+                    "The Java asks blocks it meets questions through the mod's own interfaces. Each is a \
+                     function of this module already, ported for every block of the mod. Call it, and do not \
+                     write your own table of what each block answers:\n{questions}"
+                );
             }
             let hints = equivalents(&java_text, &stub);
             if !hints.is_empty() {
@@ -1338,7 +1361,7 @@ const ANSWERS_BUDGET: usize = 24_000;
 /// (`definition.hasShaftTowards(..)`): the body each of the mod's block classes gives it,
 /// with the blocks registered with that class or with one that inherits the answer.
 /// Shortest bodies first, within `ANSWERS_BUDGET`.
-fn interface_answers(scan: &ModScan, java: &str, shown: &[String]) -> String {
+fn interface_answers(scan: &ModScan, java: &str, shown: &[String], ported: &[String]) -> String {
     use porter_model::ClassKind;
     let class = |name: &str| scan.classes.iter().find(|c| c.name == name);
     let simple = |name: &str| name.rsplit('.').next().unwrap_or(name).to_string();
@@ -1355,6 +1378,9 @@ fn interface_answers(scan: &ModScan, java: &str, shown: &[String]) -> String {
             && (shown.contains(&c.name) || java.contains(&simple(&c.name)))
     }) {
         for m in &interface.method_names {
+            if ported.contains(m) {
+                continue;
+            }
             if java.contains(&format!(".{m}(")) && !methods.iter().any(|(_, n)| n == m) {
                 methods.push((simple(&interface.name), m.clone()));
             }
@@ -1404,7 +1430,9 @@ fn interface_answers(scan: &ModScan, java: &str, shown: &[String]) -> String {
             let Ok(source) = fs::read_to_string(Path::new(&scan.input).join(&c.path)) else {
                 continue;
             };
-            let Some(body) = method_body(&source, method) else {
+            let Some(body) =
+                crate::questions::method_body(&source, method).filter(|b| b.len() <= 600)
+            else {
                 continue;
             };
             let mut list = ids
@@ -1431,40 +1459,6 @@ fn interface_answers(scan: &ModScan, java: &str, shown: &[String]) -> String {
         let _ = writeln!(out, "{line}");
     }
     out
-}
-
-/// The body of method `name` as `source` declares it, on one line: `return face ==
-/// state.getValue(FACING);`. None for a body past 600 characters, or one not found.
-fn method_body(source: &str, name: &str) -> Option<String> {
-    let mut from = 0;
-    while let Some(at) = source[from..].find(&format!(" {name}(")).map(|i| from + i) {
-        from = at + 1;
-        let rest = &source[at..];
-        let open = rest.find('{')?;
-        // A declaration: its body opens before any statement ends.
-        if rest[..open].contains(';') {
-            continue;
-        }
-        let mut depth = 0usize;
-        for (i, c) in rest[open..].char_indices() {
-            match c {
-                '{' => depth += 1,
-                '}' => {
-                    depth -= 1;
-                    if depth == 0 {
-                        let body = rest[open + 1..open + i]
-                            .split_whitespace()
-                            .collect::<Vec<_>>()
-                            .join(" ");
-                        return (body.len() <= 600).then_some(body);
-                    }
-                }
-                _ => {}
-            }
-        }
-        return None;
-    }
-    None
 }
 
 /// The constants of class `simple` that `code` names (`ModSounds.EGG_HATCH`), each with
@@ -1615,16 +1609,6 @@ mod tests {
             "MyHandCrankBlockEntity x;",
             "HandCrankBlockEntity"
         ));
-    }
-
-    #[test]
-    fn reads_a_methods_body_on_one_line() {
-        let source = "class Motor {\n    @Override\n    public boolean hasShaftTowards(LevelReader world, BlockPos pos, BlockState state, Direction face) {\n        return face == state.getValue(FACING);\n    }\n    void other() { hasShaftTowards(null, null, null, null); }\n}";
-        assert_eq!(
-            method_body(source, "hasShaftTowards").as_deref(),
-            Some("return face == state.getValue(FACING);")
-        );
-        assert_eq!(method_body(source, "getRotationAxis"), None);
     }
 
     #[test]

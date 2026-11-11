@@ -194,6 +194,12 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
     // Blocks, items and resources: a content mod. Block entities: native hooks.
     let ns = content::namespace(&java_id, &id).to_string();
     let mut block_entities = block_entity::find(scan, &ns);
+    // Its own questions to a block, where it has block entities to ask them.
+    let questions = if block_entities.is_empty() {
+        Vec::new()
+    } else {
+        crate::questions::find(scan, &ns)
+    };
     let mut machines = machine::find(scan, &ns, &id, &block_entities);
     let recipe_types = machine::recipe_types(scan, &ns);
     let machine_blocks: BTreeMap<String, String> = machines
@@ -497,6 +503,7 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
         stubbed: &stubbed,
         hooks,
         block_entities: &block_entities,
+        questions: &questions,
         machines: &machines,
         recipe_types: &recipe_types,
         messages: &messages,
@@ -1040,6 +1047,8 @@ struct Ctx<'a> {
     stubbed: &'a BTreeMap<&'static str, Uses>,
     hooks: u32,
     block_entities: &'a [BlockEntity],
+    /// The mod's own questions to a block (`questions::find`).
+    questions: &'a [crate::questions::Question],
     machines: &'a [Machine],
     /// The mod's own recipe types: `grind:crushing`.
     recipe_types: &'a [String],
@@ -1446,6 +1455,8 @@ pub const DESCRIPTION: &str = "{description}";
                 self.machines,
                 self.recipe_types,
             ));
+            // The mod's own questions to a block, ported once for all who ask.
+            r.push_str(&crate::questions::runtime(self.questions));
             r.push_str(
                 "\n/// Blocks whose block entity opens a vanilla menu over its own slots (Java's\n/// `createMenu` returning `ChestMenu.threeRows(..)`): (block, menu type, slots).\npub const VANILLA_CONTAINERS: &[(&str, &str, usize)] = &[\n",
             );

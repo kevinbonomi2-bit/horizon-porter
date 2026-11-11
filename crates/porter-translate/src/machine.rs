@@ -584,6 +584,46 @@ impl Side {
             _ => return None,
         })
     }
+
+    /// Its name, as a `facing` has it (`Direction.getSerializedName`): `north`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Side::Down => "down",
+            Side::Up => "up",
+            Side::North => "north",
+            Side::South => "south",
+            Side::West => "west",
+            Side::East => "east",
+        }
+    }
+
+    /// The side across from it (`Direction.getOpposite`).
+    pub fn opposite(self) -> Side {
+        match self {
+            Side::Down => Side::Up,
+            Side::Up => Side::Down,
+            Side::North => Side::South,
+            Side::South => Side::North,
+            Side::West => Side::East,
+            Side::East => Side::West,
+        }
+    }
+
+    /// The axis it lies on (`Direction.getAxis`), as an `axis` property has it: `x`,
+    /// `y` or `z`.
+    pub fn axis(self) -> &'static str {
+        match self {
+            Side::Down | Side::Up => "y",
+            Side::North | Side::South => "z",
+            Side::West | Side::East => "x",
+        }
+    }
+
+    /// Whether it points the positive way along its axis (`getAxisDirection() ==
+    /// POSITIVE`): up, south and east.
+    pub fn positive(self) -> bool {
+        matches!(self, Side::Up | Side::South | Side::East)
+    }
 }
 
 /// Items moved between a machine and the block beside it.

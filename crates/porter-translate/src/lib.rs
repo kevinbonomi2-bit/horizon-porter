@@ -16,6 +16,7 @@ pub mod bundle;
 pub mod events;
 pub mod machine;
 pub mod netconf;
+pub mod questions;
 pub mod refused;
 pub mod screens;
 pub mod statics;
