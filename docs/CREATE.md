@@ -162,6 +162,43 @@ Every kinetic tick now takes its speed through `rotation_propagator_get_conveyed
 me)`: ten ticks, 44 to 146 lines each where the first shaft tick alone was 377, and all of them
 agree, because none carries its own idea of what connects or what is passed on.
 
+**A press over a depot** (2026-11-11). A creative motor beside a mechanical press, a depot two
+blocks under it:
+
+| | |
+| --- | --- |
+| The press's `Speed` | -16.0, from the motor beside it |
+| Sixteen iron ingots, right-clicked onto the depot's top | all sixteen on the depot |
+| Every 6 seconds (a 240-step cycle, two steps a tick at that speed) | the head comes down and one ingot becomes an iron sheet, as with Create's bulk pressing off |
+| The motor set to 64 | a sheet every 1.5 seconds: eight steps a tick, as `getRunningTickSpeed` gives |
+| The depot after three | 13 ingots held, 3 sheets in its output buffer |
+| A right click with an empty hand | 13 ingots and 3 sheets in the player's inventory, the depot empty |
+| A press placed by hand beside a shaft | turned to take it (`facing=west`), not left as it came |
+
+The press's tick is one more function from Haiku (about four cents a try). What it took was not
+the press: five things the porter didn't do, each of which had been costing every mod something.
+
+| What stood in the way | What the porter does now |
+| --- | --- |
+| The press gives the depot code to call (`whenItemEnters`, `whileItemHeld`) and the depot's tick calls it. Each tick is ported alone, so nothing ran | For each block entity, the classes of *other* block entities that take something it holds and run the code it gave are found. Its tick is told who they are, how they find it (`pos.above(2)`), and which of their slots hold what; their Java is read, and the tick does that work on them itself. In Create: the press, the spout and the deployer |
+| `state.getValue(HORIZONTAL_FACING)` became `"horizontal_facing"`; the property is `facing`. Eleven functions of the port read or set a property no block has: the press never connected to a shaft, and five kinds of block were placed without their facing | The prompt names each property whose name isn't its constant in lower case, the mod's own included (`AXIS_ALONG_FIRST_COORDINATE` is `axis_along_first`); an answer that uses the constant's name is sent back; `translate --refresh` finds ports that already have one |
+| The pressing recipe asks for `c:ingots/iron`, a tag NeoForge provides. The porter added the loader's common tags a mod's data names, but only as `"#c:.."`; a 1.21.1 recipe says `{"tag": "c:.."}` | Both forms are read. Create's port carries 149 common tags where it had 67, which its crafting recipes needed as much as the press |
+| `AllConfigs.server().recipes.bulkPressing.get()`: the default is in a class nothing imports, and the translation guessed it | Config values the Java reads are listed with their declaration and its default (`false`), and the tick is told a port always runs on the default |
+| In Java a block entity ticks on the client too, so the press's head moves every tick. A port ticks it on the server alone, and the head jumped from up to down | The tick's helper draws the block entity from its state before and after the tick; when the picture differs, clients are sent the state again. An idle machine sends nothing |
+
+Two smaller ones: a kept port that is to read more Java now (the press's, once the depot's class was
+named) is marked for `translate --refresh`; and `context.getClickedPos()`, which in a placement is
+where the block *goes*, is spelled out, after the hand crank counted its neighbours from the block
+that was clicked. The first of these caught the creative motor too: its tick was translated before
+its speed setting was part of its state and always made 16. Ported again, it makes what `ScrollValue`
+says. Nothing sets that in the game yet (the box on the motor's back is a screen of Create's own), so
+a faster motor is `/data merge block <pos> {ScrollValue:64}` for now.
+
+What it still doesn't do: a stack dropped under the press with no depot is pressed whole (the
+translation wrote the comment for one item a cycle and the code for all of them); the depot's
+`locked` flag has nowhere to live, so a funnel could take an item mid-press; items on a belt under
+the press aren't reached, belts not being ported; and the basin under a press is the next step.
+
 **Where it stops.**
 
 - **Stress.** Speed carries; stress and capacity don't. `KineticNetwork` keeps them for a whole

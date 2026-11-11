@@ -1035,6 +1035,48 @@ fn write_zip(out: &Path, files: &BTreeMap<String, Vec<u8>>) -> Result<()> {
     Ok(())
 }
 
+/// In a tick helper, before the tick's changes are written: what the block entity's
+/// renderer draws from its state as it was. Java ticks a block entity on the client
+/// too, where its counters move every tick (a press's head coming down); a port ticks
+/// it on the server alone, so clients are sent its state whenever the picture changed.
+const DRAWN_BEFORE: &str = r#"        // Java ticks a block entity on the client too, where its counters move every
+        // tick (a press's head coming down). Here it ticks on the server alone: clients
+        // get its state again whenever what its renderer draws has changed.
+        let id_here = entity.id.clone();
+        let frame = m::Frame {
+            pos,
+            block: game.native_block(pos),
+            facing: game.native_block_property(pos, "facing"),
+            properties: m::STATE_KEYS
+                .iter()
+                .filter_map(|key| Some((key.to_string(), game.native_block_property(pos, key)?)))
+                .collect(),
+            partial: 0.5,
+            game_time: 0,
+            items: Vec::new(),
+        };
+        let draws = |nbt: &horizon_world::nbt::Compound| {
+            let mut ops = m::Draw::default();
+            m::render_block_entity(
+                &id_here,
+                |key| {
+                    let tag = nbt.get(&JavaString::from(key))?;
+                    @@FROM_TAG@@
+                },
+                &frame,
+                &mut ops,
+            );
+            ops.ops
+        };
+        let drawn_before = draws(&entity.nbt);
+"#;
+
+/// After they are written: sent when the picture differs.
+const DRAWN_AFTER: &str = r#"        if !done.sync && draws(&entity.nbt) != drawn_before {
+            game.native_block_entity_sync(pos);
+        }
+"#;
+
 struct Ctx<'a> {
     id: &'a str,
     module: String,
@@ -2326,11 +2368,11 @@ fn {id}_block_entity_tick(
     }}
     // Only a change touches the entity: each write marks it for saving and sending.
     if let Some(values) = changed {{
-        for (key, value) in values {{
+{drawn_before}        for (key, value) in values {{
             let tag = {to_tag};
             entity.nbt.insert(key.into(), tag);
         }}
-    }}
+{drawn_after}    }}
     if done.slots != slots {{
         let items = &mut entity.items;
         for (i, new) in done.slots.iter().enumerate() {{
@@ -2383,6 +2425,16 @@ fn {id}_block_entity_tick(
                     },
                     from_tag = block_entity::FROM_TAG,
                     to_tag = block_entity::TO_TAG,
+                    drawn_before = if self.wired.contains_key("block_entity_submit") {
+                        DRAWN_BEFORE.replace("@@FROM_TAG@@", block_entity::FROM_TAG)
+                    } else {
+                        String::new()
+                    },
+                    drawn_after = if self.wired.contains_key("block_entity_submit") {
+                        DRAWN_AFTER
+                    } else {
+                        ""
+                    },
                 ),
             ),
             "block_entity_container" => (

@@ -2797,7 +2797,9 @@ pub struct Placement {
     pub block: String,
     /// Where it goes (`getClickedPos`).
     pub pos: [i32; 3],
-    /// The block that was clicked (`getHitResult().getBlockPos()`).
+    /// The block that was clicked, which the new one is placed against
+    /// (`getHitResult().getBlockPos()`, `getClickedPos().relative(getClickedFace()
+    /// .getOpposite())`). Not `getClickedPos()`: that is `pos`.
     pub clicked: [i32; 3],
     /// The face clicked (`getClickedFace`): `up`, `north`...
     pub face: String,

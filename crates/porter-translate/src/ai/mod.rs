@@ -584,6 +584,7 @@ fn translate_one(
         return outcome;
     };
     let mut feedback = String::new();
+    let mut asked_where = false;
     for attempt in 1..=opts.attempts.max(1) {
         outcome.attempts = attempt;
         let ask = if feedback.is_empty() {
@@ -618,6 +619,20 @@ fn translate_one(
             feedback = format!(
                 "Your last answer changed the function's signature. Keep it exactly:\n```rust\n{}\n```\nYour answer was:\n```rust\n{function}\n```",
                 units::signature(&stub)
+            );
+            continue;
+        }
+        if prompt.placed_at
+            && !asked_where
+            && function.contains("p.clicked")
+            && !function.contains("p.pos")
+        {
+            asked_where = true;
+            feedback = format!(
+                "Your last answer reads only `p.clicked`, the block that was clicked. The Java's                  `context.getClickedPos()` is where the block is being placed, which is `p.pos`: the blocks                  beside the new block are counted from `p.pos`. Use `p.pos` for it, and keep `p.clicked` only                  where the Java asks for the block placed against (`getHitResult().getBlockPos()`,                  `getClickedPos().relative(getClickedFace().getOpposite())`). Your answer was:
+```rust
+{function}
+```"
             );
             continue;
         }
@@ -765,6 +780,10 @@ pub struct Prompt {
     /// (`HORIZONTAL_FACING`, `facing`). An answer that reads `"horizontal_facing"`
     /// reads a property no block has, and is sent back.
     pub properties: Vec<(String, String)>,
+    /// Whether it is a placement whose Java asks where the block goes
+    /// (`context.getClickedPos()`): an answer that only ever reads the block clicked
+    /// is asked once whether it meant that.
+    pub placed_at: bool,
 }
 
 impl Prompt {
@@ -1088,6 +1107,7 @@ fn prompt(dir: &Path, scan: &ModScan, unit: &Unit) -> Result<Prompt> {
         }
     }
     out.properties = properties;
+    out.placed_at = stub.contains("p: &Placement") && java_text.contains("getClickedPos()");
     Ok(out)
 }
 
@@ -1274,6 +1294,11 @@ fn find_class<'a>(scan: &'a ModScan, name: &str) -> Option<&'a porter_model::Cla
 fn equivalents(java: &str, stub: &str) -> String {
     // (what the stub is given, what the Java says, what to use)
     const TABLE: &[(&str, &str, &str)] = &[
+        (
+            "p: &Placement",
+            "getClickedPos()",
+            "`context.getClickedPos()` is `p.pos`: in a `BlockPlaceContext` it is where the block is being placed, whatever its name says, and the blocks beside the new block are counted from it. The block that was clicked is `p.clicked`",
+        ),
         (
             "dyn World",
             "awardStat(",

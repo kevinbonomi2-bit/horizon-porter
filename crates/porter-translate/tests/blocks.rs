@@ -273,6 +273,19 @@ fn ports_a_block_entity_renderer() {
             .contains("game.native_draw_model(draw, &model, tint);")
     );
     assert!(b.hooks >= 151);
+    // Java ticks it on the client too; here its tick sends clients its state whenever
+    // what the renderer draws from it has changed, so an animation moves every tick.
+    let tick = &b.files["mixins/grind/block_entity_tick.rs"];
+    assert!(tick.contains("let drawn_before = draws(&entity.nbt);"));
+    assert!(tick.contains(
+        "if !done.sync && draws(&entity.nbt) != drawn_before {\n            game.native_block_entity_sync(pos);"
+    ));
+    // A mod whose block entities aren't drawn has none of it.
+    let plain = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../porter-java/tests/fixtures/neoforge-press-demo");
+    let scan = porter_java::scan(&plain).unwrap();
+    let b = bundle::generate(&scan, &bundle::load_lang(&scan));
+    assert!(!b.files["mixins/stamp/block_entity_tick.rs"].contains("drawn_before"));
 }
 
 #[test]
