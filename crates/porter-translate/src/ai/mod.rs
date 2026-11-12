@@ -339,10 +339,11 @@ pub fn outdated(dir: &Path) -> Result<Vec<Unit>> {
             let notes = units::gap_notes(
                 &units::function_source(&source, &unit.function).unwrap_or_default(),
             );
-            // (One that names a state property no block has is wrong whatever it
-            // reached: ported again whenever asked.)
+            // (One that names a state property no block has, a model the port doesn't
+            // bake or a recipe value no file carries is wrong whatever it reached:
+            // ported again whenever asked.)
             let misnamed = units::function_source(&source, &unit.function)
-                .is_some_and(|f| units::misnames_a_property(&f));
+                .is_some_and(|f| names_what_is_not_there(&source, &f));
             if marked || misnamed || reach_grew_for(reach, &notes) {
                 out.push(unit);
             }
@@ -671,6 +672,50 @@ fn translate_one(
             );
             continue;
         }
+        if !prompt.recipe_values.is_empty()
+            && let Some(wrong) = read_recipe_values(&function)
+                .into_iter()
+                .find(|key| !prompt.recipe_values.contains(key))
+        {
+            let mut known = prompt.recipe_values.clone();
+            known.sort();
+            known.dedup();
+            let known: Vec<String> = known.iter().map(|k| format!("`{k}`")).collect();
+            feedback = format!(
+                "Your last answer reads a recipe's value `\"{wrong}\"`, which no recipe file of this mod has: it \
+                 would read nothing. The values they carry are {}. Use the name the files have, whatever the Java's \
+                 getter is called. Your answer was:\n```rust\n{function}\n```",
+                known.join(", ")
+            );
+            continue;
+        }
+        if !prompt.models.is_empty()
+            && let Some(wrong) = drawn_models(&function)
+                .into_iter()
+                .find(|id| !prompt.models.contains(id))
+        {
+            // Those that share its last word, or its words, are what was meant.
+            let last = wrong.rsplit(['/', ':']).next().unwrap_or(&wrong);
+            let words: Vec<&str> = last.split('_').filter(|w| w.len() > 2).collect();
+            let mut near: Vec<&String> = prompt
+                .models
+                .iter()
+                .filter(|m| words.iter().all(|w| m.contains(w)))
+                .collect();
+            near.truncate(8);
+            let near: Vec<String> = near.iter().map(|m| format!("`{m}`")).collect();
+            feedback = format!(
+                "Your last answer draws the model `\"{wrong}\"`, which this port doesn't have: it would draw \
+                 nothing. A model is drawn by the id it is baked under{}. Use the ids the Java's constants stand \
+                 for (named above), never one made up from a constant's name. Your answer was:\n```rust\n{function}\n```",
+                if near.is_empty() {
+                    String::new()
+                } else {
+                    format!("; those close to it are {}", near.join(", "))
+                }
+            );
+            continue;
+        }
         if let Some((constant, name)) = prompt.properties.iter().find(|(constant, _)| {
             function.contains(&format!("\"{}\"", constant.to_ascii_lowercase()))
         }) {
@@ -815,6 +860,14 @@ pub struct Prompt {
     /// (`HORIZONTAL_FACING`, `facing`). An answer that reads `"horizontal_facing"`
     /// reads a property no block has, and is sent back.
     pub properties: Vec<(String, String)>,
+    /// For a function that draws: the ids of the models the port bakes on their own
+    /// (`STANDALONE_MODELS`). An answer that draws another (`draw.model("mod:block/
+    /// crank_handle")`, guessed from a constant's name) draws nothing, and is sent back.
+    pub models: Vec<String>,
+    /// The plain values the mod's recipe files carry (`RECIPE_VALUES`), all types
+    /// together: an answer that reads another (`recipe.number("processingTime")`
+    /// where the files say `processing_time`) reads nothing, and is sent back.
+    pub recipe_values: Vec<String>,
     /// Whether it is a placement whose Java asks where the block goes
     /// (`context.getClickedPos()`): an answer that only ever reads the block clicked
     /// is asked once whether it meant that.
@@ -1055,6 +1108,55 @@ fn prompt(dir: &Path, scan: &ModScan, unit: &Unit) -> Result<Prompt> {
              default:\n{config}"
         );
     }
+    let models = if stub.contains("draw: &mut Draw") {
+        baked_models(&file)
+    } else {
+        Vec::new()
+    };
+    let named = model_constants(scan, &format!("{java_text}\n{unseen_java}"), &models);
+    if !named.is_empty() {
+        let list: Vec<String> = named
+            .iter()
+            .map(|(constant, id)| format!("`{constant}` is `\"{id}\"`"))
+            .collect();
+        let _ = writeln!(
+            p,
+            "The models the Java names by a constant, each by the id it is baked under here, which is what \
+             `draw.model(id, tint)` takes: {}. A model id made up from a constant's name draws nothing.\n",
+            list.join(", ")
+        );
+    }
+    let recipe_values = recipe_values_of(&file);
+    if !recipe_values.is_empty()
+        && (stub.contains("machine: &mut Machine") || stub.contains("dyn World"))
+    {
+        // Those of the types the Java names (`MillingRecipe`, `AllRecipeTypes.MILLING`).
+        let lower = java_text.to_ascii_lowercase();
+        let named: Vec<String> = recipe_values
+            .iter()
+            .filter(|(kind, _)| {
+                let name = kind
+                    .rsplit([':', '/'])
+                    .next()
+                    .unwrap_or(kind)
+                    .replace('_', "");
+                !name.is_empty() && lower.contains(&name)
+            })
+            .map(|(kind, keys)| {
+                let keys: Vec<String> = keys.iter().map(|k| format!("`{k}`")).collect();
+                format!("`{kind}` has {}", keys.join(", "))
+            })
+            .collect();
+        if !named.is_empty() {
+            let _ = writeln!(
+                p,
+                "The plain values the mod's recipe files carry, under the names the files have, which is what \
+                 `recipe.number(key)` reads (a Java getter may be named otherwise: `getProcessingDuration()` reads \
+                 `processing_time`): {}.\n",
+                named.join("; ")
+            );
+        }
+    }
     let properties = property_names(scan, &format!("{}\n{java_text}", unit.comment));
     if !properties.is_empty() {
         let named: Vec<String> = properties
@@ -1181,6 +1283,11 @@ fn prompt(dir: &Path, scan: &ModScan, unit: &Unit) -> Result<Prompt> {
         }
     }
     out.properties = properties;
+    out.recipe_values = recipe_values
+        .into_iter()
+        .flat_map(|(_, keys)| keys)
+        .collect();
+    out.models = models;
     out.placed_at = stub.contains("p: &Placement") && java_text.contains("getClickedPos()");
     Ok(out)
 }
@@ -1494,6 +1601,11 @@ fn equivalents(java: &str, stub: &str) -> String {
             "&mut Draw",
             "partialFacing(",
             "`CachedBuffers.partialFacing(model, state)` (Catnip; the facing is the state's `FACING` unless one is passed) is `model`, which is built facing south, turned through the block's centre about Y by `AngleHelper.horizontalAngle(facing)` (south 0, west -90, north 180, east 90, up and down 0) and then about X by `AngleHelper.verticalAngle(facing)` (up -90, down 90, the rest 0): `draw.rotate_about([0.0, 1.0, 0.0], y, [0.5; 3]); draw.rotate_about([1.0, 0.0, 0.0], x, [0.5; 3]); draw.model(..)`. A spin Java gives that buffer afterwards is made before both",
+        ),
+        (
+            "&mut Draw",
+            "partialFacingVertical(",
+            "`CachedBuffers.partialFacingVertical(model, state, facing)` (Catnip) is `model`, which is built standing up (its axis along Y), turned through the block's centre about Y by `AngleHelper.horizontalAngle(facing)` (south 0, west -90, north 180, east 90, up and down 0) and then about X by `AngleHelper.verticalAngle(facing) + 90` (up 0, down 180, each of the four sides 90): `draw.rotate_about([0.0, 1.0, 0.0], y, [0.5; 3]); draw.rotate_about([1.0, 0.0, 0.0], x, [0.5; 3]); draw.model(..)`. So a wheel on the X axis (facing east) is turned 90 about Y and then 90 about X, one on the Z axis (facing south) 90 about X alone, and one on the Y axis not at all. A spin Java gives that buffer afterwards is made before both",
         ),
         (
             "&mut Draw",
@@ -1853,6 +1965,146 @@ fn reached_keys(module: &str, java: &str, stub: &str) -> String {
     out
 }
 
+/// The plain values a mod's recipe files carry, by type, as its module lists them
+/// (`RECIPE_VALUES`).
+fn recipe_values_of(module: &str) -> Vec<(String, Vec<String>)> {
+    let Some(at) = module.find("pub const RECIPE_VALUES: &[(&str, &[&str])] = &[") else {
+        return Vec::new();
+    };
+    let list = &module[at..];
+    let end = list.find("\n];").unwrap_or(list.len());
+    list[..end]
+        .lines()
+        .skip(1)
+        .filter_map(|line| {
+            let mut words = line.split('"').skip(1).step_by(2).map(str::to_string);
+            let kind = words.next()?;
+            Some((kind, words.collect()))
+        })
+        .collect()
+}
+
+/// The recipe values a function reads by a literal: each `.number("key")`.
+fn read_recipe_values(function: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for (at, call) in function.match_indices(".number(") {
+        let rest = function[at + call.len()..].trim_start();
+        if let Some(key) = rest.strip_prefix('"').and_then(|r| r.split('"').next())
+            && !out.iter().any(|o| o == key)
+        {
+            out.push(key.to_string());
+        }
+    }
+    out
+}
+
+/// Whether a ported function of `module` names something that isn't there: a state
+/// property by a vanilla constant, a model the module doesn't bake, a recipe value its
+/// recipe files don't carry. Each reads or draws nothing, and compiles all the same.
+pub(crate) fn names_what_is_not_there(module: &str, function: &str) -> bool {
+    if units::misnames_a_property(function) {
+        return true;
+    }
+    let models = baked_models(module);
+    if !models.is_empty() && drawn_models(function).iter().any(|m| !models.contains(m)) {
+        return true;
+    }
+    let values: Vec<String> = recipe_values_of(module)
+        .into_iter()
+        .flat_map(|(_, keys)| keys)
+        .collect();
+    !values.is_empty()
+        && read_recipe_values(function)
+            .iter()
+            .any(|k| !values.contains(k))
+}
+
+/// The ids of the models a mod's module bakes on their own (`STANDALONE_MODELS`).
+fn baked_models(module: &str) -> Vec<String> {
+    let Some(at) = module.find("pub const STANDALONE_MODELS: &[&str] = &[") else {
+        return Vec::new();
+    };
+    let list = &module[at..];
+    let end = list.find("];").unwrap_or(list.len());
+    list[..end]
+        .split('"')
+        .skip(1)
+        .step_by(2)
+        .map(str::to_string)
+        .collect()
+}
+
+/// The model ids a function draws by a literal: each `draw.model("id", ..)`.
+fn drawn_models(function: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for (at, call) in function.match_indices("draw.model(") {
+        let rest = function[at + call.len()..].trim_start();
+        if let Some(id) = rest.strip_prefix('"').and_then(|r| r.split('"').next())
+            && !out.iter().any(|o| o == id)
+        {
+            out.push(id.to_string());
+        }
+    }
+    out
+}
+
+/// The model constants of the mod `java` names (`AllPartialModels.HAND_CRANK_HANDLE`),
+/// each with the id of `models` its declaration's path ends (`block("hand_crank/handle")`
+/// is `create:block/hand_crank/handle`): what a renderer's `draw.model` takes.
+fn model_constants(scan: &ModScan, java: &str, models: &[String]) -> Vec<(String, String)> {
+    if models.is_empty() {
+        return Vec::new();
+    }
+    let word = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    let mut out: Vec<(String, String)> = Vec::new();
+    let mut sources: BTreeMap<String, Option<String>> = BTreeMap::new();
+    for (dot, _) in java.match_indices('.') {
+        // `Class.CONSTANT`.
+        let start = java[..dot].rfind(|c: char| !word(c)).map_or(0, |i| i + 1);
+        let class = &java[start..dot];
+        let rest = &java[dot + 1..];
+        let end = rest.find(|c: char| !word(c)).unwrap_or(rest.len());
+        let constant = &rest[..end];
+        let shouting = constant.len() > 2
+            && constant.starts_with(|c: char| c.is_ascii_uppercase())
+            && constant
+                .chars()
+                .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_');
+        if !shouting
+            || !class.starts_with(|c: char| c.is_ascii_uppercase())
+            || out.iter().any(|(c, _)| c == constant)
+        {
+            continue;
+        }
+        let source = sources.entry(class.to_string()).or_insert_with(|| {
+            let found = find_class(scan, class)?;
+            fs::read_to_string(Path::new(&scan.input).join(&found.path)).ok()
+        });
+        let Some(source) = source else {
+            continue;
+        };
+        // Its declaration's first string: the path it is made from.
+        let Some(at) = source.find(&format!("{constant} =")) else {
+            continue;
+        };
+        let decl = &source[at..];
+        let decl = &decl[..decl.find(';').unwrap_or(decl.len())];
+        let Some(path) = decl.split('"').nth(1) else {
+            continue;
+        };
+        let mut matching = models.iter().filter(|m| {
+            **m == path || m.ends_with(&format!("/{path}")) || m.ends_with(&format!(":{path}"))
+        });
+        if let (Some(id), None) = (matching.next(), matching.next()) {
+            out.push((constant.to_string(), id.clone()));
+        }
+        if out.len() >= 24 {
+            break;
+        }
+    }
+    out
+}
+
 /// State properties `java` reads or sets by a constant that isn't the property's
 /// name in lower case: `state.getValue(HORIZONTAL_FACING)` reads `facing`. The name is
 /// the mod's own where it declares the constant (`AXIS_ALONG_FIRST_COORDINATE =
@@ -2150,6 +2402,34 @@ pub struct Lamp {
             keys,
             "- `demo:mixer` (`OperatingBlockEntity`): `Speed` (f32, `float speed`), `NeedsUpdate` (bool, `Deferral checker: boolean needsUpdate`), `lazy` (i32, `int lazy`)
 "
+        );
+    }
+
+    #[test]
+    fn names_the_models_a_renderers_java_refers_to() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../porter-java/tests/fixtures/neoforge-machine-demo");
+        let scan = porter_java::scan(&path).unwrap();
+        let models = baked_models(
+            "pub const STANDALONE_MODELS: &[&str] = &[\n    \"grind:block/crusher_wheel\",\n];\n",
+        );
+        assert_eq!(models, ["grind:block/crusher_wheel"]);
+        // A constant declared over two lines, named by the code that draws it: the id
+        // its path ends, not one made from its name.
+        let named = model_constants(
+            &scan,
+            "nodes.submitModel(GrindClient.WHEEL, pose);",
+            &models,
+        );
+        assert_eq!(
+            named,
+            [("WHEEL".to_string(), "grind:block/crusher_wheel".to_string())]
+        );
+        assert_eq!(
+            drawn_models(
+                "draw.model(\"grind:block/wheel\", 0xFFFFFF);\ndraw.model(\n    \"grind:block/crusher_wheel\",\n    1,\n);"
+            ),
+            ["grind:block/wheel", "grind:block/crusher_wheel"]
         );
     }
 

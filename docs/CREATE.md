@@ -226,12 +226,60 @@ one is the limit of one function at a time: asked for depot, world and basin mod
 press's tick ran past 48,000 tokens of answer and was left as it was. `BasinRecipe`'s matching
 and applying want to be ported once and called by both, as the questions are.
 
+**Porting it again from nothing** (2026-11-12). Would someone else, with the same tool, get the
+same Create? To find out, Create was ported into an empty folder and the same 59 functions
+translated in one run (about $1.60), then checked in the game by a script that builds every rig
+above and reads what the block entities hold (29 checks).
+
+| | Checks passing |
+| --- | --- |
+| The port grown over the last days | 27 of 29: no diagonal cogwheels yet |
+| The fresh port, as first translated | 24 of 29 |
+| After `translate --refresh` found and redid five functions by itself | 28 of 29 |
+| With the press's tick taken from the earlier port | 29 of 29 |
+
+What the fresh port showed, each of it a thing a first-time user would have hit:
+
+| What went wrong | What the porter does now |
+| --- | --- |
+| It didn't compile: a question to a block with nothing more to ask got a stub that wasn't Rust | Fixed, and a fixture's fresh port is compiled in a test |
+| Axles stood still: renderers called the shared angle helper, which hadn't been translated and answered 0; once translated it had no clock | `translate` ports the shared functions a ported one calls; `render_time()` is the frame's clock for a function that isn't handed the frame |
+| The millstone never ground: the recipe's time was read as `processingTime`, and the files say `processing_time` | The value names the mod's recipe files carry are recorded and shown; an answer that reads another is sent back |
+| The crank had no handle: `create:block/hand_crank_handle` was drawn, a model made up from the constant `HAND_CRANK_HANDLE` | The models the Java names are given by the id each is baked under; an answer that draws another is sent back |
+| The large cogwheel lay flat and wobbled: `partialFacingVertical` is a library's, and its turn was a guess | Spelled out, like `partialFacing` |
+| The basin took nothing in: the faithful translation asks which block the item is in, and the basin is solid here where Java lets items drop into it | The tick is told an item resting on top has landed |
+| The wrench, the nuggets, raw zinc and dough showed as nothing: `.tag(Items.TOOLS_WRENCH)` was read as the vanilla item to copy | A tag isn't a stand-in, and a stand-in is checked against vanilla's items |
+| The clipboard couldn't be opened from the hand: a block's item with a class of its own got no function for its `use` | It does (31 of Create's blocks have one) |
+
+Every one but the first is the translation guessing something that wasn't in front of it: a name,
+a default, a turn. So is every slip found before it (property names, config defaults, which blocks
+are cogwheels). They are closed the same way each time: the porter states the fact, and where the
+answer can be checked against what exists (a property, a model, a recipe value), a wrong one doesn't
+get through. That is what makes two people's ports agree; the translation itself never will be
+the same twice.
+
+One function doesn't come out again: the press's tick. With the depot, the dropped items, the basin
+and the kinetic walk in one function the answer runs past 48,000 tokens, and asked to be shorter it
+drops the depot. The one in the port now is from the earlier run. Its cure is the one already named:
+the kinetic step, the same in sixty block entities, ported once.
+
+**The rest of it.** 715 functions are left to translate, with what stands behind each kind:
+
+| Kind | Left | Works once translated? |
+| --- | --- | --- |
+| Block placement and what follows it | 137 + 125 | mostly: the large water wheel builds its frame this way |
+| Block entity ticks | 112 | those that only need what a tick has; belts, fluids, contraptions need more |
+| Renderers | 101 | yes, with the models the Java names |
+| Block clicks | 81 | mostly; a click that opens a screen of Create's own (value boxes, the clipboard) needs screens |
+| Item use | 25 + the new block items' | the wrench turns blocks through an interface each block answers, with effects: not a plain question yet |
+| Overlays | 0 of Create's 9 layers have a function | the goggles' panel is one: registered layers aren't read yet |
+
 **Where it stops.**
 
 - **Stress.** Speed carries; stress and capacity don't. `KineticNetwork` keeps them for a whole
   network in memory, by level, and nothing in a port holds state for a level yet.
-- **Diagonals.** A large cogwheel meshes with a small one diagonally, which six neighbours
-  don't reach.
+- **Diagonals** work now: a tick whose Java walks the cube around it reaches the block
+  entities there, and a large cogwheel turns a small one at half the speed, the other way.
 - **Items drawn by code.** The wrench has no icon: its model is a renderer of Create's own.
 - **One function at a time.** Each kinetic block entity's tick still carries its own copy of
   the step that takes speed from its neighbours: it is `KineticBlockEntity`'s work, the same for

@@ -1543,7 +1543,7 @@ fn redstone_todo(be: &BlockEntity) -> String {
 fn lands_doc(be: &BlockEntity) -> String {
     match &be.lands {
         Some((class, method)) => format!(
-            "\n/// Its block's `{method}` ({}) acts on what lands on it in Java, which Horizon gives\n/// ported code no hook for. Where that is taking in dropped items (`ItemEntity`), do it\n/// here each tick: `machine.dropped_in(min, max)` over the block and the one above it,\n/// the items put in its slots as the Java's insert would, and `machine.take_dropped(id,\n/// count)` for what went in.",
+            "\n/// Its block's `{method}` ({}) acts on what lands on it in Java, which Horizon gives\n/// ported code no hook for. Where that is taking in dropped items (`ItemEntity`), do it\n/// here each tick: `machine.dropped_in(min, max)` over the block and the one above it,\n/// the items put in its slots as the Java's insert would, and `machine.take_dropped(id,\n/// count)` for what went in. An item resting on top of the block has landed on it: take\n/// what the box holds, without asking which block an item's own position falls in (a\n/// hollow Java lets items drop into may be solid here).",
             class.rsplit('.').next().unwrap_or(class)
         ),
         None => String::new(),

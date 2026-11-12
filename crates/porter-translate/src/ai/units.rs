@@ -139,7 +139,7 @@ pub fn find_again(file: &str, source: &str, gaps: bool) -> Vec<Unit> {
         }
         let body = &source[item.fn_start..item.end];
         let admits = gaps && GAPS.iter().any(|g| body.contains(g));
-        if !comment.contains(OUTDATED) && !admits && !misnames_a_property(body) {
+        if !comment.contains(OUTDATED) && !admits && !super::names_what_is_not_there(source, body) {
             continue;
         }
         let comment = todo_comment(comment);

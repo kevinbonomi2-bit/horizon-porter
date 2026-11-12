@@ -265,6 +265,7 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
         content.files.extend(machine::content_files(&machines));
     }
     // Blocks and items that act in code: placed, used or reshaped by their own Java.
+    let recipe_values = recipe_values(&content);
     // (A block's item with a class of its own acts in code too: a clipboard opened
     // from the hand, a wheel that places its whole frame.)
     let mut acting_items = content.items.clone();
@@ -510,6 +511,7 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
         questions: &questions,
         machines: &machines,
         recipe_types: &recipe_types,
+        recipe_values: &recipe_values,
         messages: &messages,
         settings: &settings,
         screens: &mod_screens,
@@ -1081,6 +1083,52 @@ const DRAWN_AFTER: &str = r#"        if !done.sync && draws(&entity.nbt) != draw
         }
 "#;
 
+/// The plain values (numbers, words, flags) the mod's recipe files carry at their top
+/// level, by recipe type: `create:milling` has `processing_time`. Read from the files
+/// the content mod copies (`data/<ns>/recipe/..`).
+fn recipe_values(content: &content::Content) -> Vec<(String, Vec<String>)> {
+    let mut by: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for (path, file) in &content.copies {
+        let mut parts = path.split('/');
+        if parts.next() != Some("data")
+            || parts.next().is_none()
+            || !matches!(parts.next(), Some("recipe" | "recipes"))
+            || !path.ends_with(".json")
+        {
+            continue;
+        }
+        let Ok(text) = fs::read_to_string(file) else {
+            continue;
+        };
+        let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) else {
+            continue;
+        };
+        let Some(kind) = json["type"].as_str() else {
+            continue;
+        };
+        let kind = if kind.contains(':') {
+            kind.to_string()
+        } else {
+            format!("minecraft:{kind}")
+        };
+        // Vanilla's own types are read by the game.
+        if kind.starts_with("minecraft:") {
+            continue;
+        }
+        let keys = by.entry(kind).or_default();
+        for (key, value) in json.as_object().into_iter().flatten() {
+            let plain = value.is_number() || value.is_string() || value.is_boolean();
+            if plain && key != "type" {
+                keys.insert(key.clone());
+            }
+        }
+    }
+    by.into_iter()
+        .filter(|(_, keys)| !keys.is_empty())
+        .map(|(kind, keys)| (kind, keys.into_iter().collect()))
+        .collect()
+}
+
 struct Ctx<'a> {
     id: &'a str,
     module: String,
@@ -1098,6 +1146,8 @@ struct Ctx<'a> {
     machines: &'a [Machine],
     /// The mod's own recipe types: `grind:crushing`.
     recipe_types: &'a [String],
+    /// The plain values its recipe files carry, by recipe type (`recipe_values`).
+    recipe_values: &'a [(String, Vec<String>)],
     /// Its network messages.
     messages: &'a [Message],
     /// Its config values.
@@ -1503,6 +1553,16 @@ pub const DESCRIPTION: &str = "{description}";
             ));
             // The mod's own questions to a block, ported once for all who ask.
             r.push_str(&crate::questions::runtime(self.questions));
+            if !self.recipe_values.is_empty() {
+                r.push_str(
+                    "\n/// The plain values the mod's recipe files carry besides their ingredients and\n/// results, by recipe type: what `recipe.number(key)` reads, under the name the file\n/// has (`processing_time`), which a Java getter's name may differ from.\npub const RECIPE_VALUES: &[(&str, &[&str])] = &[\n",
+                );
+                for (kind, keys) in self.recipe_values {
+                    let keys: Vec<String> = keys.iter().map(|k| format!("{k:?}")).collect();
+                    let _ = writeln!(r, "    ({kind:?}, &[{}]),", keys.join(", "));
+                }
+                r.push_str("];\n");
+            }
             r.push_str(
                 "\n/// Blocks whose block entity opens a vanilla menu over its own slots (Java's\n/// `createMenu` returning `ChestMenu.threeRows(..)`): (block, menu type, slots).\npub const VANILLA_CONTAINERS: &[(&str, &str, usize)] = &[\n",
             );

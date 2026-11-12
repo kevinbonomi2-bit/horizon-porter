@@ -140,6 +140,12 @@ impl Model for Anthropic {
     }
 
     fn complete(&self, system: &str, shared: &str, prompt: &str) -> Result<Reply> {
+        /// What an answer that ran past the limit twice is asked.
+        const SHORTER: &str = "Your last two answers ran past the length an answer can have, and were lost. \
+            Write the whole function again so that it ends within about 1,200 lines: write nothing out twice (a \
+            nested `fn` or a closure for what repeats), comment only where a comment says something, and where it \
+            still can't all fit, port the most central paths of the Java in full and leave the others out, each \
+            with one `// Missing:` line naming it.";
         let mut content = Vec::new();
         if !shared.is_empty() {
             // Cached: the same for every hook helper, so later calls read it cheaply.
@@ -175,7 +181,8 @@ impl Model for Anthropic {
             .build()
             .new_agent();
         let mut wait = 2;
-        for attempt in 0..4 {
+        let mut asked_shorter = false;
+        for attempt in 0..5 {
             let mut req = agent
                 .post("https://api.anthropic.com/v1/messages")
                 .header("content-type", "application/json")
@@ -236,6 +243,18 @@ impl Model for Anthropic {
                         "  the answer was cut off at 16000 tokens; asking again with room for 48000"
                     );
                     body["max_tokens"] = 48000.into();
+                    continue;
+                }
+                // Still too long (a tick with every path of its Java, or an answer that
+                // went round in circles): once more, told how long it may be.
+                Some("max_tokens") if !asked_shorter => {
+                    asked_shorter = true;
+                    eprintln!(
+                        "  the answer was cut off at 48000 tokens too; asking once more for a shorter one"
+                    );
+                    if let Some(content) = body["messages"][0]["content"].as_array_mut() {
+                        content.push(serde_json::json!({ "type": "text", "text": SHORTER }));
+                    }
                     continue;
                 }
                 Some("max_tokens") => bail!("the answer was cut off at 48000 tokens"),
