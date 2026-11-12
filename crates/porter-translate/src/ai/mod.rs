@@ -768,6 +768,8 @@ fn translate_one(
     let mut asked_format = false;
     let mut asked_returns = false;
     let mut asked_shared = false;
+    let mut asked_field = false;
+    let mut asked_handed = false;
     let mut gave_up = false;
     for attempt in 1..=opts.attempts.max(1) {
         outcome.attempts = attempt;
@@ -855,6 +857,32 @@ fn translate_one(
                  module keeps one as `x y z`: write it with `pos_text(pos)` and read it with \
                  `text_pos(&text)`, or a block entity's `source` saved here is read as none by the rest. If \
                  that text is not a position kept in a block entity, leave it. Your answer was:\n```rust\n{function}\n```"
+            );
+            continue;
+        }
+        if !asked_field && let Some(field) = leaves_out_for_a_field(&function, &original) {
+            asked_field = true;
+            feedback = format!(
+                "Your last answer leaves work out because `{field}` is not kept in the state. That is no reason: \
+                 the Java fills `{field}` by looking something up (the Java above shows where it is assigned), \
+                 so look it up again at the place the Java reads it, from what the state, the blocks around \
+                 (`machine.at(..)`) and the recipes (`machine.recipes(..)`) hold, and then do the work that uses \
+                 it in full. Keep `// Missing:` for what truly has no way to be reached. Your answer was:\n```rust\n{function}\n```"
+            );
+            continue;
+        }
+        if !asked_handed
+            && let Some((field, how, method)) = handed_methods(&unit.comment)
+                .into_iter()
+                .find(|(_, _, method)| !names_method(&function, method))
+        {
+            asked_handed = true;
+            feedback = format!(
+                "Your last answer never runs `{method}`. This block entity keeps `{field}`, made as `{how}`: \
+                 each tick that part's own `tick()` runs (its Java is above) and calls `{method}`, a method of \
+                 this block entity or a class above it (its Java is above too). No other function does this: \
+                 without it, what `{method}` starts never starts. Port the kept part's tick and `{method}` into \
+                 this tick, as nested functions, and call them each tick. Your answer was:\n```rust\n{function}\n```"
             );
             continue;
         }
@@ -1330,6 +1358,12 @@ fn prompt_with(dir: &Path, scan: &ModScan, unit: &Unit, used_budget: usize) -> R
     // What is shown so far calls into the next class: the code itself, and the
     // methods of the classes before it that the code reaches.
     let mut calling = own_java.clone();
+    // (What a kept part was made with, from the function's comment: `new
+    // DeferralBehaviour(this, this::updateBasin)` reaches `updateBasin`.)
+    for (_, how, _) in handed_methods(&unit.comment) {
+        calling.push('\n');
+        calling.push_str(&how);
+    }
     let mut used: std::collections::VecDeque<(&porter_model::ClassInfo, String)> = used.into();
     // (Classes a shown class hands work to, found as they are shown.)
     let mut followed: Vec<String> = Vec::new();
@@ -2662,6 +2696,18 @@ fn entity_keys(module: &str) -> Vec<(&str, &str, Vec<&str>, Vec<String>)> {
             break;
         };
         let mut keys: Vec<String> = Vec::new();
+        // Its item slots, where its comment lays them out: what a tick that reaches it
+        // reads and changes of them.
+        const SLOTS: &str = "/// Its item handlers share its item slots, one after another: ";
+        if let Some(layout) = lines[i..j]
+            .iter()
+            .find_map(|l| l.strip_prefix(SLOTS))
+            .map(|l| l.split(" (`world.entity_item").next().unwrap_or(l))
+        {
+            keys.push(format!(
+                "its item slots (`n.items[slot]` of the view; `machine.set_item_at(pos, slot, stack)` changes one): {layout}"
+            ));
+        }
         let mut k = j + 1;
         while k + 1 < lines.len() && lines[k] != "}" {
             let doc = lines[k].trim();
@@ -2718,6 +2764,102 @@ fn asked_keys(module: &str, comment: &str) -> String {
         let _ = writeln!(out, "- `{id}` (`{own}`): {}", keys.join(", "));
     }
     out
+}
+
+/// What a tick's comment says its block entity keeps that was made with a method of
+/// its own: (the field, how Java makes it, the method), from "`basinChecker` is `new
+/// DeferralBehaviour(this, this::updateBasin)`".
+fn handed_methods(comment: &str) -> Vec<(String, String, String)> {
+    let Some((_, said)) = comment.split_once("was made with code of this block entity: ") else {
+        return Vec::new();
+    };
+    let said = said.split(". A kept part").next().unwrap_or(said);
+    let mut out = Vec::new();
+    for part in said.split("; ") {
+        let mut ticks = part.split('`');
+        let (Some(field), Some(how)) = (ticks.nth(1), ticks.nth(1)) else {
+            continue;
+        };
+        for (at, _) in how.match_indices("::") {
+            let method: String = how[at + 2..]
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect();
+            if !method.is_empty() && method != "new" {
+                out.push((field.to_string(), how.to_string(), method));
+            }
+        }
+    }
+    out
+}
+
+/// Whether `function` has code named after the Java method `method`: `update_basin`, or
+/// the name as Java has it.
+fn names_method(function: &str, method: &str) -> bool {
+    let mut snake = String::new();
+    for c in method.chars() {
+        if c.is_ascii_uppercase() {
+            snake.push('_');
+        }
+        snake.push(c.to_ascii_lowercase());
+    }
+    function
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("//"))
+        .any(|l| l.contains(&snake) || l.contains(method))
+}
+
+/// A field the state has no place for (`// Left out of Mixer, to port by hand:` lists
+/// `Recipe<?> currentRecipe`) that a `// Missing` note of the answer gives as its reason:
+/// work left out for a value the Java only looked up.
+fn leaves_out_for_a_field(function: &str, module: &str) -> Option<String> {
+    let ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    // The states the function is handed, by its signature.
+    let head = function.split('{').next().unwrap_or("");
+    let mut fields: Vec<&str> = Vec::new();
+    for (at, _) in module.match_indices("\n// Left out of ") {
+        let chunk = &module[at + 1..];
+        let first = chunk.lines().next().unwrap_or("");
+        let state = first
+            .trim_start_matches("// Left out of ")
+            .split(',')
+            .next()
+            .unwrap_or("");
+        if state.is_empty() || !head.split(|c: char| !ident(c)).any(|w| w == state) {
+            continue;
+        }
+        for line in chunk.lines().skip(1).take_while(|l| l.starts_with("// - ")) {
+            if !line.contains("no Rust type for it yet") {
+                continue;
+            }
+            // `Recipe<?> currentRecipe`: the name is its last word.
+            if let Some(name) = line
+                .split('`')
+                .nth(1)
+                .and_then(|decl| decl.rsplit(' ').next())
+                .filter(|n| n.len() > 3)
+            {
+                fields.push(name);
+            }
+        }
+    }
+    function
+        .lines()
+        .map(str::trim)
+        .filter(|l| l.starts_with("//"))
+        // A note and the lines it runs on to.
+        .scan(false, |noting, l| {
+            *noting =
+                l.contains("Missing") || (*noting && !l.trim_start_matches('/').trim().is_empty());
+            Some((*noting, l))
+        })
+        .filter(|(noting, _)| *noting)
+        .find_map(|(_, l)| {
+            fields
+                .iter()
+                .find(|f| l.split(|c: char| !ident(c)).any(|w| w == **f))
+                .map(|f| f.to_string())
+        })
 }
 
 /// The classes `java` calls a static function of: each `Name` of a `Name.function(`.
@@ -3708,6 +3850,66 @@ pub struct Gearbox {
             ),
             vec!["BasinRecipe".to_string(), "Mth".to_string()]
         );
+    }
+
+    #[test]
+    fn work_left_out_for_a_field_the_java_only_looked_up_is_noticed() {
+        let module = "pub struct Mixer {\n    pub speed: f32,\n}\n\n// Left out of Mixer, to port by hand:\n// - `static Object key`: a constant; copy its value into the tick\n// - `Recipe<?> currentRecipe`: no Rust type for it yet; where the Java fills it by looking something up (a recipe it found), look it up again where the Java reads it\n\n// Left out of Press, to port by hand:\n// - `Thing otherField`: no Rust type for it yet\n";
+        let gave_up = "pub fn tick_mixer(pos: [i32; 3], state: &mut Mixer, machine: &mut Machine<'_>) {\n    state.speed += 1.0;\n    // Missing: applyBasinRecipe(): it applies\n    // currentRecipe, which is not kept.\n}\n";
+        assert_eq!(
+            leaves_out_for_a_field(gave_up, module),
+            Some("currentRecipe".to_string())
+        );
+        // Named where it is looked up again, it is no reason given.
+        let did = "pub fn tick_mixer(pos: [i32; 3], state: &mut Mixer, machine: &mut Machine<'_>) {\n    // currentRecipe: found again from the basin.\n    let recipe = machine.recipes(\"demo:mixing\");\n    // Missing: the sound.\n}\n";
+        assert_eq!(leaves_out_for_a_field(did, module), None);
+        // Another state's field is not this function's.
+        let other = gave_up.replace("currentRecipe", "otherField");
+        assert_eq!(leaves_out_for_a_field(&other, module), None);
+    }
+
+    #[test]
+    fn a_reached_block_entitys_item_slots_are_laid_out() {
+        let module = "/// The state of a `demo:basin` block entity: `net.demo.BasinBlockEntity`, saved with the block.
+/// Its item handlers share its item slots, one after another: `inputInventory` slots 0 to 8, `outputInventory` slots 9 to 17 (`world.entity_item(pos, slot)`
+/// in a click, `machine.slots[slot]` in its tick).
+pub struct Basin {
+    /// `boolean contentsChanged`, saved as `Changed`.
+    pub contents_changed: bool,
+}
+";
+        let said = reached_keys(
+            module,
+            "class Mixer { void apply() { BasinBlockEntity basin = getBasin(); } }",
+            "pub fn tick_mixer(state: &mut Mixer) {}",
+        );
+        assert!(
+            said.starts_with("- `demo:basin` (`BasinBlockEntity`): its item slots (`n.items[slot]` of the view; `machine.set_item_at(pos, slot, stack)` changes one): `inputInventory` slots 0 to 8, `outputInventory` slots 9 to 17, `Changed` (bool, `boolean contentsChanged`)"),
+            "{said}"
+        );
+    }
+
+    #[test]
+    fn a_method_handed_to_a_kept_part_is_read_from_the_comment() {
+        let comment = "/// What it keeps was made with code of this block entity: `basinChecker` is `new DeferralBehaviour(this, this::updateBasin)`; `filter` is `new Filter(this, slot -> true)`. A kept part's `tick()` calls\n/// the code it was made with.\n";
+        assert_eq!(
+            handed_methods(comment),
+            vec![(
+                "basinChecker".to_string(),
+                "new DeferralBehaviour(this, this::updateBasin)".to_string(),
+                "updateBasin".to_string()
+            )]
+        );
+        assert!(handed_methods("/// TODO: port the tick of `a.B`.\n").is_empty());
+        // Run under its Rust name, or not at all (a comment that names it runs nothing).
+        assert!(names_method(
+            "fn t() {\n    fn update_basin() {}\n    update_basin();\n}\n",
+            "updateBasin"
+        ));
+        assert!(!names_method(
+            "fn t() {\n    // updateBasin is the basin tick's.\n}\n",
+            "updateBasin"
+        ));
     }
 
     #[test]

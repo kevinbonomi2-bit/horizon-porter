@@ -367,12 +367,26 @@ of `create:creative_motor`), which is sent back now; a position kept as text was
 `text_pos`; a tick is told by name which methods its own classes override, and one that never
 calls its shared tick, or returns before the work others call it for, is sent back.
 
-Where it stands: **25 of 29** on the best build so far. Every kinetic check passes again
-(chains, gearbox faces, clutch and gearshift, the diagonal cogwheels, the crank, motors set to
-64). The press and the mixer do not make their items yet on these ticks: the press's last
-port (it calls its shared tick now) is not built or checked, and the mixer's still leaves
-`applyBasinRecipe` out because the recipe it found (`currentRecipe`) has no place in its state.
-The build before the shared ticks passed all 29 and is still installed beside it.
+The press and the mixer took four more, each a fact the tool now states or checks:
+
+- **A recipe a block entity found** (`Recipe<?> currentRecipe`) had no place in its state, so the
+  tick that found it could not hand it to the tick that applied it. It is kept by its id now.
+  The fields of the classes above that still have no place are listed for each block entity,
+  with what to do about one the Java only looked up.
+- **A kept part made with the block entity's own method** (`new DeferralBehaviour(this,
+  this::updateBasin)`): the tick is told how it was made, the method is shown in full (it was
+  cut to its signature, since nothing called it by name), and a tick that never runs it is sent
+  back.
+- **Another block entity's item slots** (the basin's inputs are slots 0 to 8, its outputs 9 to
+  17) are listed with its saved keys; the mixer had been told only the keys.
+- **A class a shown class hands its work to** (`BasinRecipe.apply` from a base class's
+  `applyBasinRecipe`) is shown too.
+
+Where it stands: **29 of 29** on the build with every tick above ported once
+(native-66f3981-94e2313b4bd7), from the tool's own output with nothing edited by hand. Getting
+there took about a dollar of Claude Haiku in all, the dead ends included. Twenty-odd functions
+of the port are still marked to be ported again with what the tool says now; none of the
+checks depends on them.
 
 ## Suggested order
 

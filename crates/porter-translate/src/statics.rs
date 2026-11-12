@@ -68,7 +68,9 @@ pub fn find(scan: &ModScan, roots: &BTreeSet<String>) -> Vec<Module> {
             .iter()
             .filter(|f| f.is_static)
             .filter_map(|f| {
-                let kind = Kind::from_java(&f.ty).filter(|k| *k != Kind::Item)?;
+                // (A recipe is a block entity's to keep by its id: not a static's.)
+                let kind = Kind::from_java(&f.ty)
+                    .filter(|k| *k != Kind::Item && !f.ty.starts_with("Recipe"))?;
                 Some(Static {
                     java: format!("{simple}.{}", f.name),
                     declared: format!(

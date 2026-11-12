@@ -6,7 +6,7 @@ import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 
 public class PressBlockEntity extends StampBlockEntity {
-    public StampBehaviour stamping = new StampBehaviour(this);
+    public StampBehaviour stamping = new StampBehaviour(this, this::stamped);
 
     public PressBlockEntity(BlockPos pos, BlockState state) {
         super(Stamp.PRESS_BE.get(), pos, state);
@@ -16,6 +16,11 @@ public class PressBlockEntity extends StampBlockEntity {
     public void tick() {
         super.tick();
         stamping.tick();
+    }
+
+    /** What the stamp calls when it has finished one. */
+    private void stamped() {
+        age = 0;
     }
 
     @Override

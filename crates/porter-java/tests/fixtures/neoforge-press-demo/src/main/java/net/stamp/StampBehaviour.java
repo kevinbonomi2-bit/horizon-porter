@@ -15,8 +15,11 @@ public class StampBehaviour extends ProcessBehaviour {
     public boolean running;
     public int ticks;
 
-    public StampBehaviour(BlockEntity owner) {
+    private final Runnable done;
+
+    public StampBehaviour(BlockEntity owner, Runnable done) {
         super(owner);
+        this.done = done;
         whenItemRests(this::onItem);
     }
 

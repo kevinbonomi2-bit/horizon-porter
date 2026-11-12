@@ -72,6 +72,10 @@ pub struct BlockEntity {
     /// holds each: (`pressingBehaviour`, `com.x.PressingBehaviour`). Their saved
     /// values and lasting fields are in its state, their ticks part of its tick.
     pub held: Vec<(String, String)>,
+    /// Of those, the ones made with code of the block entity's own, by the field and how
+    /// Java makes it: (`basinChecker`, `new DeferralBehaviour(this, this::updateBasin)`).
+    /// The kept part's tick calls that code, so it is part of this block entity's tick.
+    pub made: Vec<(String, String)>,
     /// The classes of other block entities that take something it holds and call the
     /// code it gave it: a depot's `DepotBehaviour`, for a press.
     pub called_by: Vec<Caller>,
@@ -418,6 +422,18 @@ fn shared_runtime(shared: &[SharedTick]) -> String {
             } else {
                 format!("kept as `{}`", one_line(&f.key))
             };
+            // What its text holds, as each block entity's own state says it.
+            let how = if f.java.starts_with("BlockPos ") {
+                format!(
+                    "{how}; the position as `x y z` (`4 64 -2`: written with `pos_text(pos)`, read with `text_pos(&text)`), empty for none (null)"
+                )
+            } else if f.java.starts_with("Recipe") {
+                format!(
+                    "{how}; the recipe's id (`recipe.id`, as `grind:crush_cobblestone`), empty for none (null): the recipe itself is found again among `machine.recipes(kind)` by that id"
+                )
+            } else {
+                how
+            };
             let _ = writeln!(
                 r,
                 "    /// `{}`, {how}.\n    pub {}: {},",
@@ -569,6 +585,10 @@ impl Kind {
             "String" => Kind::Text,
             // A position (a source, a controller, a link): kept as text, `x y z`.
             "BlockPos" => Kind::Text,
+            // A recipe it found (a basin operator's `currentRecipe`): kept by its id, and
+            // found again among its type's recipes. Without a place for it, the tick
+            // that finds the recipe can't hand it to the one that applies it.
+            "Recipe" | "Recipe<?>" | "RecipeHolder<?>" => Kind::Text,
             "ItemStack" | "ItemStackTemplate" => Kind::Item,
             _ => return None,
         })
@@ -770,6 +790,7 @@ pub fn find(scan: &ModScan, ns: &str) -> Vec<BlockEntity> {
             called_by: Vec::new(),
             shared: None,
             overrides: Vec::new(),
+            made: Vec::new(),
         };
         if let Some(class) = class {
             state_of(scan, class, &mut be);
@@ -1505,6 +1526,15 @@ fn hold(scan: &ModScan, owners: &[&ClassInfo], be: &mut BlockEntity) {
             slots.extend(its_slots);
             be.ticks |= ticks;
             be.held.push((f.name.clone(), held.name.clone()));
+            // How Java makes it, where it hands it code of the block entity.
+            if let Some(made) =
+                std::fs::read_to_string(std::path::Path::new(&scan.input).join(&owner.path))
+                    .ok()
+                    .and_then(|text| made_with(&text, &f.name, simple))
+                    .filter(|m| m.contains("::") || m.contains("->"))
+            {
+                be.made.push((f.name.clone(), made));
+            }
             let was = format!("`{} {}`", f.ty, f.name);
             be.left_out.retain(|l| !l.starts_with(&was));
         }
@@ -1633,6 +1663,10 @@ pub const BLOCK_ENTITIES: &[(&str, &str, bool)] = &[
                 format!(
                     "{how}; the position as `x y z` (`4 64 -2`: written with `pos_text(pos)`, read with `text_pos(&text)`), empty for none (null)"
                 )
+            } else if f.java.starts_with("Recipe") {
+                format!(
+                    "{how}; the recipe's id (`recipe.id`, as `grind:crush_cobblestone`), empty for none (null): the recipe itself is found again among `machine.recipes(kind)` by that id"
+                )
             } else if f.kind == Kind::Item {
                 format!("{how}; the item's id (`minecraft:bowl`), empty for none")
             } else {
@@ -1744,7 +1778,11 @@ pub const BLOCK_ENTITIES: &[(&str, &str, bool)] = &[
                             .join(", ")
                     ));
                 }
-                let extras = animate_doc(be) + &redstone_doc(be) + &lands_doc(be) + &called_doc(be);
+                let extras = animate_doc(be)
+                    + &redstone_doc(be)
+                    + &lands_doc(be)
+                    + &called_doc(be)
+                    + &made_doc(be);
                 let extras_todo =
                     animate_todo(be) + &redstone_todo(be) + &lands_todo(be) + &called_todo(be);
                 // Its tick is the shared one and nothing more: written here, whole.
@@ -2101,6 +2139,48 @@ fn lands_todo(be: &BlockEntity) -> String {
 
 /// The tick's word on the block entities that call code it gave: nothing calls across
 /// block entities here, so it does that work on them itself.
+/// How Java makes `field`, a `class`: `new DeferralBehaviour(this, this::updateBasin)`,
+/// from `field = new Class(..)` in `source`, on one line.
+fn made_with(source: &str, field: &str, class: &str) -> Option<String> {
+    let ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    let at = source
+        .match_indices(&format!("{field} = new {class}"))
+        .find_map(|(at, m)| {
+            let before = source[..at].chars().next_back();
+            let after = source[at + m.len()..].chars().next();
+            (!before.is_some_and(ident) && matches!(after, Some('(' | '<'))).then_some(at)
+        })?;
+    let made = &source[at + field.len() + 3..];
+    let open = made.find('(')?;
+    let mut depth = 0usize;
+    let close = made[open..].char_indices().find_map(|(i, c)| {
+        match c {
+            '(' => depth += 1,
+            ')' => depth -= 1,
+            _ => {}
+        }
+        (depth == 0).then_some(open + i)
+    })?;
+    let made = one_line(&made[..=close]);
+    (made.len() <= 240).then_some(made)
+}
+
+/// For a tick: what the block entity keeps that was made with code of its own.
+fn made_doc(be: &BlockEntity) -> String {
+    if be.made.is_empty() {
+        return String::new();
+    }
+    let made: Vec<String> = be
+        .made
+        .iter()
+        .map(|(field, how)| format!("`{field}` is `{how}`"))
+        .collect();
+    format!(
+        "\n/// What it keeps was made with code of this block entity: {}. A kept part's `tick()` calls\n/// the code it was made with, and nothing else here does: port that tick and the method it is\n/// handed into this tick, each tick, whichever class the method is declared in.",
+        made.join("; ")
+    )
+}
+
 fn called_doc(be: &BlockEntity) -> String {
     if be.called_by.is_empty() {
         return String::new();
@@ -2566,6 +2646,10 @@ mod tests {
         assert_eq!(Kind::from_java("java.lang.String"), Some(Kind::Text));
         assert_eq!(Kind::from_java("ItemStackHandler"), None);
         assert_eq!(Kind::from_java("ItemStack"), Some(Kind::Item));
+        // A recipe a block entity found is kept by its id.
+        assert_eq!(Kind::from_java("Recipe<?>"), Some(Kind::Text));
+        assert_eq!(Kind::from_java("RecipeHolder<?>"), Some(Kind::Text));
+        assert_eq!(Kind::from_java("List<Recipe<?>>"), None);
         assert_eq!(Kind::from_put("putBoolean"), Some(Kind::Bool));
     }
 }

@@ -500,6 +500,11 @@ fn ports_a_tick_several_block_entities_share_once() {
         ),
         "{runtime}"
     );
+    // What the press keeps is made with code of its own: its tick is told how.
+    assert!(
+        runtime.contains("/// What it keeps was made with code of this block entity: `stamping` is `new StampBehaviour(this, this::stamped)`."),
+        "{runtime}"
+    );
     // A position kept as text has one way to be written and read.
     assert!(runtime.contains("pub fn pos_text(pos: [i32; 3]) -> String {"));
     assert!(runtime.contains("pub fn text_pos(text: &str) -> Option<[i32; 3]> {"));

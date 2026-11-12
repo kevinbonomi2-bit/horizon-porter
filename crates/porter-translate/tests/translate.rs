@@ -190,7 +190,14 @@ pub fn tick_press(pos: [i32; 3], state: &mut Press, machine: &mut Machine<'_>) {
     let called = stamp_block_entity_tick(pos, &mut base, &me, machine);
     state.set_stamp_block_entity_base(base);
     let _ = called;
+    // `StampBehaviour.tick()` calls what it was made with, when it has finished one.
+    fn stamped(state: &mut Press) {
+        state.age = 0;
+    }
     state.stamping_ticks += 1;
+    if state.stamping_ticks > 40 {
+        stamped(state);
+    }
 }
 ```",
         "```rust
@@ -200,7 +207,14 @@ pub fn tick_press(pos: [i32; 3], state: &mut Press, machine: &mut Machine<'_>) {
     let called = stamp_block_entity_tick(pos, &mut base, &me, machine);
     state.set_stamp_block_entity_base(base);
     let _ = called;
+    // `StampBehaviour.tick()` calls what it was made with, when it has finished one.
+    fn stamped(state: &mut Press) {
+        state.age = 0;
+    }
     state.stamping_ticks += 1;
+    if state.stamping_ticks > 40 {
+        stamped(state);
+    }
 }
 ```",
     ]);
