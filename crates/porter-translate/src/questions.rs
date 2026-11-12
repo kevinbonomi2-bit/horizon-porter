@@ -546,8 +546,9 @@ pub fn runtime(questions: &[Question]) -> String {
             rust = q.rust,
             params = params.join(", "),
             returns = q.returns,
+            // (`block, state` is two names in one entry: always a tuple unless it is one.)
             used = match &used[..] {
-                [one] => one.clone(),
+                [one] if !one.contains(',') => one.clone(),
                 many => format!("({})", many.join(", ")),
             },
             value = default_value(q.returns),
@@ -1210,6 +1211,21 @@ mod tests {
             "{text}"
         );
         assert_eq!(methods(&text), ["hasShaftTowards", "passes", "modifier"]);
+        // A question with nothing more to ask than the block: its stub is still Rust.
+        let bare = runtime(&[Question {
+            params: Vec::new(),
+            java_params: String::new(),
+            ..question(Asks::Block, "com.spin.ICog", "isLarge", "i_cog_is_large")
+        }]);
+        assert!(
+            bare.contains(
+                "pub fn i_cog_is_large(block: &str, state: &[(String, String)]) -> bool {
+    let _ = (block, state);
+    false
+}"
+            ),
+            "{bare}"
+        );
         assert!(is_question(&text, "split_shaft_passes"));
         // A function whose Java asks is told; a question isn't told of itself.
         let told = ported(

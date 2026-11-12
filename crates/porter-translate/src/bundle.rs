@@ -265,7 +265,11 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
         content.files.extend(machine::content_files(&machines));
     }
     // Blocks and items that act in code: placed, used or reshaped by their own Java.
-    let behaviours = blocks::find(scan, &ns, &content.blocks, &content.items);
+    // (A block's item with a class of its own acts in code too: a clipboard opened
+    // from the hand, a wheel that places its whole frame.)
+    let mut acting_items = content.items.clone();
+    acting_items.extend(blocks::block_items(scan, &content.blocks));
+    let behaviours = blocks::find(scan, &ns, &content.blocks, &acting_items);
     // What the mod does with a dying player's drops (a grave).
     let drops = crate::events::drops(scan);
     for (hook, classes) in blocks::hooks(&behaviours) {
@@ -1888,13 +1892,34 @@ fn {id}_block_entity_tick(
     }};
     // The mod block entities two steps away along each axis, for a tick whose Java
     // looks that far (a press over a depot).
-    let far: Vec<m::Neighbour> = if m::FAR.contains(&entity.id.as_str()) {{
+    let reaches_far = m::FAR.contains(&entity.id.as_str());
+    // And those at the other places of the 3×3×3 around it, for one whose Java walks
+    // that (cogwheels meshing diagonally).
+    let reaches_around = m::AROUND.contains(&entity.id.as_str());
+    let far: Vec<m::Neighbour> = if reaches_far || reaches_around {{
         let read = |tag: &Tag| -> Option<m::Saved> {{ {from_tag} }};
-        m::Side::ALL
-            .iter()
-            .filter_map(|side| {{
+        let mut places: Vec<[i32; 3]> = Vec::new();
+        if reaches_far {{
+            for side in m::Side::ALL {{
                 let [dx, dy, dz] = side.offset();
-                let at = [pos[0] + 2 * dx, pos[1] + 2 * dy, pos[2] + 2 * dz];
+                places.push([pos[0] + 2 * dx, pos[1] + 2 * dy, pos[2] + 2 * dz]);
+            }}
+        }}
+        if reaches_around {{
+            for dx in -1..=1 {{
+                for dy in -1..=1 {{
+                    for dz in -1..=1 {{
+                        // (Those beside it are its neighbours already.)
+                        if [dx, dy, dz].iter().filter(|d| **d != 0).count() >= 2 {{
+                            places.push([pos[0] + dx, pos[1] + dy, pos[2] + dz]);
+                        }}
+                    }}
+                }}
+            }}
+        }}
+        places
+            .into_iter()
+            .filter_map(|at| {{
                 let (id, values, items) = game.native_with_mod_block_entity(at, |e| {{
                     let values: Vec<(String, m::Saved)> = e
                         .nbt

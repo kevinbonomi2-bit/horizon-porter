@@ -93,7 +93,7 @@ enum Command {
         /// How hard the model thinks: low, medium, high, xhigh or max (`anthropic`; default: the model's)
         #[arg(long)]
         effort: Option<String>,
-        /// Only functions whose name contains this
+        /// Only functions whose name contains this (several with commas: `tick_motor,render_motor`)
         #[arg(long)]
         only: Option<String>,
         /// At most this many functions

@@ -29,6 +29,10 @@ public class StampBehaviour extends ProcessBehaviour {
         if (alongX && owner.getBlockState().getValue(PressBlock.LOWERED)) {
             return false;
         }
+        // Only a large one stamps.
+        if (owner.getBlockState().getBlock() instanceof ICog cog && !cog.isLarge()) {
+            return false;
+        }
         if (!running) {
             running = true;
             ticks = 0;

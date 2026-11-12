@@ -7,12 +7,17 @@ import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.BooleanProperty;
 
-public class PressBlock extends Block implements EntityBlock {
+public class PressBlock extends Block implements EntityBlock, ICog {
     /** Whether its head is down. */
     public static final BooleanProperty LOWERED = BooleanProperty.create("down");
 
     public PressBlock(Properties properties) {
         super(properties);
+    }
+
+    @Override
+    public boolean isLarge() {
+        return true;
     }
 
     @Override

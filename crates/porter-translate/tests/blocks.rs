@@ -128,23 +128,40 @@ fn turns_the_block_entity_into_state() {
 fn generated_runtime_passes_its_own_tests() {
     // The bundle is a Cargo package: `cargo test` in it runs runtime.rs's tests,
     // including the save-and-load round trip of each block entity state.
-    let dir = std::env::temp_dir().join(format!("porter-blocks-test-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    let b = demo_bundle();
-    bundle::write(&b, &dir, false).unwrap();
-    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
-    let output = std::process::Command::new(cargo)
-        .args(["test", "--quiet", "--offline"])
-        .current_dir(&dir)
-        .env("CARGO_TARGET_DIR", dir.join("target"))
-        .env_remove("RUSTFLAGS")
-        .output()
-        .unwrap();
-    let text = String::from_utf8_lossy(&output.stdout).to_string()
-        + &String::from_utf8_lossy(&output.stderr);
-    assert!(output.status.success(), "{text}");
-    assert!(!text.contains("warning"), "{text}");
-    std::fs::remove_dir_all(&dir).ok();
+    // The press demo too: block entities that keep classes of the mod, reach each other,
+    // and ask a block a question of the mod's own. A fresh port has to compile before
+    // anything in it is translated.
+    let press = {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../porter-java/tests/fixtures/neoforge-press-demo");
+        let scan = porter_java::scan(&path).unwrap();
+        bundle::generate(&scan, &bundle::load_lang(&scan))
+    };
+    assert!(
+        press.files["mixins/stamp/runtime.rs"]
+            .contains("pub fn i_cog_is_large(block: &str, state: &[(String, String)]) -> bool {"),
+        "{}",
+        press.files["mixins/stamp/runtime.rs"]
+    );
+    for (name, b) in [("demo", demo_bundle()), ("press", press)] {
+        let dir =
+            std::env::temp_dir().join(format!("porter-blocks-test-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        bundle::write(&b, &dir, false).unwrap();
+        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+        let output = std::process::Command::new(cargo)
+            .args(["test", "--quiet", "--offline"])
+            .current_dir(&dir)
+            .env("CARGO_TARGET_DIR", dir.join("target"))
+            .env_remove("RUSTFLAGS")
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&output.stdout).to_string()
+            + &String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "{name}: {text}");
+        assert!(!text.contains("warning"), "{name}: {text}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }
 
 #[test]

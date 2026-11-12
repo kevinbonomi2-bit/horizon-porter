@@ -63,6 +63,11 @@ pub struct BlockEntity {
     /// Whether its Java looks two steps away (`pos.above(2)`): its tick then reaches
     /// the block entities there too (`machine.at(pos)`).
     pub far: bool,
+    /// Whether its Java walks the 3×3×3 around it (`BlockPos.betweenClosed(.., new
+    /// BlockPos(-1, -1, -1), new BlockPos(1, 1, 1))`, as Create does to mesh cogwheels
+    /// diagonally): its tick then reaches the block entities at the twenty places that
+    /// aren't beside it too (`machine.at(pos)`).
+    pub around: bool,
     /// The classes of the mod's own it keeps part of itself in, by the field that
     /// holds each: (`pressingBehaviour`, `com.x.PressingBehaviour`). Their saved
     /// values and lasting fields are in its state, their ticks part of its tick.
@@ -333,6 +338,7 @@ pub fn find(scan: &ModScan, ns: &str) -> Vec<BlockEntity> {
             bases: Vec::new(),
             drawn,
             far: false,
+            around: false,
             held: Vec::new(),
             called_by: Vec::new(),
         };
@@ -436,6 +442,18 @@ pub fn find(scan: &ModScan, ns: &str) -> Vec<BlockEntity> {
                         .is_some_and(reaches)
                 });
             be.neighbours |= be.far;
+            // Or walks the cube around it.
+            let cube = |c: &ClassInfo| {
+                std::fs::read_to_string(std::path::Path::new(&scan.input).join(&c.path)).is_ok_and(
+                    |text| {
+                        let text: String = text.split_whitespace().collect();
+                        text.contains("newBlockPos(-1,-1,-1)")
+                            && text.contains("newBlockPos(1,1,1)")
+                    },
+                )
+            };
+            be.around = owners.iter().any(|c| cube(c));
+            be.neighbours |= be.around;
             // A class it keeps that holds item lists (a grave's `Death`, with the dead
             // player's inventory): its items are the block entity's own item slots.
             if be.items == 0 {
@@ -1249,6 +1267,9 @@ pub const BLOCK_ENTITIES: &[(&str, &str, bool)] = &[
                 if be.far {
                     has.push("the mod block entities two steps away along each axis too (`machine.at(pos)` for `level.getBlockEntity(pos.above(2))`, each with its block, state, saved values and item slots; `machine.set_at(pos, key, value)` changes a saved value of one after the tick, `machine.set_item_at(pos, slot, stack)` one of its item slots)".to_string());
                 }
+                if be.around {
+                    has.push("the mod block entities at the other places of the 3×3×3 around it too, diagonals included (`machine.at(pos)` for what `BlockPos.betweenClosed(pos.offset(-1, -1, -1), pos.offset(1, 1, 1))` walks, each with its block, state, saved values and item slots)".to_string());
+                }
                 if be.renderer.is_some() {
                     has.push("`machine.sync()`, which sends clients its state again for its renderer (`sendBlockUpdated`)".to_string());
                 }
@@ -1391,6 +1412,16 @@ pub const BLOCK_ENTITIES: &[(&str, &str, bool)] = &[
             .join(", "),
     );
     r.push_str("];\n");
+    r.push_str("\n/// Block entities whose tick reaches every place of the 3×3×3 around it (`machine.at`).\npub const AROUND: &[&str] = &[");
+    r.push_str(
+        &entities
+            .iter()
+            .filter(|b| b.around)
+            .map(|b| format!("{:?}", b.id))
+            .collect::<Vec<_>>()
+            .join(", "),
+    );
+    r.push_str("];\n");
     r.push_str("\n/// Block entities whose tick reaches the ones two steps away along an axis (`machine.at`).\npub const FAR: &[&str] = &[");
     r.push_str(
         &entities
@@ -1414,7 +1445,7 @@ pub const BLOCK_ENTITIES: &[(&str, &str, bool)] = &[
                 ty = be.rust
             );
         }
-        r.push_str("\n/// Draws block entity `id`: `get` reads what the server sent of its state.\npub fn render_block_entity(\n    id: &str,\n    get: impl Fn(&str) -> Option<Saved>,\n    frame: &Frame,\n    draw: &mut Draw,\n) {\n    match id {\n");
+        r.push_str("\n/// Draws block entity `id`: `get` reads what the server sent of its state.\npub fn render_block_entity(\n    id: &str,\n    get: impl Fn(&str) -> Option<Saved>,\n    frame: &Frame,\n    draw: &mut Draw,\n) {\n    RENDER_TIME.with(|t| t.set(frame.time()));\n    match id {\n");
         for be in &drawn {
             let _ = writeln!(
                 r,
@@ -1655,6 +1686,19 @@ pub fn storage_text(be: &BlockEntity) -> String {
 /// renderer is plain code (and testable); the `block_entity_submit` helper draws
 /// them with Horizon's `BlockEntityDraw`.
 pub const DRAW_TYPES: &str = r#"
+thread_local! {
+    // The time of the frame being drawn: see `render_time`.
+    static RENDER_TIME: std::cell::Cell<f32> = const { std::cell::Cell::new(0.0) };
+}
+
+/// The time of the frame being drawn, in ticks and smooth between them (`Frame::time`),
+/// for a function called while drawing that isn't handed the frame: a helper that
+/// works out a shaft's angle. What Java reads from a clock of the client's own
+/// (`AnimationTickHolder.getRenderTime(level)`, `level.getGameTime() + partialTicks`).
+pub fn render_time() -> f32 {
+    RENDER_TIME.with(|t| t.get())
+}
+
 /// A frame of a block entity drawn on the client.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Frame {

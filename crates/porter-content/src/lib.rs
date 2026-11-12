@@ -3144,36 +3144,77 @@ fn sound_block(sound_type: &str) -> Option<&'static str> {
     })
 }
 
+/// Whether vanilla has an item `name` (`honey_bottle`), from `tools/vanilla_items.py`.
+fn is_vanilla_item(name: &str) -> bool {
+    static ITEMS: std::sync::OnceLock<BTreeSet<String>> = std::sync::OnceLock::new();
+    ITEMS
+        .get_or_init(|| {
+            serde_json::from_str(include_str!("../data/vanilla-items.json")).unwrap_or_default()
+        })
+        .contains(name)
+}
+
+/// `text` without each call that starts with `call` (`.tag(`), arguments and all.
+fn without_calls(text: &str, call: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(at) = rest.find(call) {
+        out.push_str(&rest[..at]);
+        let args = &rest[at + call.len()..];
+        let mut depth = 1;
+        let end = args
+            .char_indices()
+            .find(|(_, c)| {
+                match c {
+                    '(' => depth += 1,
+                    ')' => depth -= 1,
+                    _ => {}
+                }
+                depth == 0
+            })
+            .map_or(args.len(), |(i, _)| i + 1);
+        rest = &args[end..];
+    }
+    out.push_str(rest);
+    out
+}
+
 /// An item file from the registration's `Item.Properties`.
 fn item_json(args: &str) -> serde_json::Value {
     // A vanilla item it copies (`Items.HONEY_BOTTLE`), not one it leaves behind
     // (`.craftRemainder(Items.BOWL)`) or is mended with.
-    let own = args
+    // Nor a tag it is put in: `.tag(Items.TOOLS_WRENCH)` names NeoForge's `Tags.Items`,
+    // and `minecraft:tools_wrench` is no item (the item would show as nothing).
+    let own = without_calls(args, ".tag(")
+        .replace("Tags.Items.", "Tags.")
         .replace(".craftRemainder(Items.", ".craftRemainder(")
         .replace("usingConvertsTo(Items.", "usingConvertsTo(")
         .replace(".repairable(Items.", ".repairable(");
-    let template = if let Some(item) = vanilla_constant(&own, "Items.") {
-        format!("minecraft:{item}")
-    } else if args.contains(".sword(") {
-        "minecraft:iron_sword".into()
-    } else if args.contains(".pickaxe(") {
-        "minecraft:iron_pickaxe".into()
-    } else if args.contains(".axe(") {
-        "minecraft:iron_axe".into()
-    } else if args.contains(".shovel(") {
-        "minecraft:iron_shovel".into()
-    } else if args.contains(".hoe(") {
-        "minecraft:iron_hoe".into()
-    } else if args.contains(".food(")
-        || args.contains("foodItem(")
-        || args.contains("FoodValues.")
-        || args.contains("Foods.")
-    {
-        // Food, however the mod builds it (Farmer's Delight's `foodItem(FoodValues.CABBAGE)`).
-        "minecraft:bread".into()
-    } else {
-        "minecraft:iron_ingot".into()
-    };
+    // (Only a name vanilla has: a helper handed a tag, `taggedIngredient("raw_zinc",
+    // Items.RAW_MATERIALS)`, names no item either.)
+    let template =
+        if let Some(item) = vanilla_constant(&own, "Items.").filter(|i| is_vanilla_item(i)) {
+            format!("minecraft:{item}")
+        } else if args.contains(".sword(") {
+            "minecraft:iron_sword".into()
+        } else if args.contains(".pickaxe(") {
+            "minecraft:iron_pickaxe".into()
+        } else if args.contains(".axe(") {
+            "minecraft:iron_axe".into()
+        } else if args.contains(".shovel(") {
+            "minecraft:iron_shovel".into()
+        } else if args.contains(".hoe(") {
+            "minecraft:iron_hoe".into()
+        } else if args.contains(".food(")
+            || args.contains("foodItem(")
+            || args.contains("FoodValues.")
+            || args.contains("Foods.")
+        {
+            // Food, however the mod builds it (Farmer's Delight's `foodItem(FoodValues.CABBAGE)`).
+            "minecraft:bread".into()
+        } else {
+            "minecraft:iron_ingot".into()
+        };
     let mut json = serde_json::json!({ "template": template });
     if let Some(n) = call_numbers(args, ".stacksTo(").and_then(|v| v.first().copied()) {
         json["max_stack_size"] = (n.clamp(1.0, 99.0) as u32).into();
@@ -3458,6 +3499,27 @@ mod tests {
             "m:w"
         );
         assert!(turn_facing(&serde_json::json!({ "variants": { "": {} } }), 1).is_none());
+    }
+
+    #[test]
+    fn a_tag_an_item_is_put_in_is_not_its_template() {
+        // `Items` here is the loader's tag class: the wrench isn't a copy of an item
+        // called `tools_wrench`.
+        let wrench = item_json(
+            "\"wrench\", WrenchItem::new).properties(p -> p.stacksTo(1)).tag(Items.TOOLS_WRENCH)",
+        );
+        assert_eq!(wrench["template"], "minecraft:iron_ingot");
+        let nugget = item_json(
+            "\"zinc_nugget\", Item::new).tag(Tags.Items.NUGGETS, forgeItemTag(\"nuggets/zinc\"))",
+        );
+        assert_eq!(nugget["template"], "minecraft:iron_ingot");
+        // An item it copies is still found.
+        let honey =
+            item_json("\"syrup\", () -> new Item(copy(Items.HONEY_BOTTLE))).tag(Items.FOODS)");
+        assert_eq!(honey["template"], "minecraft:honey_bottle");
+        // A tag handed to a helper of the mod, with no `.tag(` to see.
+        let raw = item_json("\"raw_zinc\", CommonMetal.ZINC.rawOres, Items.RAW_MATERIALS");
+        assert_eq!(raw["template"], "minecraft:iron_ingot");
     }
 
     #[test]

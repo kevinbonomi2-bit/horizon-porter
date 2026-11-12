@@ -161,6 +161,57 @@ pub struct Behaviour {
 
 /// The classes of `blocks` and `items` (the content mod's) whose Java, or a
 /// superclass of the mod's own, defines a method of each kind.
+/// The items of blocks that have an item class of the mod's own, each under its block's
+/// name: Registrate's `.item(ClipboardBlockItem::new)` in the block's registration, or an
+/// item registered under the block's name (`new ClipboardBlockItem(CLIPBOARD.get(),
+/// props)`). Their `use` and `useOn` are ported as any item's are.
+pub fn block_items(scan: &ModScan, blocks: &[porter_content::Block]) -> Vec<porter_content::Item> {
+    let class = |simple: &str| -> Option<String> {
+        let mut found = scan
+            .classes
+            .iter()
+            .filter(|c| c.name.rsplit(['.', '$']).next() == Some(simple));
+        match (found.next(), found.next()) {
+            (Some(c), None) => Some(c.name.clone()),
+            _ => None,
+        }
+    };
+    let mut out: Vec<porter_content::Item> = Vec::new();
+    for block in blocks.iter().filter(|b| b.item) {
+        // Its own registration names the item's class, or an item registration of its
+        // name does.
+        let from_block = scan
+            .registrations
+            .iter()
+            .filter(|r| r.registry == "block" && r.id.as_deref() == Some(block.name.as_str()))
+            .find_map(|r| {
+                let args: String = r.args.split_whitespace().collect();
+                let at = args.find(".item(")?;
+                let name: String = args[at + 6..]
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                    .collect();
+                args[at + 6 + name.len()..]
+                    .starts_with("::new")
+                    .then_some(name)
+            });
+        let from_item = scan
+            .registrations
+            .iter()
+            .filter(|r| r.registry == "item" && r.id.as_deref() == Some(block.name.as_str()))
+            .find_map(|r| r.creates.clone());
+        let Some(found) = from_block.or(from_item).and_then(|n| class(&n)) else {
+            continue;
+        };
+        out.push(porter_content::Item {
+            name: block.name.clone(),
+            json: serde_json::Value::Null,
+            class: Some(found),
+        });
+    }
+    out
+}
+
 pub fn find(
     scan: &ModScan,
     ns: &str,

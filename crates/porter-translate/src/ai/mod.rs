@@ -305,7 +305,9 @@ keep it in `state`, drop it when that neighbour no longer gives it, and let the 
 Keep which neighbour gave it too (in the field the Java keeps its source in, where `state` has one), and take nothing \
 from a neighbour whose own came from this block: two blocks would keep each other going after their source is gone. A \
 change then travels one block a tick instead of at once: say so in a comment, and write no `// Missing:` note for the \
-walk.";
+walk. Where the Java's walk also takes places that aren't beside the block (the diagonals a cogwheel meshes over: \
+`addPropagationLocations`, a `BlockPos.betweenClosed` over the cube around it) and this function's comment says \
+`machine.at(pos)` reaches them, go over those places too, each `machine.at(pos)` taken as a neighbour is.";
 
 /// Whether a function ported at reach `at`, whose port says `notes` were out of reach,
 /// is worth porting again now.
@@ -486,8 +488,18 @@ pub fn translate(
     if opts.refresh {
         work.extend(outdated(dir)?);
     }
+    // What `--only` leaves out, kept for the shared functions a ported one calls.
+    let mut rest: Vec<Unit> = Vec::new();
     if let Some(only) = &opts.only {
-        work.retain(|u| u.function.contains(only.as_str()));
+        let (wanted, others) = work.into_iter().partition(|u| {
+            // (Several, with commas between: `tick_motor,render_motor`.)
+            only.split(',')
+                .map(str::trim)
+                .filter(|o| !o.is_empty())
+                .any(|o| u.function.contains(o))
+        });
+        work = wanted;
+        rest = others;
     }
     if let Some(limit) = opts.limit {
         work.truncate(limit);
@@ -506,10 +518,13 @@ pub fn translate(
 
     let mut state = State::load(dir);
     let mut out = Vec::new();
-    for (n, unit) in work.iter().enumerate() {
+    let mut n = 0;
+    while n < work.len() {
+        let unit = &work[n].clone();
+        n += 1;
         progress(&format!(
             "[{}/{}] {} ({})",
-            n + 1,
+            n,
             work.len(),
             unit.function,
             unit.file
@@ -533,6 +548,26 @@ pub fn translate(
         let outcome = translate_one(dir, unit, &prompt, model, opts, cargo, &mut progress);
         progress(&format!("  {}", describe(&outcome.status)));
         let stop = matches!(outcome.status, Status::NoAnswer(_));
+        // A shared function of the mod it calls that is still to port (a question to a
+        // block, a helper over block entities) answers nothing until it is: ported too,
+        // though `--only` didn't name it.
+        if matches!(outcome.status, Status::Ported | Status::Unchecked) && !rest.is_empty() {
+            let file = fs::read_to_string(dir.join(&unit.file)).unwrap_or_default();
+            let body = units::function_source(&file, &unit.function).unwrap_or_default();
+            let (called, left): (Vec<Unit>, Vec<Unit>) = rest.into_iter().partition(|u| {
+                u.file == unit.file
+                    && crate::questions::is_question(&file, &u.function)
+                    && body.contains(&format!("{}(", u.function))
+            });
+            rest = left;
+            for u in called {
+                progress(&format!(
+                    "  it calls `{}`, which isn't ported yet: porting that too",
+                    u.function
+                ));
+                work.push(u);
+            }
+        }
         state.record(&outcome, &model.name());
         state.save(dir)?;
         out.push(outcome);
@@ -1107,7 +1142,20 @@ fn prompt(dir: &Path, scan: &ModScan, unit: &Unit) -> Result<Prompt> {
                      own table of what each class answers:\n{questions}"
                 );
             }
-            let hints = equivalents(&java_text, &stub);
+            let mut hints = equivalents(&java_text, &stub);
+            // A function called while drawing that isn't handed the frame has its clock.
+            if file.contains("pub fn render_time() -> f32")
+                && !stub.contains("frame: &Frame")
+                && ["getRenderTime(", "getGameTime()", "getTicks("]
+                    .iter()
+                    .any(|c| java_text.contains(c))
+            {
+                hints.push_str(
+                    "- the client's clock while drawing (`AnimationTickHolder.getRenderTime(level)`, \
+                     `level.getGameTime() + partialTicks`) is `render_time()`, in ticks and smooth between \
+                     them: this function isn't handed the frame, and reads its time there\n",
+                );
+            }
             if !hints.is_empty() {
                 let _ = writeln!(
                     p,
