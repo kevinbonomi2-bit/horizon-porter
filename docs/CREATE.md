@@ -235,8 +235,7 @@ above and reads what the block entities hold (29 checks).
 | --- | --- |
 | The port grown over the last days | 27 of 29: no diagonal cogwheels yet |
 | The fresh port, as first translated | 24 of 29 |
-| After `translate --refresh` found and redid five functions by itself | 28 of 29 |
-| With the press's tick taken from the earlier port | 29 of 29 |
+| After `translate --refresh` found and redid five functions by itself, and with the press's tick taken from the earlier port | 29 of 29 |
 
 What the fresh port showed, each of it a thing a first-time user would have hit:
 
