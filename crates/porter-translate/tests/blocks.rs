@@ -434,7 +434,27 @@ fn ports_a_tick_several_block_entities_share_once() {
         "/// TODO: port the tick of `net.stamp.StampBlockEntity`.\npub fn stamp_block_entity_tick(pos: [i32; 3], base: &mut StampBlockEntityBase, me: &Neighbour, machine: &mut Machine<'_>) -> Vec<&'static str> {"
     ));
     // It names what classes below override, which its tick can only report.
-    assert!(runtime.contains("/// Classes below override these methods of them: `onSecond`."));
+    assert!(
+        runtime.contains("/// Classes below override these methods of them: `onSecond`."),
+        "{runtime}"
+    );
+    assert!(
+        runtime
+            .contains("has every class's answer: `pace(..)` is `stamp_block_entity_pace(me, ..)`."),
+        "{runtime}"
+    );
+    // One of them answers, and the shared tick calls it on the block entity it runs for:
+    // a question to that block entity, ported once, with what each class says.
+    assert!(
+        runtime.contains("pub fn stamp_block_entity_pace(be: &Neighbour) -> i32 {"),
+        "{runtime}"
+    );
+    assert!(
+        runtime.contains(
+            "/// - `PressBlockEntity` (`stamp:press`): `return stamping.running ? 2 : 1;`"
+        )
+    );
+    assert!(runtime.contains("/// - `StampBlockEntity` (`stamp:tray`): `return 1;`"));
     assert!(runtime.contains("by name (`\"onSecond\"`)"));
     // Each state gives that part and takes it back.
     for ty in ["Press", "Tray"] {
@@ -456,6 +476,33 @@ fn ports_a_tick_several_block_entities_share_once() {
     assert!(runtime.contains(
         "/// TODO: port the tick of `net.stamp.TrayBlockEntity` (the classes above it are `stamp_block_entity_tick`) and what it keeps in `net.stamp.TrayBehaviour`.\npub fn tick_tray("
     ));
+    // The press's own class overrides `onSecond` (and `pace`, which is a question): its
+    // tick is told so by name. The tray's overrides nothing.
+    assert!(
+        runtime.contains(
+            "/// This block entity's own classes override these of them: `onSecond`. Each is to be done here when\n/// `called` names it, whatever else the tick does."
+        ),
+        "{runtime}"
+    );
+    assert!(
+        runtime.contains(
+            "This block entity's own classes override none of the methods that tick calls."
+        )
+    );
+    // A tick's view of its own block entity carries the block entity's id, which is what
+    // tells the classes apart when a question is asked of it.
+    assert!(
+        runtime.contains(
+            "            entity: BLOCK_ENTITIES
+                .iter()
+                .find(|(block, _, _)| *block == self.block)
+                .map(|(_, entity, _)| entity.to_string()),"
+        ),
+        "{runtime}"
+    );
+    // A position kept as text has one way to be written and read.
+    assert!(runtime.contains("pub fn pos_text(pos: [i32; 3]) -> String {"));
+    assert!(runtime.contains("pub fn text_pos(text: &str) -> Option<[i32; 3]> {"));
     // The generated tests check that round trip too.
     assert!(runtime.contains("fn press_gives_and_takes_its_shared_part() {"));
 }

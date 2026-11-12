@@ -194,15 +194,41 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
     // Blocks, items and resources: a content mod. Block entities: native hooks.
     let ns = content::namespace(&java_id, &id).to_string();
     let mut block_entities = block_entity::find(scan, &ns);
-    // Its own questions to a block, where it has block entities to ask them.
+    let mut machines = machine::find(scan, &ns, &id, &block_entities);
+    // The ticks several block entities share, ported once each.
+    let mut shared_ticks = block_entity::shared_ticks(scan, &mut block_entities, &machines);
+    // Its own questions to a block, where it has block entities to ask them (and what a
+    // shared tick asks of the block entity it runs for).
     let questions = if block_entities.is_empty() {
         Vec::new()
     } else {
-        crate::questions::find(scan, &ns, &block_entities)
+        crate::questions::find(scan, &ns, &block_entities, &shared_ticks)
     };
-    let mut machines = machine::find(scan, &ns, &id, &block_entities);
-    // The ticks several block entities share, ported once each.
-    let shared_ticks = block_entity::shared_ticks(scan, &mut block_entities, &machines);
+    // A shared tick is told which of the methods below it are such questions: those it
+    // asks, the others it reports by name.
+    for t in &mut shared_ticks {
+        t.answered = t
+            .asks
+            .iter()
+            .filter_map(|m| {
+                questions
+                    .iter()
+                    .find(|q| q.asks == crate::questions::Asks::Entity && q.method == *m)
+                    .map(|q| (m.clone(), q.rust.clone()))
+            })
+            .collect();
+        t.overridden
+            .retain(|m| !t.answered.iter().any(|(java, _)| java == m));
+    }
+    // What a block entity's own classes override and a question answers is asked where
+    // it is needed: its tick does only the overrides that do something.
+    for be in &mut block_entities {
+        be.overrides.retain(|m| {
+            !questions
+                .iter()
+                .any(|q| q.asks == crate::questions::Asks::Entity && q.method == *m)
+        });
+    }
     let recipe_types = machine::recipe_types(scan, &ns);
     let machine_blocks: BTreeMap<String, String> = machines
         .iter()

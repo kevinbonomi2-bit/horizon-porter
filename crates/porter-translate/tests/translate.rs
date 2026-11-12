@@ -43,6 +43,7 @@ impl Model for Scripted {
             text,
             input_tokens: 100,
             output_tokens: 10,
+            ..Reply::default()
         })
     }
 }
@@ -124,6 +125,58 @@ fn ports_a_block_entity_tick_and_fixes_compile_errors() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// An answer that gives up: it compiles and passes every test the stub passed.
+const GAVE_UP: &str = "```rust
+pub fn tick_crank(pos: [i32; 3], state: &mut Crank) {
+    let _ = (pos, state);
+    // Missing: the crank's turning. None of it has been ported yet, so this does nothing.
+}
+```";
+
+#[test]
+fn an_answer_that_does_nothing_is_sent_back_and_never_replaces_a_port() {
+    let (dir, scan) = ported("neoforge-demo", "gave-up");
+    let opts = Options {
+        only: Some("tick_crank".into()),
+        ..Default::default()
+    };
+    // Sent back once, with what is wrong with it; the port that follows stays.
+    let model = Scripted::new(&[GAVE_UP, GOOD_TICK]);
+    let out = ai::translate(&dir, &scan, &model, &opts, |_| {}).unwrap();
+    assert_eq!(out[0].status, Status::Ported);
+    assert_eq!(out[0].attempts, 2);
+    assert!(model.prompts.borrow()[1].contains("Your last answer does nothing"));
+    let ported = std::fs::read_to_string(dir.join("mixins/demo/runtime.rs")).unwrap();
+    assert!(ported.contains("state.turns += 1;"));
+
+    // Ported again (`--refresh`), by a model that gives up both times: the function
+    // is left as it was, with the port it had.
+    let marked = ported.replacen(
+        "/// Ported by horizon-porter translate (scripted): the tick of",
+        "/// Outdated: ported before horizon-porter could do more here.
+/// Ported by horizon-porter translate (scripted): the tick of",
+        1,
+    );
+    assert_ne!(marked, ported);
+    std::fs::write(dir.join("mixins/demo/runtime.rs"), &marked).unwrap();
+    let again = Options {
+        refresh: true,
+        ..opts.clone()
+    };
+    let model = Scripted::new(&[GAVE_UP, GAVE_UP, GOOD_TICK]);
+    let out = ai::translate(&dir, &scan, &model, &again, |_| {}).unwrap();
+    assert_eq!(out.len(), 1, "{out:?}");
+    assert!(
+        matches!(&out[0].status, Status::Failed(why) if why.contains("did nothing")),
+        "{:?}",
+        out[0].status
+    );
+    assert_eq!(model.prompts.borrow().len(), 2);
+    let kept = std::fs::read_to_string(dir.join("mixins/demo/runtime.rs")).unwrap();
+    assert_eq!(kept, marked);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 #[test]
 fn a_tick_called_by_another_block_entity_is_shown_the_caller_and_config_defaults() {
     let (dir, scan) = ported("neoforge-press-demo", "called");
@@ -132,12 +185,21 @@ fn a_tick_called_by_another_block_entity_is_shown_the_caller_and_config_defaults
         "```rust
 pub fn tick_press(pos: [i32; 3], state: &mut Press, machine: &mut Machine<'_>) {
     let _ = (pos, machine.properties.iter().find(|(k, _)| k == \"horizontal_facing\"));
+    let me = machine.me(pos, &state.save());
+    let mut base = state.stamp_block_entity_base();
+    let called = stamp_block_entity_tick(pos, &mut base, &me, machine);
+    state.set_stamp_block_entity_base(base);
+    let _ = called;
     state.stamping_ticks += 1;
 }
 ```",
         "```rust
 pub fn tick_press(pos: [i32; 3], state: &mut Press, machine: &mut Machine<'_>) {
-    let _ = (pos, machine);
+    let me = machine.me(pos, &state.save());
+    let mut base = state.stamp_block_entity_base();
+    let called = stamp_block_entity_tick(pos, &mut base, &me, machine);
+    state.set_stamp_block_entity_base(base);
+    let _ = called;
     state.stamping_ticks += 1;
 }
 ```",

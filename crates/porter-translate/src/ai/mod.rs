@@ -12,6 +12,7 @@
 //! one you wrote or edited, and it can stop and resume at any point: each result
 //! is saved to `.porter/translate.json` as it comes.
 
+mod java;
 pub mod model;
 pub mod units;
 
@@ -41,6 +42,9 @@ pub struct Options {
     /// Also port again the functions `port --force` marked outdated, and those whose
     /// port said something was out of reach with an older horizon-porter.
     pub refresh: bool,
+    /// In a dry run: ask the model how many tokens each prompt is (the Claude API
+    /// counts for free) rather than working it out from its length.
+    pub count: bool,
 }
 
 impl Default for Options {
@@ -51,6 +55,7 @@ impl Default for Options {
             attempts: 3,
             dry_run: false,
             refresh: false,
+            count: false,
         }
     }
 }
@@ -67,8 +72,15 @@ pub enum Status {
     /// The model gave no answer (no key, no connection, Ollama not running): the
     /// translation stopped there, and this function and the rest are left as they were.
     NoAnswer(String),
-    /// A dry run: what would be sent.
-    Planned { prompt_chars: usize },
+    /// A dry run: what would be sent. Of its characters, `shared_chars` are the part
+    /// functions of its kind share (the same text has the same `shared_key`), which is
+    /// read from the cache after the first of them; `tokens` when the model counted.
+    Planned {
+        prompt_chars: usize,
+        shared_chars: usize,
+        shared_key: u64,
+        tokens: Option<u64>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -76,8 +88,13 @@ pub struct Outcome {
     pub unit: Unit,
     pub status: Status,
     pub attempts: usize,
+    /// Every input token of every try, the cached ones too.
     pub input_tokens: u64,
     pub output_tokens: u64,
+    /// Of the input, what was read from the cache (a tenth of the price).
+    pub cached_tokens: u64,
+    /// What the tries cost, where the model's prices are known.
+    pub dollars: Option<f64>,
 }
 
 /// What a ported function can reach, by version: each time runtime.rs gives ported code
@@ -293,7 +310,10 @@ this block entity's own state (not started: the first; started: the second); (3)
 through what it is handed (`handler.handleProcessingOnItem(..)`: read the caller's Java for what it does with the \
 result) is `machine.set_item_at(pos, slot, stack)` for its item slots and `machine.set_at(pos, key, value)` for its \
 saved values. A flag the caller keeps on its own thing that this module has no place for (an item's `locked`) is left \
-out with a `// Missing:` note; the work itself is not.";
+out with a `// Missing:` note; the work itself is not. This part runs every tick, whatever the rest of the tick did: \
+write each Java method you port into this function (a behaviour's `tick()`, each handler) as a nested `fn` of its own \
+and call it, so that a `return` of that method leaves the method and not the tick. A `return` in the tick's own body \
+before this part skips it.";
 
 /// For a tick that sees its neighbours: how to port a walk over a whole network.
 const NETWORK_STEP: &str = "This tick sees the six blocks beside it (`machine.neighbour(side)`: each one's block, \
@@ -459,21 +479,100 @@ pub fn plan(dir: &Path, scan: &ModScan, opts: &Options) -> Result<Vec<Outcome>> 
     )
 }
 
-/// Input tokens for one try of each planned function (about four characters each).
-pub fn planned_tokens(plan: &[Outcome]) -> usize {
-    plan.iter()
-        .map(|o| match o.status {
-            Status::Planned { prompt_chars } => prompt_chars / 4,
-            _ => 0,
-        })
-        .sum()
+/// Characters to a token, about, in a prompt: a mod's Java and the Rust around it are
+/// short names and punctuation, and come to fewer characters a token than prose does
+/// (measured on Claude Haiku 5.5 over Create's prompts).
+pub const CHARS_PER_TOKEN: f64 = 2.3;
+
+/// Tokens that come back for a function, about: its thinking and its answer (measured
+/// over Create's first hundred).
+pub const OUTPUT_PER_TRY: u64 = 4_000;
+
+/// About how many tokens `chars` characters of a prompt are.
+pub fn tokens_of(chars: usize) -> u64 {
+    (chars as f64 / CHARS_PER_TOKEN).round() as u64
 }
 
-/// Dollars for one try of each planned function on `model`, when its price is known
-/// (about a thousand tokens come back per function).
+/// What one try of each planned function comes to.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Estimate {
+    pub functions: usize,
+    /// Input tokens, all of them.
+    pub tokens: u64,
+    /// Of them, those read from the cache: the part functions of a kind share, after
+    /// the first of the kind.
+    pub cached: u64,
+    /// Functions whose prompt is past `model::LONG_PROMPT`, where Claude Haiku 5.5
+    /// costs five times as much a token.
+    pub long: usize,
+    /// Whether the model counted the tokens, or they are worked out from lengths.
+    pub counted: bool,
+    /// Dollars on the model asked about, when its prices are known.
+    pub dollars: Option<f64>,
+}
+
+/// What `plan` would send, and what that costs on `model`: each prompt at the prices
+/// its own length picks, its shared part read from the cache once a function before it
+/// has written it.
+pub fn estimate(plan: &[Outcome], model: &str) -> Estimate {
+    let mut est = Estimate {
+        counted: !plan.is_empty(),
+        ..Estimate::default()
+    };
+    let mut written = std::collections::BTreeSet::new();
+    let mut dollars = 0.0;
+    let mut priced = true;
+    for o in plan {
+        let Status::Planned {
+            prompt_chars,
+            shared_chars,
+            shared_key,
+            tokens,
+        } = o.status
+        else {
+            continue;
+        };
+        est.functions += 1;
+        est.counted &= tokens.is_some();
+        let prompt = tokens.unwrap_or_else(|| tokens_of(prompt_chars));
+        let shared = if prompt_chars == 0 {
+            0
+        } else {
+            (prompt as f64 * shared_chars as f64 / prompt_chars as f64) as u64
+        };
+        let mut usage = model::Usage {
+            input: prompt - shared,
+            output: OUTPUT_PER_TRY,
+            ..model::Usage::default()
+        };
+        // (Too short a shared part isn't cached at all.)
+        if shared < 512 {
+            usage.input += shared;
+        } else if written.insert(shared_key) {
+            usage.cache_write = shared;
+        } else {
+            usage.cache_read = shared;
+        }
+        est.tokens += prompt;
+        est.cached += usage.cache_read;
+        est.long += usize::from(prompt > model::LONG_PROMPT);
+        match usage.dollars(model) {
+            Some(d) => dollars += d,
+            None => priced = false,
+        }
+    }
+    est.dollars = (priced && est.functions > 0).then_some(dollars);
+    est
+}
+
+/// Input tokens for one try of each planned function.
+pub fn planned_tokens(plan: &[Outcome]) -> usize {
+    estimate(plan, "").tokens as usize
+}
+
+/// Dollars for one try of each planned function on `model`, when its price is known.
 pub fn planned_dollars(plan: &[Outcome], model: &str) -> Option<f64> {
-    let (input, output) = model::price(model)?;
-    Some(planned_tokens(plan) as f64 / 1e6 * input + (plan.len() * 1000) as f64 / 1e6 * output)
+    estimate(plan, model).dollars
 }
 
 /// Translates the functions left in `dir` (a folder `port` wrote from `scan`'s mod)
@@ -535,19 +634,34 @@ pub fn translate(
             progress(&format!("  {m}"));
         }
         if opts.dry_run {
+            let tokens = if opts.count {
+                model.count(SYSTEM, &prompt.shared, &prompt.text)?
+            } else {
+                None
+            };
+            let mut key = std::collections::hash_map::DefaultHasher::new();
+            std::hash::Hash::hash(&prompt.shared, &mut key);
             out.push(Outcome {
                 unit: unit.clone(),
                 status: Status::Planned {
                     prompt_chars: prompt.len(),
+                    shared_chars: prompt.shared.len(),
+                    shared_key: std::hash::Hasher::finish(&key),
+                    tokens,
                 },
                 attempts: 0,
                 input_tokens: 0,
                 output_tokens: 0,
+                cached_tokens: 0,
+                dollars: None,
             });
             continue;
         }
         let outcome = translate_one(dir, unit, &prompt, model, opts, cargo, &mut progress);
         progress(&format!("  {}", describe(&outcome.status)));
+        if let Some(cost) = spent(&outcome) {
+            progress(&format!("  {cost}"));
+        }
         let stop = matches!(outcome.status, Status::NoAnswer(_));
         // A function of the mod it calls that is still to port (a question to a block, a
         // helper over block entities, a tick it shares with others) does nothing until it
@@ -578,6 +692,35 @@ pub fn translate(
     Ok(out)
 }
 
+/// What a function's tries took, where the model says: `61,204 tokens in (23,000 of
+/// them from the cache), 3,410 out: $0.008`.
+fn spent(o: &Outcome) -> Option<String> {
+    let thousands = |n: u64| {
+        let digits = n.to_string();
+        let mut out = String::new();
+        for (i, c) in digits.chars().enumerate() {
+            if i > 0 && (digits.len() - i).is_multiple_of(3) {
+                out.push(',');
+            }
+            out.push(c);
+        }
+        out
+    };
+    (o.input_tokens > 0).then(|| {
+        format!(
+            "{} tokens in{}, {} out{}",
+            thousands(o.input_tokens),
+            if o.cached_tokens > 0 {
+                format!(" ({} of them from the cache)", thousands(o.cached_tokens))
+            } else {
+                String::new()
+            },
+            thousands(o.output_tokens),
+            o.dollars.map_or(String::new(), |d| format!(": ${d:.3}"))
+        )
+    })
+}
+
 /// A status in a word or two, for progress and summaries.
 pub fn describe(status: &Status) -> String {
     match status {
@@ -585,7 +728,7 @@ pub fn describe(status: &Status) -> String {
         Status::Unchecked => "ported: `horizon-porter build` checks it".into(),
         Status::Failed(why) => format!("left as it was: {why}"),
         Status::NoAnswer(why) => format!("stopped: the model gave no answer: {why}"),
-        Status::Planned { prompt_chars } => format!("would send {prompt_chars} characters"),
+        Status::Planned { prompt_chars, .. } => format!("would send {prompt_chars} characters"),
     }
 }
 
@@ -605,6 +748,8 @@ fn translate_one(
         attempts: 0,
         input_tokens: 0,
         output_tokens: 0,
+        cached_tokens: 0,
+        dollars: None,
     };
     let original = match fs::read_to_string(&path) {
         Ok(s) => s,
@@ -619,6 +764,11 @@ fn translate_one(
     };
     let mut feedback = String::new();
     let mut asked_where = false;
+    let mut asked_which = false;
+    let mut asked_format = false;
+    let mut asked_returns = false;
+    let mut asked_shared = false;
+    let mut gave_up = false;
     for attempt in 1..=opts.attempts.max(1) {
         outcome.attempts = attempt;
         let ask = if feedback.is_empty() {
@@ -642,6 +792,15 @@ fn translate_one(
         };
         outcome.input_tokens += reply.input_tokens;
         outcome.output_tokens += reply.output_tokens;
+        outcome.cached_tokens += reply.cached_tokens;
+        if let Some(d) = reply.dollars {
+            outcome.dollars = Some(outcome.dollars.unwrap_or(0.0) + d);
+        }
+        // Every try at an answer ran out of room: this function's alone, the others go on.
+        if let Some(why) = reply.cut_off {
+            outcome.status = Status::Failed(why);
+            return outcome;
+        }
         let Some(function) = rust_function(&reply.text, &unit.function) else {
             feedback = format!(
                 "Your last answer had no ```rust block with `fn {}`. Answer with the whole function in one ```rust block.",
@@ -653,6 +812,74 @@ fn translate_one(
             feedback = format!(
                 "Your last answer changed the function's signature. Keep it exactly:\n```rust\n{}\n```\nYour answer was:\n```rust\n{function}\n```",
                 units::signature(&stub)
+            );
+            continue;
+        }
+        if !gave_up && does_nothing(&function) {
+            gave_up = true;
+            feedback = format!(
+                "Your last answer does nothing: its body is only a note that the Java isn't ported. Nothing else \
+                 ports it; this function is where its Java goes. Write what the Java does through what the function \
+                 is given, the main path first and in full, and keep `// Missing:` for the single things it has no \
+                 way to reach. Your answer was:\n```rust\n{function}\n```"
+            );
+            continue;
+        }
+        if does_nothing(&function) {
+            // Twice: left as it was (a port from before stays), not replaced by nothing.
+            outcome.status = Status::Failed(
+                "the model's answers did nothing but say the Java isn't ported".into(),
+            );
+            return outcome;
+        }
+        if !asked_which
+            && let Some((entity, block)) = takes_an_entity_for_a_block(&function, &original)
+        {
+            asked_which = true;
+            feedback = format!(
+                "Your last answer compares a block's id (`.block`) with `\"{entity}\"`, which is a block entity's \
+                 id: no block is called that (the block `{block}` has the block entity `{entity}`), so the \
+                 comparison is never true. A view's `entity` is its block entity's id \
+                 (`be.entity.as_deref() == Some(\"{entity}\")`), and a tick's own is the one its comment \
+                 names. Tell the classes apart by that. Your answer was:\n```rust\n{function}\n```"
+            );
+            continue;
+        }
+        if !asked_format
+            && original.contains("pub fn pos_text(pos: [i32; 3]) -> String {")
+            && let Some(own) = own_position_text(&function)
+        {
+            asked_format = true;
+            feedback = format!(
+                "Your last answer writes a position as text its own way (`\"{own}\"`). Every function of this \
+                 module keeps one as `x y z`: write it with `pos_text(pos)` and read it with \
+                 `text_pos(&text)`, or a block entity's `source` saved here is read as none by the rest. If \
+                 that text is not a position kept in a block entity, leave it. Your answer was:\n```rust\n{function}\n```"
+            );
+            continue;
+        }
+        if !asked_shared && let Some(shared) = skips_its_shared_tick(&unit.comment, &function) {
+            asked_shared = true;
+            feedback = format!(
+                "Your last answer never calls `{shared}`. The comment names it: the tick of the classes above is \
+                 ported once, as that function, and a tick that doesn't call it leaves all of their work out (the \
+                 block entity takes no speed, counts nothing). Call it the way the comment shows, where the Java \
+                 calls `super.tick()`, and port none of those classes' tick yourself. Your answer was:\n```rust\n{function}\n```"
+            );
+            continue;
+        }
+        if !asked_returns
+            && unit.comment.contains("call code this one gave")
+            && returns_early(&function)
+        {
+            asked_returns = true;
+            feedback = format!(
+                "Your last answer has a `return` in the tick's own body (outside any nested `fn`). In Java that \
+                 `return` leaves one method (a behaviour's `tick()`); here it leaves the whole tick, and whatever \
+                 comes after it never runs for that tick: the work other block entities call into this one for \
+                 has to run every tick. Put each Java method in a nested `fn` (its `return`s stay its own) and \
+                 call them one after the other from the tick's body, which then has no `return` before its last \
+                 part. Your answer was:\n```rust\n{function}\n```"
             );
             continue;
         }
@@ -762,6 +989,49 @@ fn translate_one(
         outcome.attempts
     ));
     outcome
+}
+
+/// Whether an answer gave up: a body with no statement of its own (what the stub had:
+/// `let _ = (..);`, a plain value handed back) under a note that the Java isn't
+/// ported. It compiles and passes the tests the stub passed, and ports nothing. (A
+/// function with nothing to do says no such thing: an empty Java method is ported as
+/// an empty body without a `Missing` note.)
+fn does_nothing(function: &str) -> bool {
+    let Some((_, body)) = function.split_once('{') else {
+        return false;
+    };
+    let plain = [
+        "false",
+        "true",
+        "0",
+        "0.0",
+        "1",
+        "None",
+        "Vec::new()",
+        "String::new()",
+        "Default::default()",
+        "todo!()",
+        "unimplemented!()",
+        "()",
+    ];
+    let mut noted = false;
+    for line in body.lines().map(str::trim) {
+        if line.starts_with("//") {
+            noted |= line.contains("Missing")
+                || line.to_ascii_lowercase().contains("not ported")
+                || line.to_ascii_lowercase().contains("not been ported");
+            continue;
+        }
+        let code = line
+            .trim_end_matches(';')
+            .trim_start_matches("return ")
+            .trim();
+        if line.is_empty() || line == "}" || line.starts_with("let _ =") || plain.contains(&code) {
+            continue;
+        }
+        return false;
+    }
+    noted
 }
 
 /// The comment above a translated function: the TODO line becomes a note to review it.
@@ -882,8 +1152,32 @@ impl Prompt {
     }
 }
 
-/// The prompt for one function.
+/// The longest prompt it writes when it has a choice, in tokens as `tokens_of` works
+/// them out: short of `model::LONG_PROMPT` by what that guess can be off.
+const PROMPT_ROOM: u64 = 90_000;
+
+/// The prompt for one function: with as much of the classes its Java uses as fits
+/// under the length where a token starts to cost five times as much.
 fn prompt(dir: &Path, scan: &ModScan, unit: &Unit) -> Result<Prompt> {
+    let mut budget = USED_BUDGET;
+    loop {
+        let mut out = prompt_with(dir, scan, unit, budget)?;
+        if tokens_of(out.len()) <= PROMPT_ROOM || budget == 0 {
+            if budget < USED_BUDGET {
+                out.notes.push(format!(
+                    "the classes it uses are cut to {budget} characters: with more, the prompt is past {} tokens, where a token costs five times as much",
+                    model::LONG_PROMPT
+                ));
+            }
+            return Ok(out);
+        }
+        budget = if budget > 8_000 { budget / 2 } else { 0 };
+    }
+}
+
+/// The prompt for one function, with up to `used_budget` characters of the mod's
+/// classes its Java uses.
+fn prompt_with(dir: &Path, scan: &ModScan, unit: &Unit, used_budget: usize) -> Result<Prompt> {
     let mut out = Prompt::default();
     let file = fs::read_to_string(dir.join(&unit.file))
         .with_context(|| format!("reading {}", unit.file))?;
@@ -935,17 +1229,19 @@ fn prompt(dir: &Path, scan: &ModScan, unit: &Unit) -> Result<Prompt> {
                 .push(format!("{} is in a jar: no source to send", class.name));
             continue;
         };
-        if java_chars + source.len() > JAVA_BUDGET {
+        // (Shown without its imports: nothing a port reads.)
+        let shown = java::trimmed(&source);
+        if java_chars + shown.len() > JAVA_BUDGET {
             out.notes.push(format!(
                 "{} left out: the Java for this function is past {JAVA_BUDGET} characters",
                 class.name
             ));
             continue;
         }
-        java_chars += source.len();
+        java_chars += shown.len();
         let _ = writeln!(
             p,
-            "The Java class `{}` ({}):\n\n```java\n{source}\n```\n",
+            "The Java class `{}` ({}):\n\n```java\n{shown}\n```\n",
             class.name, class.path
         );
         sent.push(class.name.clone());
@@ -1031,8 +1327,17 @@ fn prompt(dir: &Path, scan: &ModScan, unit: &Unit) -> Result<Prompt> {
     let mut used_chars = 0;
     // The Java of the classes too long to show.
     let mut unseen_java = String::new();
-    for (class, source) in used {
-        if used_chars + source.len() > USED_BUDGET || java_chars + source.len() > JAVA_BUDGET {
+    // What is shown so far calls into the next class: the code itself, and the
+    // methods of the classes before it that the code reaches.
+    let mut calling = own_java.clone();
+    let mut used: std::collections::VecDeque<(&porter_model::ClassInfo, String)> = used.into();
+    // (Classes a shown class hands work to, found as they are shown.)
+    let mut followed: Vec<String> = Vec::new();
+    while let Some((class, source)) = used.pop_front() {
+        // Of a class the code uses, the methods it reaches; the rest by their
+        // signature alone.
+        let cut = java::sliced(&java::trimmed(&source), &calling);
+        if used_chars + cut.len() > used_budget || java_chars + cut.len() > JAVA_BUDGET {
             // Too long to show (a registry class: `ModItems`, `ModSounds`): the ids of
             // its constants the code names, so `ModSounds.EGG_HATCH` isn't a guess.
             let simple = class.name.rsplit('.').next().unwrap_or(&class.name);
@@ -1058,20 +1363,58 @@ fn prompt(dir: &Path, scan: &ModScan, unit: &Unit) -> Result<Prompt> {
             }
             continue;
         }
-        used_chars += source.len();
-        java_chars += source.len();
+        used_chars += cut.len();
+        java_chars += cut.len();
         shown.push(class.name.clone());
         let _ = writeln!(
             p,
-            "A class of the mod that code uses, `{}` ({}), for what its calls do:\n\n```java\n{source}\n```\n",
-            class.name, class.path
+            "A class of the mod that code uses, `{}` ({}), for what its calls do{}:\n\n```java\n{cut}\n```\n",
+            class.name,
+            class.path,
+            if cut.contains("{ /* not shown */ }") {
+                " (the methods the code above doesn't reach are shown by their signature alone)"
+            } else {
+                ""
+            }
         );
-        java_text.push_str(&source);
+        // What the methods shown hand their work to (`BasinRecipe.apply(basin, recipe)`
+        // from a base class's `applyBasinRecipe()`) is shown next: without it the port of
+        // that call is a `Missing` note.
+        for receiver in static_receivers(&cut) {
+            let mut of_name = scan.classes.iter().filter(|c| {
+                !c.is_mixin && c.name.rsplit(['.', '$']).next() == Some(receiver.as_str())
+            });
+            let (Some(next), None) = (of_name.next(), of_name.next()) else {
+                continue;
+            };
+            if shown.contains(&next.name)
+                || followed.contains(&next.name)
+                || used.iter().any(|(c, _)| c.name == next.name)
+            {
+                continue;
+            }
+            if let Ok(text) = fs::read_to_string(Path::new(&scan.input).join(&next.path)) {
+                followed.push(next.name.clone());
+                used.push_front((next, text));
+            }
+        }
+        calling.push_str(&cut);
+        java_text.push_str(&cut);
     }
     // What the mod's blocks answer for its own interfaces (`IRotate.hasShaftTowards`),
     // where the code asks a block it meets: they are in classes this function isn't from.
     // Those the module already has a function for are named instead: ported once.
-    let questions = crate::questions::ported(&file, &java_text, &unit.function);
+    // (Its own comment counts as its Java here: a question's quotes what each class
+    // answers, and those answers call other questions: `clockwise()`.)
+    let questions = crate::questions::ported(
+        &file,
+        &format!(
+            "{java_text}
+{}",
+            unit.comment
+        ),
+        &unit.function,
+    );
     let answers = if crate::questions::is_question(&file, &unit.function) {
         // Its own comment lists them.
         String::new()
@@ -1181,11 +1524,28 @@ fn prompt(dir: &Path, scan: &ModScan, unit: &Unit) -> Result<Prompt> {
     // The Rust around it: the parts of the mod's module it can use.
     match unit.kind {
         Kind::Runtime => {
+            let (common, own) = module_context(&file, &stub, &unit.function, &java_text);
+            if !common.is_empty() {
+                // The same text for every function with this one's parameters: sent
+                // first, and read from the cache after the first of them.
+                let _ = writeln!(
+                    out.shared,
+                    "The functions to port are in `{}`, the module of a Minecraft mod's Horizon port. These parts of \
+                     it are there for every function with the same parameters as the one to port: its types and \
+                     what they can do, and the functions and tables the port generated. The function, its Java \
+                     and the parts of the module that are its own come after.\n\n```rust\n{common}```\n",
+                    unit.file
+                );
+            }
             let _ = writeln!(
                 p,
-                "The module it is in, `{}` (the parts this function can use):\n\n```rust\n{}```\n",
+                "The module it is in, `{}` ({}):\n\n```rust\n{own}```\n",
                 unit.file,
-                module_context(&file, &stub, &unit.function, &java_text)
+                if common.is_empty() {
+                    "the parts this function can use"
+                } else {
+                    "the parts for this function; its types and generated functions came first, before this"
+                }
             );
             let _ = writeln!(
                 p,
@@ -1199,6 +1559,17 @@ fn prompt(dir: &Path, scan: &ModScan, unit: &Unit) -> Result<Prompt> {
             );
             // A tick that reaches another block entity, where the Java has one of them
             // call what the other registered.
+            // A question to a block entity: the saved keys of each class that answers.
+            let asked = asked_keys(&file, &unit.comment);
+            if !asked.is_empty() {
+                let _ = writeln!(
+                    p,
+                    "The block entities whose classes answer, each by its id (which is `be.entity`, not \
+                     `be.block`), with the key each of its values is saved under: what `be.get(key)` reads when \
+                     the view is of that one. A field an answer's Java reads (`inUse`, `running`) is under its \
+                     key here; write `// Missing:` only for what has no key:\n{asked}"
+                );
+            }
             let reached = reached_keys(&file, &own_java, &stub);
             if !reached.is_empty() {
                 let _ = writeln!(
@@ -1211,6 +1582,35 @@ fn prompt(dir: &Path, scan: &ModScan, unit: &Unit) -> Result<Prompt> {
                      `Saved::Text`). A flag the Java sets on another block entity \
                      (`other.checker.scheduleUpdate()`) is set this way, by its key:\n{reached}"
                 );
+            }
+            // A click or a placement that tells a block entity to do what only its
+            // tick can: the switch Java's own tick reads for it.
+            if stub.contains("Machine<'_>") && unit.comment.contains("is ported once, as") {
+                // A tick around a shared one: what its own class calls of the classes
+                // above (`updateGeneratedRotation()` from `initialize`) is theirs to run.
+                let switches = tick_switches(scan, &file, &own_java, true);
+                if !switches.is_empty() {
+                    let _ = writeln!(
+                        p,
+                        "A method of the classes above that this class's own code calls is not a function here: \
+                         the tick ported once runs it. Java's own tick has a switch for these, so where this \
+                         class calls one, set the switch on `state` and the tick ported once runs it on the next \
+                         tick. Never leave such a call out as `Missing`:\n{switches}"
+                    );
+                }
+            }
+            if !stub.contains("Machine<'_>") {
+                let switches = tick_switches(scan, &file, &java_text, false);
+                if !switches.is_empty() {
+                    let _ = writeln!(
+                        p,
+                        "This function can set a block entity's saved values, and can't run a method of it that \
+                         needs its tick (the blocks around it, its network). Where the Java above calls one of \
+                         these on a block entity, set the fields the method itself sets and the switch Java's \
+                         own tick reads, which runs the rest on the entity's next tick. Use that key and no \
+                         other in its place (a key the tick doesn't read does nothing):\n{switches}"
+                    );
+                }
             }
             let called = unit.comment.contains("call code this one gave");
             if stub.contains("Machine<'_>") && unit.comment.contains("machine.at(pos)") && !called {
@@ -1279,7 +1679,10 @@ fn prompt(dir: &Path, scan: &ModScan, unit: &Unit) -> Result<Prompt> {
                 let _ = writeln!(
                     p,
                     "The mod's own module, `{runtime}` (`crate::game::{module}` in the game), which the helper may call (the parts it can use):\n\n```rust\n{}```\n",
-                    module_context(&rt, &stub, "", &java_text)
+                    {
+                        let (common, own) = module_context(&rt, &stub, "", &java_text);
+                        format!("{common}{own}")
+                    }
                 );
             }
         }
@@ -1304,7 +1707,12 @@ const LARGE_MODULE: usize = 150_000;
 /// reach (from its signature and comment, through what those types name), and other
 /// functions by their comment and signature alone: a prompt over 100,000 tokens costs
 /// five times as much a token on the model `translate` uses, and reads no better.
-fn module_context(module: &str, stub: &str, function: &str, java: &str) -> String {
+///
+/// Two texts: of a large module, first the parts every function with the same
+/// parameters is shown, word for word (the types those parameters reach, generated
+/// functions and tables), which the model's cache holds between one function and the
+/// next; then the parts for this function alone.
+fn module_context(module: &str, stub: &str, function: &str, java: &str) -> (String, String) {
     let large = module.len() > LARGE_MODULE;
     let ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
     // Top-level chunks: a blank line followed by a line that is not indented
@@ -1364,20 +1772,26 @@ fn module_context(module: &str, stub: &str, function: &str, java: &str) -> Strin
             states.push(name);
         }
     }
-    let uses = |name: &str| stub.split(|c: char| !ident(c)).any(|w| w == name);
+    // (The words of each, once: a large module asks about thousands of names.)
+    let stub_words: std::collections::HashSet<&str> = stub.split(|c: char| !ident(c)).collect();
+    let java_words: std::collections::HashSet<&str> = java.split(|c: char| !ident(c)).collect();
+    let uses = |name: &str| stub_words.contains(name);
     let names_class = |class: &str| {
         let simple = class.rsplit(['.', '$']).next().unwrap_or(class);
-        java.split(|c: char| !ident(c)).any(|w| w == simple)
+        java_words.contains(simple)
     };
     // Whether another function is one this one may call: generated, or from a class its
     // Java names (a subclass calling `super`). A large mod has hundreds of the rest.
     // (And not one that needs what this one isn't given: a block click's function takes
     // the `World`, which a tick has none of to hand it.)
+    // (Its parameters, which is what it has to hand on: not what its body names, which
+    // differs from one function to the next of the same kind.)
     let stub_head = stub
         .lines()
         .filter(|l| !l.trim_start().starts_with("//"))
         .collect::<Vec<_>>()
         .join(" ");
+    let stub_head = stub_head.split('{').next().unwrap_or("").to_string();
     let callable = |chunk: &str| {
         let from = chunk
             .lines()
@@ -1437,7 +1851,46 @@ fn module_context(module: &str, stub: &str, function: &str, java: &str) -> Strin
         }
         reached
     });
-    let mut out = String::new();
+    // Of them, the types every function with these parameters reaches: from the
+    // parameters alone (not the state it is handed, which is its own), through the
+    // generated functions it may call and what those types name.
+    let common_reach: Option<std::collections::BTreeSet<String>> = large.then(|| {
+        let words = |text: &str| -> Vec<String> {
+            text.split(|c: char| !ident(c))
+                .filter(|w| w.starts_with(|c: char| c.is_ascii_uppercase()))
+                .filter(|w| !states.iter().any(|s| s == w))
+                .map(str::to_string)
+                .collect()
+        };
+        let mut reach: std::collections::BTreeSet<String> = words(&stub_head).into_iter().collect();
+        for chunk in &chunks {
+            let first = first_code_of(chunk);
+            if (first.starts_with("fn ") || first.starts_with("pub fn "))
+                && callable(chunk) == (true, true)
+            {
+                reach.extend(words(&first));
+            }
+        }
+        loop {
+            let before = reach.len();
+            for chunk in &chunks {
+                let first = first_code_of(chunk);
+                if type_of(&first).is_some_and(|t| reach.contains(&t)) {
+                    let code: Vec<&str> = chunk
+                        .lines()
+                        .filter(|l| !l.trim_start().starts_with("//"))
+                        .collect();
+                    reach.extend(words(&code.join("\n")));
+                }
+            }
+            if reach.len() == before {
+                break;
+            }
+        }
+        reach
+    });
+    let mut common_out = String::new();
+    let mut own_out = String::new();
     for chunk in chunks.iter().map(|c| c.trim_end_matches('\n')) {
         if chunk.trim().is_empty() {
             continue;
@@ -1448,6 +1901,31 @@ fn module_context(module: &str, stub: &str, function: &str, java: &str) -> Strin
             continue;
         }
         let defines = type_of(first_code);
+        // Whether it is shown to every function of this kind the same: a type their
+        // parameters reach, a generated function, a public table or value. What the
+        // function's own name, state or Java picks is its own.
+        let common = match (&common_reach, &defines) {
+            (None, _) => false,
+            (Some(reach), Some(name)) => reach.contains(name),
+            (Some(_), None)
+                if first_code.starts_with("fn ") || first_code.starts_with("pub fn ") =>
+            {
+                callable(chunk) == (true, true)
+            }
+            (Some(_), None) => {
+                !(chunk.starts_with("/// `") && chunk.contains("`'s static fields."))
+                    && !chunk.starts_with("// Left out of ")
+                    && !first_code.starts_with("const ")
+                    && !first_code.starts_with("pub const BLOCK_TAGS:")
+                    && !(!function.is_empty()
+                        && first_code.contains(&format!(" {}:", function.to_ascii_uppercase())))
+            }
+        };
+        let out = if common {
+            &mut common_out
+        } else {
+            &mut own_out
+        };
         let other_state = states.iter().any(|s| {
             !uses(s)
                 && (defines.as_deref() == Some(s.as_str())
@@ -1489,17 +1967,39 @@ fn module_context(module: &str, stub: &str, function: &str, java: &str) -> Strin
                 .lines()
                 .skip_while(|l| l.starts_with("//") || l.starts_with("#["))
                 .count();
-            if (generated && long > 60) || (large && body > 12) {
+            // (Of a function ported from the mod's Java, in a large module, the first
+            // paragraph of its comment: what it answers and what it is handed. What each
+            // class answers, after it, is for porting that function, not for calling it.)
+            let caller_reads = large && !generated;
+            if (generated && long > 60) || (large && body > 12) || caller_reads {
                 for line in chunk
                     .lines()
                     .take_while(|l| l.starts_with("//") || l.starts_with("#["))
+                    .take_while(|l| !(caller_reads && l.trim_end() == "///"))
                 {
                     out.push_str(line);
                     out.push('\n');
                 }
                 let head = first_code.trim_end_matches('{').trim_end();
-                let what = if generated { "generated" } else { "ported" };
+                let what = if generated {
+                    "generated"
+                } else if chunk.contains(units::TODO) {
+                    "ported with this one where it calls it"
+                } else {
+                    "ported"
+                };
                 let _ = writeln!(out, "{head} {{ /* {body} lines, {what} */ }}\n");
+                continue;
+            }
+        }
+        // A table a generated function of the module looks things up in (which blocks a
+        // click's function is for): nothing this function names, in a large module.
+        if large && first_code.starts_with("const ") {
+            let name: String = first_code["const ".len()..]
+                .chars()
+                .take_while(|c| ident(*c))
+                .collect();
+            if !uses(&name) {
                 continue;
             }
         }
@@ -1517,17 +2017,6 @@ fn module_context(module: &str, stub: &str, function: &str, java: &str) -> Strin
             let _ = writeln!(out, "{first_code}/* {} entries */];\n", long - 2);
             continue;
         }
-        // A table a generated function of the module looks things up in (which blocks a
-        // click's function is for): nothing this function names, in a large module.
-        if large && first_code.starts_with("const ") {
-            let name: String = first_code["const ".len()..]
-                .chars()
-                .take_while(|c| ident(*c))
-                .collect();
-            if !uses(&name) {
-                continue;
-            }
-        }
         // The tag table: its tags' names say what `in_tag` knows; their blocks would
         // only fill the prompt. (In a large module, not even the names where the Java
         // asks about no tag.)
@@ -1540,10 +2029,32 @@ fn module_context(module: &str, stub: &str, function: &str, java: &str) -> Strin
             continue;
         }
         if first_code.starts_with("pub const BLOCK_TAGS:") {
-            let names: Vec<&str> = chunk
+            let all: Vec<&str> = chunk
                 .lines()
                 .filter_map(|l| l.trim().strip_prefix("(\"")?.split('"').next())
                 .collect();
+            // Of a large module's, those the Java names by their constant
+            // (`AllBlockTags.SAFE_NBT` is `create:safe_nbt`); all of them where it
+            // names none that way (a tag built from a string).
+            let lower = java.to_ascii_lowercase();
+            let named: Vec<&str> = all
+                .iter()
+                .copied()
+                .filter(|tag| {
+                    let last = tag.rsplit([':', '/']).next().unwrap_or(tag);
+                    last.len() > 2 && lower.contains(last)
+                })
+                .collect();
+            let names = if large && !named.is_empty() && named.len() < all.len() {
+                let _ = writeln!(
+                    out,
+                    "// ({} tags in all; these are the ones the Java's constants can mean.)",
+                    all.len()
+                );
+                named
+            } else {
+                all
+            };
             for line in chunk.lines().take_while(|l| l.starts_with("///")) {
                 out.push_str(line);
                 out.push('\n');
@@ -1555,8 +2066,160 @@ fn module_context(module: &str, stub: &str, function: &str, java: &str) -> Strin
             );
             continue;
         }
+        // The function's own state: what loads and saves it (a line a field, which the
+        // struct's own comments already say) by its signature, in a large module.
+        if large
+            && first_code.starts_with("impl ")
+            && defines.as_ref().is_some_and(|t| states.contains(t))
+        {
+            out.push_str(&short_methods(chunk));
+            out.push_str("\n\n");
+            continue;
+        }
         out.push_str(chunk.trim_end_matches('\n'));
         out.push_str("\n\n");
+    }
+    (common_out, own_out)
+}
+
+/// An `impl` block with each method longer than a dozen lines cut to its signature.
+fn short_methods(chunk: &str) -> String {
+    let lines: Vec<&str> = chunk.lines().collect();
+    let mut out = String::new();
+    let mut i = 0;
+    while i < lines.len() {
+        let line = lines[i];
+        let starts = line.starts_with("    pub fn ") || line.starts_with("    fn ");
+        // Where its signature ends (the line that opens the body) and where it closes.
+        let open = starts
+            .then(|| (i..lines.len()).find(|&j| lines[j].trim_end().ends_with('{')))
+            .flatten();
+        let close = open.and_then(|o| (o + 1..lines.len()).find(|&j| lines[j] == "    }"));
+        match (open, close) {
+            (Some(open), Some(close)) if close - open > 12 => {
+                for l in &lines[i..open] {
+                    out.push_str(l);
+                    out.push('\n');
+                }
+                let head = lines[open].trim_end().trim_end_matches('{').trim_end();
+                let _ = writeln!(out, "{head} {{ /* {} lines */ }}", close - open - 1);
+                i = close + 1;
+            }
+            _ => {
+                out.push_str(line);
+                out.push('\n');
+                i += 1;
+            }
+        }
+    }
+    out.truncate(out.trim_end().len());
+    out
+}
+
+/// The switches a block entity's own `tick()` reads, for the methods `java` calls:
+/// `if (reActivateSource) { updateGeneratedRotation(); reActivateSource = false; }` makes
+/// `reActivateSource` the way to have `updateGeneratedRotation()` run on its next tick.
+/// From the block entity classes `java` names and the classes above them; each with the
+/// key `module` keeps the field under.
+fn tick_switches(scan: &ModScan, module: &str, java: &str, on_state: bool) -> String {
+    let ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    let simple = |name: &str| name.rsplit(['.', '$']).next().unwrap_or(name).to_string();
+    let mut out = String::new();
+    let mut seen: Vec<String> = Vec::new();
+    let mut said: Vec<String> = Vec::new();
+    for named in scan.classes.iter().filter(|c| {
+        let s = simple(&c.name);
+        (s.ends_with("BlockEntity") || s.ends_with("TileEntity")) && names_word(java, &s)
+    }) {
+        // The class and those above it.
+        let mut next = Some(named);
+        let mut depth = 0;
+        while let Some(class) = next {
+            depth += 1;
+            next = class
+                .superclass
+                .as_deref()
+                .filter(|_| depth < 10)
+                .and_then(|above| find_class(scan, above));
+            if seen.contains(&class.name) {
+                continue;
+            }
+            seen.push(class.name.clone());
+            let Ok(source) = fs::read_to_string(Path::new(&scan.input).join(&class.path)) else {
+                continue;
+            };
+            let Some(tick) = crate::questions::method_body(&source, "tick") else {
+                continue;
+            };
+            for (at, _) in tick.match_indices("if (") {
+                let rest = &tick[at + 4..];
+                let flag: String = rest.chars().take_while(|c| ident(*c)).collect();
+                let Some(block) = rest[flag.len()..].strip_prefix(") {") else {
+                    continue;
+                };
+                // Its block, to the brace that closes it.
+                let mut open = 1;
+                let Some(end) = block.char_indices().find_map(|(i, c)| {
+                    match c {
+                        '{' => open += 1,
+                        '}' => open -= 1,
+                        _ => {}
+                    }
+                    (open == 0).then_some(i)
+                }) else {
+                    continue;
+                };
+                let block = block[..end].trim();
+                if flag.is_empty() || !block.contains(&format!("{flag} = false;")) {
+                    continue;
+                }
+                // The methods it runs then: `name();`.
+                for call in block.split(';').map(str::trim) {
+                    let Some(method) = call.strip_suffix("()") else {
+                        continue;
+                    };
+                    if method.is_empty()
+                        || !method.chars().all(ident)
+                        || !java.contains(&format!("{method}("))
+                        || said.contains(&method.to_string())
+                    {
+                        continue;
+                    }
+                    // The key the module keeps the field under.
+                    let key = module
+                        .lines()
+                        .find(|l| l.contains(&format!("`boolean {flag}`")))
+                        .and_then(|l| {
+                            let after = l
+                                .split_once("kept as `")
+                                .or_else(|| l.split_once("saved as `"))?
+                                .1;
+                            after.split('`').next()
+                        })
+                        .unwrap_or(&flag);
+                    said.push(method.to_string());
+                    let how = if on_state {
+                        // The state's field, in snake case as the struct has it.
+                        let mut field = String::new();
+                        for c in flag.chars() {
+                            if c.is_ascii_uppercase() {
+                                field.push('_');
+                            }
+                            field.push(c.to_ascii_lowercase());
+                        }
+                        format!("In this tick that is `state.{field} = true`.")
+                    } else {
+                        format!("Its key is `\"{key}\"`, set with `Saved::Byte(1)`.")
+                    };
+                    let _ = writeln!(
+                        out,
+                        "- `{method}()` runs on the block entity's next tick once `{flag}` is set: `{}`'s `tick()` has \
+                         `if ({flag}) {{ {block} }}`. {how}",
+                        simple(&class.name)
+                    );
+                }
+            }
+        }
     }
     out
 }
@@ -1963,9 +2626,9 @@ fn config_values(scan: &ModScan, java: &str, shown: &[String]) -> String {
 /// own, one it inherits, or one it keeps part of itself in): a line a block entity,
 /// from the state structs of `module`. `stub` is the function, whose own state is left
 /// out. So a tick that sets a flag in another block entity knows the key it is under.
-fn reached_keys(module: &str, java: &str, stub: &str) -> String {
-    let mut out = String::new();
-    // Each block entity's id, struct, classes and keys.
+/// Each block entity of `module`: its id, its state struct, its classes (its own first)
+/// and the key each of its values is saved under, with its type and Java field.
+fn entity_keys(module: &str) -> Vec<(&str, &str, Vec<&str>, Vec<String>)> {
     let mut found: Vec<(&str, &str, Vec<&str>, Vec<String>)> = Vec::new();
     let lines: Vec<&str> = module.lines().collect();
     let mut i = 0;
@@ -2024,6 +2687,182 @@ fn reached_keys(module: &str, java: &str, stub: &str) -> String {
         i = k;
         found.push((id, name, classes, keys));
     }
+    found
+}
+
+/// For a question to a block entity (its comment lists what each class answers): the
+/// block entities of those classes, with the keys their values are saved under.
+fn asked_keys(module: &str, comment: &str) -> String {
+    let mut out = String::new();
+    if !comment.contains("block entity class answers") {
+        return out;
+    }
+    // The classes that answer: `/// - `HandCrankBlockEntity` (`create:hand_crank`): ..`.
+    let classes: Vec<&str> = comment
+        .lines()
+        .filter_map(|l| l.strip_prefix("/// - `"))
+        .filter_map(|l| l.split('`').next())
+        .collect();
+    let mut listed = 0;
+    for (id, _, of, mut keys) in entity_keys(module) {
+        // A block entity's own class is the first its state names. (The class all of
+        // them inherit answers for the rest, from keys each of these has too.)
+        let Some(own) = of.first().map(|c| c.rsplit('.').next().unwrap_or(c)) else {
+            continue;
+        };
+        if !classes.contains(&own) || keys.is_empty() || listed >= 12 {
+            continue;
+        }
+        listed += 1;
+        keys.truncate(40);
+        let _ = writeln!(out, "- `{id}` (`{own}`): {}", keys.join(", "));
+    }
+    out
+}
+
+/// The classes `java` calls a static function of: each `Name` of a `Name.function(`.
+fn static_receivers(java: &str) -> Vec<String> {
+    let ident = |c: char| c.is_ascii_alphanumeric() || c == '_' || c == '$';
+    let mut out: Vec<String> = Vec::new();
+    for (dot, _) in java.match_indices('.') {
+        let after = &java[dot + 1..];
+        let name_len = after.find(|c: char| !ident(c)).unwrap_or(after.len());
+        if name_len == 0
+            || !after.starts_with(|c: char| c.is_ascii_lowercase())
+            || !after[name_len..].starts_with('(')
+        {
+            continue;
+        }
+        let before = &java[..dot];
+        let start = before.rfind(|c: char| !ident(c)).map_or(0, |i| i + 1);
+        let receiver = &before[start..];
+        // A class by its capital, and not a constant (`AXIS.x(`).
+        if receiver.starts_with(|c: char| c.is_ascii_uppercase())
+            && receiver.chars().any(|c| c.is_ascii_lowercase())
+            && !out.iter().any(|r| r == receiver)
+        {
+            out.push(receiver.to_string());
+        }
+    }
+    out
+}
+
+/// The shared tick a function's comment tells it to call (`let called =
+/// kinetic_block_entity_tick(pos, &mut base, ..)`, or `let mut called = ..` for the one
+/// above a shared tick) that its answer never calls.
+fn skips_its_shared_tick(comment: &str, function: &str) -> Option<String> {
+    comment
+        .split("called = ")
+        .skip(1)
+        .filter_map(|after| {
+            let name: String = after
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect();
+            (name.ends_with("_tick") && after[name.len()..].starts_with("(pos, &mut"))
+                .then_some(name)
+        })
+        .find(|name| !function.contains(&format!("{name}(")))
+}
+
+/// Whether a function's own body has a `return` that isn't its last statement: one
+/// outside every nested `fn` (whose returns are its own), with code after it.
+fn returns_early(function: &str) -> bool {
+    let Some((_, body)) = function.split_once('{') else {
+        return false;
+    };
+    // Brace depth, and the depth each nested `fn` opened at.
+    let mut depth = 1usize;
+    let mut nested: Vec<usize> = Vec::new();
+    let mut pending_fn = false;
+    let lines: Vec<&str> = body.lines().collect();
+    for (i, line) in lines.iter().enumerate() {
+        let code = line.split("//").next().unwrap_or(line);
+        let trimmed = code.trim_start();
+        if trimmed.starts_with("fn ") || trimmed.starts_with("pub fn ") {
+            pending_fn = true;
+        }
+        let is_return =
+            (trimmed.starts_with("return;") || trimmed.starts_with("return ")) && nested.is_empty();
+        if is_return {
+            // The last statement of the function (only closing braces after it) is fine.
+            let rest = lines[i + 1..]
+                .iter()
+                .map(|l| l.split("//").next().unwrap_or(l).trim())
+                .any(|l| !l.is_empty() && l.chars().any(|c| c != '}'));
+            if rest {
+                return true;
+            }
+        }
+        for c in code.chars() {
+            match c {
+                '{' => {
+                    if pending_fn {
+                        nested.push(depth);
+                        pending_fn = false;
+                    }
+                    depth += 1;
+                }
+                '}' => {
+                    depth = depth.saturating_sub(1);
+                    if nested.last() == Some(&depth) {
+                        nested.pop();
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    false
+}
+
+/// A format an answer gives three numbers that isn't `pos_text`'s: `{},{},{}`. A
+/// position saved that way is read by no other function.
+fn own_position_text(function: &str) -> Option<&'static str> {
+    [
+        "{},{},{}",
+        "{}, {}, {}",
+        "{}:{}:{}",
+        "{}_{}_{}",
+        "{}/{}/{}",
+        "{};{};{}",
+        "{}|{}|{}",
+    ]
+    .into_iter()
+    .find(|f| function.contains(&format!("\"{f}\"")))
+}
+
+/// A block entity's id the answer holds against a block's id, where the two differ:
+/// `be.block == "create:motor"` is never true of a `create:creative_motor` block, whose
+/// block entity is `create:motor`. None where it names none, or reads `entity` too.
+fn takes_an_entity_for_a_block(function: &str, module: &str) -> Option<(String, String)> {
+    if !(function.contains(".block.as_str()") || function.contains(".block =="))
+        || function.contains(".entity")
+    {
+        return None;
+    }
+    let table = module
+        .split_once("pub const BLOCK_ENTITIES: &[(&str, &str, bool)] = &[")?
+        .1;
+    let table = &table[..table.find("\n];")?];
+    let rows: Vec<(&str, &str)> = table
+        .lines()
+        .filter_map(|l| {
+            let mut ids = l.split('"');
+            Some((ids.nth(1)?, ids.nth(1)?))
+        })
+        .collect();
+    rows.iter()
+        .find(|(_, entity)| {
+            !rows.iter().any(|(block, _)| block == entity)
+                && function.contains(&format!("\"{entity}\""))
+        })
+        .map(|(block, entity)| (entity.to_string(), block.to_string()))
+}
+
+fn reached_keys(module: &str, java: &str, stub: &str) -> String {
+    let mut out = String::new();
+    let found = entity_keys(module);
     // The function's own state, and the classes it is made of: a class it shares with
     // another block entity (a base of both) doesn't name that one.
     let is_own = |name: &str| {
@@ -2425,6 +3264,9 @@ struct Record {
     attempts: usize,
     input_tokens: u64,
     output_tokens: u64,
+    /// What it cost, where the model's prices are known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    dollars: Option<f64>,
     at: u64,
     /// `REACH` when it was translated.
     #[serde(default)]
@@ -2464,6 +3306,7 @@ impl State {
                 attempts: o.attempts,
                 input_tokens: o.input_tokens,
                 output_tokens: o.output_tokens,
+                dollars: o.dollars,
                 at,
                 reach: REACH,
             },
@@ -2691,6 +3534,221 @@ pub struct Lamp {
     }
 
     #[test]
+    fn names_the_switch_a_tick_reads_for_a_method_a_click_calls() {
+        let dir = std::env::temp_dir().join(format!("porter-switch-{}", std::process::id()));
+        fs::create_dir_all(dir.join("net/demo")).unwrap();
+        fs::write(
+            dir.join("net/demo/Generator.java"),
+            "package net.demo;\npublic class Generator extends BlockEntity {\n\tboolean reActivateSource;\n\tboolean dirty;\n\tpublic void tick() {\n\t\tsuper.tick();\n\t\tif (reActivateSource) {\n\t\t\tupdateGeneratedRotation();\n\t\t\treActivateSource = false;\n\t\t}\n\t\tif (dirty) {\n\t\t\tspeed = 0;\n\t\t}\n\t}\n\tpublic void updateGeneratedRotation() {}\n}\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.join("net/demo/CrankBlockEntity.java"),
+            "package net.demo;\npublic class CrankBlockEntity extends Generator {\n\tpublic void turn(boolean back) {\n\t\tinUse = 10;\n\t\tupdateGeneratedRotation();\n\t}\n}\n",
+        )
+        .unwrap();
+        let class = |name: &str, above: Option<&str>| porter_model::ClassInfo {
+            name: format!("net.demo.{name}"),
+            kind: porter_model::ClassKind::Class,
+            path: format!("net/demo/{name}.java"),
+            superclass: above.map(|a| format!("net.demo.{a}")),
+            interfaces: Vec::new(),
+            references: Vec::new(),
+            side: porter_model::Side::Common,
+            is_mixin: false,
+            lines: 10,
+            methods: 1,
+            fields: Vec::new(),
+            method_names: vec!["tick".into()],
+            saved: Vec::new(),
+        };
+        let scan = ModScan {
+            input: dir.to_string_lossy().to_string(),
+            classes: vec![
+                class("Generator", None),
+                class("CrankBlockEntity", Some("Generator")),
+            ],
+            ..ModScan::default()
+        };
+        let module = "pub struct Crank {\n    /// `boolean reActivateSource`, not saved by the Java mod: kept as `reActivateSource` so it lasts between ticks.\n    pub re_activate_source: bool,\n}\n";
+        // A click whose Java has the block entity turn, which updates its rotation.
+        let java = "withBlockEntityDo(level, pos, be -> be.turn(sneaking)); class CrankBlockEntity { void turn(boolean back) { inUse = 10; updateGeneratedRotation(); } }";
+        let said = tick_switches(&scan, module, java, false);
+        assert!(
+            said.contains("- `updateGeneratedRotation()` runs on the block entity's next tick once `reActivateSource` is set: `Generator`'s `tick()` has `if (reActivateSource) { updateGeneratedRotation(); reActivateSource = false; }`. Its key is `\"reActivateSource\"`, set with `Saved::Byte(1)`."),
+            "{said}"
+        );
+        assert_eq!(said.lines().count(), 1);
+        // Java that calls no such method is told nothing.
+        assert_eq!(
+            tick_switches(&scan, module, "class CrankBlockEntity { int x; }", false),
+            ""
+        );
+        // A tick is told the field of its state.
+        assert!(
+            tick_switches(&scan, module, java, true)
+                .ends_with("In this tick that is `state.re_activate_source = true`.\n")
+        );
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_question_is_given_its_classes_keys_and_an_entitys_id_is_not_a_blocks() {
+        let module = "pub const BLOCK_ENTITIES: &[(&str, &str, bool)] = &[
+    (\"demo:creative_motor\", \"demo:motor\", true),
+    (\"demo:gearbox\", \"demo:gearbox\", true),
+];
+
+/// The state of a `demo:motor` block entity: `net.demo.MotorBlockEntity` and what it inherits from `net.demo.KineticBlockEntity`, saved with the block.
+pub struct Motor {
+    /// `float speed`, saved as `Speed`.
+    pub speed: f32,
+    /// `int inUse`, not saved by the Java mod: kept as `inUse` so it lasts between ticks.
+    pub in_use: i32,
+}
+
+/// The state of a `demo:gearbox` block entity: `net.demo.GearboxBlockEntity` and what it inherits from `net.demo.KineticBlockEntity`, saved with the block.
+pub struct Gearbox {
+    /// `float speed`, saved as `Speed`.
+    pub speed: f32,
+}
+";
+        let comment = "/// `KineticBlockEntity.getGeneratedSpeed()`: a question the mod's code asks a block entity it meets,\n///\n/// What each block entity class answers, with its block entities and those that inherit it:\n/// - `KineticBlockEntity` (`demo:gearbox`): `return 0;`\n/// - `MotorBlockEntity` (`demo:motor`): `return inUse == 0 ? 0 : 16;`\n///\n/// TODO: port from `net.demo.KineticBlockEntity`.\n";
+        // The motor's keys, under its block entity's id; not the gearbox's, whose own
+        // class answers nothing of its own.
+        assert_eq!(
+            asked_keys(module, comment),
+            "- `demo:motor` (`MotorBlockEntity`): `Speed` (f32, `float speed`), `inUse` (i32, `int inUse`)\n"
+        );
+        assert_eq!(
+            asked_keys(
+                module,
+                "/// TODO: port the tick of `net.demo.MotorBlockEntity`.\n"
+            ),
+            ""
+        );
+
+        // `demo:motor` is no block: an answer that takes it for one is told so.
+        let wrong = "pub fn speed(be: &Neighbour) -> f32 {\n    match be.block.as_str() {\n        \"demo:motor\" => 16.0,\n        _ => 0.0,\n    }\n}\n";
+        assert_eq!(
+            takes_an_entity_for_a_block(wrong, module),
+            Some(("demo:motor".to_string(), "demo:creative_motor".to_string()))
+        );
+        // Told apart by `entity`, or naming an id that is both, it is fine.
+        let right = wrong.replace("be.block.as_str()", "be.entity.as_deref().unwrap_or(\"\")");
+        assert_eq!(takes_an_entity_for_a_block(&right, module), None);
+        let both = wrong.replace("demo:motor", "demo:gearbox");
+        assert_eq!(takes_an_entity_for_a_block(&both, module), None);
+    }
+
+    #[test]
+    fn a_return_in_a_ticks_own_body_is_told_from_one_in_a_nested_function() {
+        // The behaviour's `return` copied into the tick: the depot's part never runs.
+        assert!(returns_early(
+            "pub fn tick_press(state: &mut Press, machine: &mut Machine<'_>) {
+    if !state.running {
+        if state.speed == 0.0 {
+            return;
+        }
+        return;
+    }
+    hand_over(state, machine);
+}
+"
+        ));
+        // In a nested function it leaves that function, and the tick goes on.
+        assert!(!returns_early(
+            "pub fn tick_press(state: &mut Press, machine: &mut Machine<'_>) {
+    fn behaviour(state: &mut Press) {
+        if !state.running {
+            return;
+        }
+        state.ticks += 1;
+    }
+    behaviour(state);
+    hand_over(state, machine);
+}
+"
+        ));
+        // As the last thing the tick does, it skips nothing.
+        assert!(!returns_early(
+            "pub fn tick_press(state: &mut Press) {
+    state.ticks += 1;
+    if state.ticks > 3 {
+        return;
+    }
+}
+"
+        ));
+    }
+
+    #[test]
+    fn a_tick_that_leaves_out_the_shared_tick_is_noticed() {
+        let comment = "/// The tick of `Basin` and the classes above it is ported once, as `basin_tick`. Where\n/// this block entity's Java calls `super.tick()` into them, do:\n/// `let called = basin_tick(pos, &mut base, &me, machine);`\n";
+        assert_eq!(
+            skips_its_shared_tick(comment, "pub fn tick_press() {\n    pressing_tick();\n}\n"),
+            Some("basin_tick".to_string())
+        );
+        assert_eq!(
+            skips_its_shared_tick(
+                comment,
+                "pub fn tick_press() {\n    let called = basin_tick(pos, &mut base, &me, machine);\n}\n"
+            ),
+            None
+        );
+        // A tick with none above it is asked for none.
+        assert_eq!(
+            skips_its_shared_tick("/// TODO: port the tick of `a.B`.\n", "pub fn t() {}\n"),
+            None
+        );
+        // The classes code hands its work to, by the static calls it makes.
+        assert_eq!(
+            static_receivers(
+                "if (!BasinRecipe.apply(basin, recipe)) return; AXIS.choose(1); level.getBlockState(pos); Mth.clamp(a, b, c);"
+            ),
+            vec!["BasinRecipe".to_string(), "Mth".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_position_written_another_way_is_noticed() {
+        assert_eq!(
+            own_position_text(
+                "fn key_of(p: [i32; 3]) -> String {\n    format!(\"{},{},{}\", p[0], p[1], p[2])\n}\n"
+            ),
+            Some("{},{},{}")
+        );
+        assert_eq!(own_position_text("let source = pos_text(from);"), None);
+        assert_eq!(own_position_text("format!(\"{} {} {}\", a, b, c)"), None);
+    }
+
+    #[test]
+    fn an_answer_that_only_says_the_java_is_not_ported_does_nothing() {
+        assert!(does_nothing(
+            "pub fn tick_press(pos: [i32; 3], state: &mut Press, machine: &mut Machine<'_>) {
+    let _ = (pos, state, machine);
+    // Missing: the press's pressing behaviour, the basin tick and the belt hand-off.
+    // None of that has been ported yet, so this tick does nothing.
+}
+"
+        ));
+        assert!(does_nothing(
+            "pub fn can_survive(block: &str) -> bool {\n    let _ = block;\n    // Missing: the support check.\n    false\n}\n"
+        ));
+        // A function whose Java does nothing, or hands back a plain value, is a port.
+        assert!(!does_nothing(
+            "pub fn tick_idle(pos: [i32; 3]) {\n    let _ = pos;\n}\n"
+        ));
+        assert!(!does_nothing(
+            "pub fn is_small(block: &str) -> bool {\n    let _ = block;\n    // `ICog.isSmallCog()` is `return false;`.\n    false\n}\n"
+        ));
+        // And one that does something with a note on what it couldn't.
+        assert!(!does_nothing(
+            "pub fn tick_press(state: &mut Press) {\n    // Missing: the sound.\n    state.speed += 1.0;\n}\n"
+        ));
+    }
+
+    #[test]
     fn marks_ported_functions_for_review() {
         assert_eq!(
             ported_comment("/// TODO: port from a.B.\n", "m"),
@@ -2704,5 +3762,279 @@ pub struct Lamp {
             ported_comment("// TODO: port into this function:\n// - x\n", "m"),
             "// Ported by horizon-porter translate (m) from these; review it:\n// - x\n"
         );
+    }
+
+    /// A module past `LARGE_MODULE`: what a tick and a click are handed, two block
+    /// entities, a question ported once, a generated function, and a long private table.
+    fn large_module() -> String {
+        let mut m = String::from(
+            "use std::collections::BTreeMap;
+
+/// What a tick is handed.
+pub struct Machine<'a> {
+    pub level: &'a str,
+    pub facing: Side,
+}
+
+impl<'a> Machine<'a> {
+    /// The block entity beside this one.
+    pub fn neighbour(&self, side: Side) -> Option<Neighbour> {
+        let _ = side;
+        None
+    }
+}
+
+pub enum Side {
+    Up,
+    Down,
+}
+
+pub struct Neighbour {
+    pub block: String,
+}
+
+/// What a click is handed.
+pub trait World {
+    fn block(&self, pos: [i32; 3]) -> Clicked;
+}
+
+pub struct Clicked {
+    pub id: String,
+}
+
+/// The state of a `demo:press` block entity: `net.demo.PressBlockEntity`, saved with the block.
+pub struct Press {
+    /// `float speed`, saved as `Speed`.
+    pub speed: f32,
+}
+
+impl Press {
+    pub fn load(get: impl Fn(&str) -> Option<f32>) -> Self {
+        let mut state = Press { speed: 0.0 };
+        if let Some(v) = get(\"Speed\") {
+            state.speed = v;
+        }
+        if let Some(v) = get(\"A\") {
+            state.speed += v;
+        }
+        if let Some(v) = get(\"B\") {
+            state.speed += v;
+        }
+        if let Some(v) = get(\"C\") {
+            state.speed += v;
+        }
+        state
+    }
+
+    pub fn fast(&self) -> bool {
+        self.speed > 8.0
+    }
+}
+
+/// The state of a `demo:tray` block entity: `net.demo.TrayBlockEntity`, saved with the block.
+pub struct Tray {
+    pub held: i32,
+}
+
+/// `ICog.isSmall()`: a question the mod's code asks a block it meets,
+/// answered here once for every block of the mod.
+///
+/// What each block class answers, with its blocks:
+/// - `SmallCog` (`demo:cog`): `return true;`
+///
+/// TODO: port from `net.demo.ICog`.
+pub fn i_cog_is_small(block: &str) -> bool {
+    let _ = block;
+    false
+}
+
+/// How many of an item a slot holds.
+pub fn stack_size(item: &str) -> u32 {
+    if item.is_empty() { 0 } else { 64 }
+}
+
+/// TODO: port the tick of `net.demo.PressBlockEntity`.
+pub fn tick_press(pos: [i32; 3], state: &mut Press, machine: &mut Machine<'_>) {
+    let _ = (pos, state, machine);
+}
+
+/// TODO: port the tick of `net.demo.TrayBlockEntity`.
+pub fn tick_tray(pos: [i32; 3], state: &mut Tray, machine: &mut Machine<'_>) {
+    let _ = (pos, state, machine);
+}
+
+/// TODO: port from `net.demo.PressBlock`.
+pub fn press_block_use(world: &mut dyn World, pos: [i32; 3]) -> bool {
+    let _ = (world, pos);
+    false
+}
+
+const FILLER: &[&str] = &[
+",
+        );
+        while m.len() <= LARGE_MODULE {
+            m.push_str("    \"demo:a_block_among_very_many\",\n");
+        }
+        m.push_str("];\n");
+        m
+    }
+
+    #[test]
+    fn a_large_modules_shared_part_is_the_same_for_every_function_of_a_kind() {
+        let module = large_module();
+        let stub = |name: &str| units::function_source(&module, name).unwrap();
+        let (common, own) = module_context(
+            &module,
+            &stub("tick_press"),
+            "tick_press",
+            "class PressBlockEntity { boolean small(Block b) { return ((ICog) b).isSmall(); } }",
+        );
+        let (tray_common, tray_own) = module_context(
+            &module,
+            &stub("tick_tray"),
+            "tick_tray",
+            "class TrayBlockEntity { }",
+        );
+        // What a tick's parameters reach and what the port generated, word for word
+        // the same for both: the part the model's cache holds between them.
+        assert!(!common.is_empty());
+        assert_eq!(common, tray_common);
+        for shared in [
+            "pub struct Machine<'a>",
+            "pub fn neighbour(&self, side: Side)",
+            "pub enum Side",
+            "pub struct Neighbour",
+            "pub fn stack_size(item: &str) -> u32",
+        ] {
+            assert!(
+                common.contains(shared),
+                "{shared} is missing from:\n{common}"
+            );
+            assert!(!own.contains(shared), "{shared} is shown twice");
+        }
+        // Not a click's world, which a tick can't reach; nothing of either state.
+        assert!(!common.contains("World") && !common.contains("Clicked"));
+        assert!(!common.contains("Press") && !common.contains("Tray"));
+        assert!(!common.contains("FILLER") && !own.contains("FILLER"));
+        // Its own: its state (what loads it by its signature), and of a question its
+        // Java asks, what a caller reads.
+        assert!(own.contains("pub struct Press") && own.contains("saved as `Speed`"));
+        assert!(
+            own.contains(
+                "pub fn load(get: impl Fn(&str) -> Option<f32>) -> Self { /* 14 lines */ }"
+            ),
+            "{own}"
+        );
+        assert!(
+            own.contains("pub fn fast(&self) -> bool {\n        self.speed > 8.0"),
+            "{own}"
+        );
+        assert!(!own.contains("pub struct Tray") && !own.contains("tick_tray"));
+        assert!(
+            own.contains("/// `ICog.isSmall()`: a question the mod's code asks a block it meets,")
+        );
+        assert!(own.contains("pub fn i_cog_is_small(block: &str) -> bool { /* 4 lines, ported with this one where it calls it */ }"), "{own}");
+        assert!(!own.contains("What each block class answers"));
+        // The other tick has its own state, and no question its Java never asks.
+        assert!(tray_own.contains("pub struct Tray") && !tray_own.contains("i_cog_is_small"));
+
+        // A click reaches other types: another shared part.
+        let (click_common, _) = module_context(
+            &module,
+            &stub("press_block_use"),
+            "press_block_use",
+            "class PressBlock { }",
+        );
+        assert!(
+            click_common.contains("pub trait World") && click_common.contains("pub struct Clicked")
+        );
+        assert!(!click_common.contains("pub struct Machine"));
+        assert_ne!(click_common, common);
+    }
+
+    #[test]
+    fn a_small_module_is_shown_whole_with_nothing_shared() {
+        let module = large_module();
+        let small = &module[..module.find("const FILLER").unwrap()];
+        let stub = units::function_source(small, "tick_press").unwrap();
+        let (common, own) = module_context(
+            small,
+            &stub,
+            "tick_press",
+            "class PressBlockEntity { boolean small(Block b) { return ((ICog) b).isSmall(); } }",
+        );
+        assert_eq!(common, "");
+        for part in [
+            "pub struct Machine<'a>",
+            "pub trait World",
+            "pub struct Press",
+            "if let Some(v) = get(\"C\")",
+            "What each block class answers",
+            "pub fn i_cog_is_small(block: &str) -> bool {\n    let _ = block;",
+        ] {
+            assert!(own.contains(part), "{part} is missing");
+        }
+        assert!(!own.contains("pub struct Tray"));
+    }
+
+    #[test]
+    fn an_estimate_prices_each_prompt_by_its_own_length_and_reads_the_shared_part_from_the_cache() {
+        let planned = |tokens: u64, shared_chars: usize, shared_key: u64| Outcome {
+            unit: Unit {
+                file: "mixins/m/runtime.rs".into(),
+                function: "f".into(),
+                kind: Kind::Runtime,
+                comment: String::new(),
+                java: Vec::new(),
+                members: Vec::new(),
+                again: false,
+            },
+            status: Status::Planned {
+                prompt_chars: 100,
+                shared_chars,
+                shared_key,
+                tokens: Some(tokens),
+            },
+            attempts: 0,
+            input_tokens: 0,
+            output_tokens: 0,
+            cached_tokens: 0,
+            dollars: None,
+        };
+        // Two of a kind (two fifths of each is the shared part) and one past the line.
+        let plan = [
+            planned(50_000, 40, 7),
+            planned(50_000, 40, 7),
+            planned(120_000, 0, 0),
+        ];
+        let est = estimate(&plan, "claude-haiku-5-5");
+        assert_eq!(
+            (est.functions, est.tokens, est.cached, est.long),
+            (3, 220_000, 20_000, 1)
+        );
+        assert!(est.counted);
+        let out = OUTPUT_PER_TRY as f64;
+        let first = (30_000.0 + 20_000.0 * 1.25) * 0.1 / 1e6 + out * 0.5 / 1e6;
+        let second = (30_000.0 + 20_000.0 * 0.1) * 0.1 / 1e6 + out * 0.5 / 1e6;
+        let long = 120_000.0 * 0.5 / 1e6 + out * 2.5 / 1e6;
+        assert!(
+            (est.dollars.unwrap() - (first + second + long)).abs() < 1e-9,
+            "{est:?}"
+        );
+        // A model whose prices aren't known has tokens and no dollars.
+        let other = estimate(&plan, "someone-elses");
+        assert_eq!((other.tokens, other.dollars), (220_000, None));
+        assert_eq!(planned_tokens(&plan), 220_000);
+        // Worked out from the length where no model counted.
+        let mut guess = planned(0, 0, 0);
+        guess.status = Status::Planned {
+            prompt_chars: 230_000,
+            shared_chars: 0,
+            shared_key: 0,
+            tokens: None,
+        };
+        let est = estimate(&[guess], "claude-haiku-5-5");
+        assert!(!est.counted);
+        assert_eq!(est.tokens, 100_000);
     }
 }

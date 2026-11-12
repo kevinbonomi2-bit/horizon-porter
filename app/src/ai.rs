@@ -1,10 +1,11 @@
-//! Translation in the app: who translates, the Claude API key, and the
-//! `translate` step with live progress.
+//! Translation in the app: who translates, the API keys, and the `translate` step
+//! with live progress.
 //!
-//! The key is kept in the system's credential store (Windows Credential Manager,
+//! A key is kept in the system's credential store (Windows Credential Manager,
 //! the macOS Keychain, the Secret Service on Linux), never in a file, and never
-//! goes back to the page: the page only learns whether one is saved. It is sent
-//! only to api.anthropic.com, by porter-translate.
+//! goes back to the page: the page only learns whether one is saved. Claude's is
+//! sent only to api.anthropic.com and Gemini's only to
+//! generativelanguage.googleapis.com, by porter-translate.
 
 use std::path::{Path, PathBuf};
 
@@ -16,14 +17,25 @@ use crate::{Current, Ported, message};
 
 /// Where the credential store keeps the key.
 const KEY_SERVICE: &str = "io.github.kevinbonomi2bit.horizonporter";
-const KEY_USER: &str = "anthropic-api-key";
+
+/// The name a provider's key is kept under there.
+fn key_user(provider: &str) -> &'static str {
+    match provider {
+        "gemini" => "gemini-api-key",
+        _ => "anthropic-api-key",
+    }
+}
+
+/// The free choice the page offers beside Claude's models: the provider, its model
+/// and what the page calls it.
+pub const FREE: (&str, &str, &str) = ("gemini", "gemini-3.8-flash", "Gemini 3.8 Flash");
 
 /// The choices the page offers.
 pub const MODELS: &[(&str, &str, &str)] = &[
     (
         "claude-haiku-5-5",
         "Claude Haiku 5.5",
-        "The cheapest: about $0.20 for a mod the size of Create",
+        "The cheapest Claude: a few dollars for a mod the size of Create",
     ),
     (
         "claude-sonnet-5-5",
@@ -41,7 +53,7 @@ pub const MODELS: &[(&str, &str, &str)] = &[
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Choice {
-    /// `anthropic` or `ollama`.
+    /// `anthropic`, `gemini` or `ollama`.
     pub provider: String,
     pub model: String,
 }
@@ -69,17 +81,27 @@ fn load_choice(app: &AppHandle) -> Choice {
         .unwrap_or_default()
 }
 
-fn key_entry() -> Result<keyring::Entry, String> {
-    keyring::Entry::new(KEY_SERVICE, KEY_USER).map_err(message)
+fn key_entry(provider: &str) -> Result<keyring::Entry, String> {
+    keyring::Entry::new(KEY_SERVICE, key_user(provider)).map_err(message)
 }
 
-/// The saved key, if any.
-fn saved_key() -> Option<String> {
-    key_entry()
+/// The key saved for `provider`, if any.
+fn saved_key(provider: &str) -> Option<String> {
+    key_entry(provider)
         .ok()?
         .get_password()
         .ok()
         .filter(|k| !k.is_empty())
+}
+
+/// The environment variable that carries `provider`'s key when none is saved.
+fn key_variable(provider: &str) -> &'static str {
+    model::service_defaults(provider).map_or("ANTHROPIC_API_KEY", |(variable, _)| variable)
+}
+
+/// Whether that variable is set.
+fn env_key(provider: &str) -> bool {
+    std::env::var(key_variable(provider)).is_ok_and(|k| !k.trim().is_empty())
 }
 
 /// The name of this system's credential store, for the page.
@@ -106,17 +128,34 @@ pub struct ModelView {
 pub struct SettingsView {
     choice: Choice,
     models: Vec<ModelView>,
-    /// A key is saved in the credential store (the key itself never comes here).
+    /// The free choice: its provider, model and name.
+    free: ModelView,
+    free_provider: &'static str,
+    /// A key for the chosen provider is saved in the credential store (the key itself
+    /// never comes here).
     has_key: bool,
-    /// ANTHROPIC_API_KEY is set, which is used when no key is saved.
+    /// The chosen provider's environment variable is set, which is used when no key
+    /// is saved.
     env_key: bool,
+    /// That variable's name.
+    key_variable: &'static str,
     store: &'static str,
 }
 
 #[tauri::command]
 pub fn ai_settings(app: AppHandle) -> SettingsView {
+    let choice = load_choice(&app);
     SettingsView {
-        choice: load_choice(&app),
+        has_key: saved_key(&choice.provider).is_some(),
+        env_key: env_key(&choice.provider),
+        key_variable: key_variable(&choice.provider),
+        choice,
+        free: ModelView {
+            id: FREE.1.into(),
+            name: FREE.2.into(),
+            note: "Free, within Google's daily limits. Needs a free key from Google.".into(),
+        },
+        free_provider: FREE.0,
         models: MODELS
             .iter()
             .map(|(id, name, note)| ModelView {
@@ -125,15 +164,13 @@ pub fn ai_settings(app: AppHandle) -> SettingsView {
                 note: (*note).into(),
             })
             .collect(),
-        has_key: saved_key().is_some(),
-        env_key: std::env::var("ANTHROPIC_API_KEY").is_ok_and(|k| !k.is_empty()),
         store: store_name(),
     }
 }
 
 #[tauri::command]
 pub fn save_choice(app: AppHandle, choice: Choice) -> Result<(), String> {
-    if !["anthropic", "ollama"].contains(&choice.provider.as_str())
+    if !["anthropic", "gemini", "ollama"].contains(&choice.provider.as_str())
         || choice.model.trim().is_empty()
     {
         return Err("Choose a model".into());
@@ -149,19 +186,23 @@ pub fn save_choice(app: AppHandle, choice: Choice) -> Result<(), String> {
     .map_err(message)
 }
 
-/// Saves the key in the credential store. The page clears its field after this.
+/// Saves the chosen provider's key in the credential store. The page clears its
+/// field after this.
 #[tauri::command]
-pub fn save_key(key: String) -> Result<(), String> {
+pub fn save_key(app: AppHandle, key: String) -> Result<(), String> {
     let key = key.trim();
     if key.is_empty() || key.chars().any(char::is_whitespace) || key.len() > 512 {
         return Err("That doesn't look like an API key".into());
     }
-    key_entry()?.set_password(key).map_err(message)
+    key_entry(&load_choice(&app).provider)?
+        .set_password(key)
+        .map_err(message)
 }
 
+/// Removes the chosen provider's key.
 #[tauri::command]
-pub fn forget_key() -> Result<(), String> {
-    match key_entry()?.delete_credential() {
+pub fn forget_key(app: AppHandle) -> Result<(), String> {
+    match key_entry(&load_choice(&app).provider)?.delete_credential() {
         Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
         Err(e) => Err(message(e)),
     }
@@ -181,10 +222,12 @@ pub async fn local_models() -> Result<Vec<String>, String> {
 pub struct EstimateView {
     functions: usize,
     tokens: usize,
-    /// None for a local model (free) or an unknown price.
+    /// None for a local model (free), a free service or an unknown price.
     dollars: Option<f64>,
     model: String,
     local: bool,
+    /// A service's free models: free within its limits.
+    free: bool,
     /// What is missing before it can start (a key, Ollama), if anything.
     blocker: Option<String>,
 }
@@ -239,6 +282,7 @@ pub async fn translate_estimate(
     .map_err(message)?
     .map_err(|e| format!("{e:#}"))?;
     let local = choice.provider == "ollama";
+    let free = choice.provider == FREE.0;
     let blocker = if local {
         // Ollama answers only when it runs here and has the model.
         let model = choice.model.clone();
@@ -252,23 +296,26 @@ pub async fn translate_estimate(
             }
             Ok(_) => None,
         }
-    } else if saved_key().is_none()
-        && !std::env::var("ANTHROPIC_API_KEY").is_ok_and(|k| !k.is_empty())
-    {
-        Some("No Claude API key is saved".to_string())
+    } else if saved_key(&choice.provider).is_none() && !env_key(&choice.provider) {
+        Some(format!(
+            "No {} API key is saved",
+            if free { "Gemini" } else { "Claude" }
+        ))
     } else {
         None
     };
     Ok(EstimateView {
         functions: plan.len(),
         tokens: ai::planned_tokens(&plan),
-        dollars: if local {
+        dollars: if local || free {
             None
         } else {
             ai::planned_dollars(&plan, &choice.model)
         },
         model: if local {
             format!("{} (local)", choice.model)
+        } else if free && choice.model == FREE.1 {
+            FREE.2.to_string()
         } else {
             MODELS
                 .iter()
@@ -276,6 +323,7 @@ pub async fn translate_estimate(
                 .map_or(choice.model.clone(), |(_, name, _)| (*name).to_string())
         },
         local,
+        free,
         blocker,
     })
 }
@@ -307,7 +355,16 @@ pub async fn translate(
     let choice = load_choice(&app);
     let model: Box<dyn model::Model + Send> = if choice.provider == "ollama" {
         Box::new(model::Ollama::new(Some(&choice.model)).map_err(|e| format!("{e:#}"))?)
-    } else if let Some(key) = saved_key() {
+    } else if choice.provider == FREE.0 {
+        // The saved key, else the one in the environment.
+        let key = saved_key(FREE.0)
+            .or_else(|| std::env::var(key_variable(FREE.0)).ok())
+            .ok_or("No Gemini API key is saved")?;
+        Box::new(
+            model::Compatible::with_key(FREE.0, &key, Some(&choice.model), None)
+                .map_err(|e| format!("{e:#}"))?,
+        )
+    } else if let Some(key) = saved_key("anthropic") {
         Box::new(model::Anthropic::with_key(&key, Some(&choice.model), None))
     } else {
         Box::new(

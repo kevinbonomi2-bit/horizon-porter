@@ -82,15 +82,19 @@ enum Command {
         /// The folder `port` wrote
         path: PathBuf,
         /// Who translates: `anthropic` (Claude through the API: ANTHROPIC_API_KEY or `ant auth login`),
-        /// `ollama` (a model on this computer, free: needs Ollama and --model), `claude-code` (your
-        /// `claude` command), or a command that reads the prompt on stdin
+        /// `gemini` (Google's Gemini, free within its daily limits: GEMINI_API_KEY from
+        /// aistudio.google.com/apikey), `openrouter` (its `:free` models: OPENROUTER_API_KEY),
+        /// `ollama` (a model on this computer, free: needs Ollama and --model), a URL (any server
+        /// with a chat completions API, its key in PORTER_AI_KEY), `claude-code` (your `claude`
+        /// command), or a command that reads the prompt on stdin
         #[arg(long, default_value = "anthropic")]
         ai: String,
         /// The model (`anthropic`: claude-haiku-5-5 by default, the cheapest; claude-sonnet-5-5 or
-        /// claude-opus-5-5 for harder mods. `ollama`: an installed model, such as a coding model)
+        /// claude-opus-5-5 for harder mods. `gemini`: gemini-3.8-flash by default. `openrouter`,
+        /// `ollama` and a URL: one of theirs, listed when none is named)
         #[arg(long)]
         model: Option<String>,
-        /// How hard the model thinks: low, medium, high, xhigh or max (`anthropic`; default: the model's)
+        /// How hard the model thinks: low, medium, high, xhigh or max (default: the model's)
         #[arg(long)]
         effort: Option<String>,
         /// Only functions whose name contains this (several with commas: `tick_motor,render_motor`)
@@ -105,6 +109,10 @@ enum Command {
         /// List what would be translated and how big each prompt is; call no model
         #[arg(long)]
         dry_run: bool,
+        /// With --dry-run: have the Claude API count each prompt's tokens (free, and
+        /// exact) instead of working them out from its length
+        #[arg(long)]
+        count: bool,
         /// Also port again the functions `port --force` marked outdated, and those that
         /// said something was out of reach when an older horizon-porter ported them
         #[arg(long)]
@@ -418,6 +426,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             limit,
             attempts,
             dry_run,
+            count,
             refresh,
             yes,
         } => {
@@ -443,17 +452,18 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 attempts,
                 dry_run: true,
                 refresh,
+                count: count && dry_run,
             };
-            // What it would send, first.
-            let plan = porter_translate::ai::translate(
-                &path,
-                &scan,
-                &porter_translate::ai::model::External {
+            // What it would send, first (counted by the model itself when asked).
+            let counter: Box<dyn porter_translate::ai::model::Model> = if opts.count {
+                porter_translate::ai::model::from_choice(&ai, model.as_deref(), effort.as_deref())?
+            } else {
+                Box::new(porter_translate::ai::model::External {
                     command: "none".into(),
-                },
-                &opts,
-                |_| {},
-            )?;
+                })
+            };
+            let plan =
+                porter_translate::ai::translate(&path, &scan, counter.as_ref(), &opts, |_| {})?;
             if plan.is_empty() {
                 println!(
                     "Nothing left to translate in {}: every function is ported.",
@@ -461,46 +471,61 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 );
                 return Ok(ExitCode::SUCCESS);
             }
-            let chars: usize = plan
-                .iter()
-                .map(|o| match o.status {
-                    porter_translate::ai::Status::Planned { prompt_chars } => prompt_chars,
-                    _ => 0,
-                })
-                .sum();
-            let tokens = chars / 4;
+            let name = model
+                .clone()
+                .unwrap_or_else(|| porter_translate::ai::model::DEFAULT_MODEL.into());
+            let claude = matches!(ai.as_str(), "anthropic" | "claude" | "api");
+            let est = porter_translate::ai::estimate(&plan, if claude { &name } else { "" });
             println!(
-                "{} functions to translate, about {} input tokens for one try each (fixes add more).",
-                plan.len(),
-                thousands(tokens)
+                "{} functions to translate, {}{} input tokens for one try each (fixes add more).",
+                est.functions,
+                if est.counted { "" } else { "about " },
+                thousands(est.tokens as usize)
             );
-            // About a thousand tokens come back per function.
-            let output = plan.len() * 1000;
-            match ai.as_str() {
-                "anthropic" | "claude" | "api" => {
-                    let name = model
-                        .clone()
-                        .unwrap_or_else(|| porter_translate::ai::model::DEFAULT_MODEL.into());
-                    if let Some((input_price, output_price)) =
-                        porter_translate::ai::model::price(&name)
-                    {
-                        let dollars =
-                            tokens as f64 / 1e6 * input_price + output as f64 / 1e6 * output_price;
-                        println!(
-                            "With {name}: about ${dollars:.2} (${input_price:.2} and ${output_price:.2} per million tokens in and out). Free on your own computer with --ai ollama."
-                        );
-                    }
+            if claude {
+                if let Some(dollars) = est.dollars {
+                    println!(
+                        "With {name}: about ${dollars:.2}{}. Free with --ai gemini (Google's free tier) or --ai ollama (on your own computer).",
+                        if est.cached > 0 {
+                            format!(
+                                ", {} of those tokens read from the cache at a tenth of the price",
+                                thousands(est.cached as usize)
+                            )
+                        } else {
+                            String::new()
+                        }
+                    );
                 }
-                "ollama" | "local" => println!("On your computer with Ollama: free."),
-                _ => {}
+                if est.long > 0 && name == porter_translate::ai::model::DEFAULT_MODEL {
+                    println!(
+                        "{} of them have a prompt past {} tokens, where {name} costs five times as much a token: they are most of that.",
+                        est.long,
+                        thousands(porter_translate::ai::model::LONG_PROMPT as usize)
+                    );
+                }
+            } else if let Some(service) = porter_translate::ai::model::free_service(&ai) {
+                println!(
+                    "With {service}: free on its free models, within their limits a minute and a day (it stops when they run out; run it again later and it carries on)."
+                );
+            } else if matches!(ai.as_str(), "ollama" | "local") {
+                println!("On your computer with Ollama: free.");
             }
             if dry_run {
                 for o in &plan {
-                    if let porter_translate::ai::Status::Planned { prompt_chars } = o.status {
+                    if let porter_translate::ai::Status::Planned {
+                        prompt_chars,
+                        tokens,
+                        ..
+                    } = o.status
+                    {
                         println!(
                             "  {:<48} {:>8} tokens  {}",
                             o.unit.function,
-                            thousands(prompt_chars / 4),
+                            thousands(
+                                tokens.unwrap_or_else(|| porter_translate::ai::tokens_of(
+                                    prompt_chars
+                                )) as usize
+                            ),
                             o.unit.file
                         );
                     }
@@ -526,9 +551,11 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 out.iter().filter(|o| f(&o.status)).count()
             };
             use porter_translate::ai::Status;
-            let (input_tokens, output_tokens) = out.iter().fold((0, 0), |(i, o), x| {
-                (i + x.input_tokens, o + x.output_tokens)
-            });
+            let (input_tokens, output_tokens, cached_tokens) =
+                out.iter().fold((0, 0, 0), |(i, o, c), x| {
+                    (i + x.input_tokens, o + x.output_tokens, c + x.cached_tokens)
+                });
+            let dollars = out.iter().filter_map(|o| o.dollars).reduce(|a, b| a + b);
             println!(
                 "\nPorted and tested: {}. Ported, checked when you build: {}. Left as they were: {}.",
                 count(&|s| *s == Status::Ported),
@@ -545,9 +572,18 @@ fn run(cli: Cli) -> Result<ExitCode> {
             }
             if input_tokens > 0 {
                 println!(
-                    "Tokens: {} in, {} out.",
+                    "Tokens: {} in{}, {} out{}.",
                     thousands(input_tokens as usize),
-                    thousands(output_tokens as usize)
+                    if cached_tokens > 0 {
+                        format!(
+                            " ({} of them from the cache)",
+                            thousands(cached_tokens as usize)
+                        )
+                    } else {
+                        String::new()
+                    },
+                    thousands(output_tokens as usize),
+                    dollars.map_or(String::new(), |d| format!(": ${d:.2}"))
                 );
             }
             // A port with api/ runs the same runtime.rs as a trait mod.

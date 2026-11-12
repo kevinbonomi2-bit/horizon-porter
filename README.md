@@ -39,10 +39,12 @@ The builds aren't signed yet: on Windows choose *More info → Run anyway*; on m
 
 A mod that is only content (blocks, items, recipes) needs no translation or build.
 
-**Translation** uses Claude Haiku 5.5 by default (about $2 for Farmer's Delight; the app shows
-the price before anything is spent), or a model on your own computer through
-[Ollama](https://ollama.com), free and offline. Your API key stays in the system's credential
-store. Reading, porting and building all run on your computer.
+**Translation** uses Claude Haiku 5.5 by default (about $0.50 for Farmer's Delight and $4 for
+Create, estimated; the app shows the price before anything is spent). It can also use Google's
+Gemini, free within its daily limits with a free key from
+[aistudio.google.com](https://aistudio.google.com/apikey), or a model on your own computer
+through [Ollama](https://ollama.com), free and offline. Your API keys stay in the system's
+credential store. Reading, porting and building all run on your computer.
 
 **Native mods aren't sandboxed**, so the app asks you to confirm you trust the code before every
 build, as the Horizon launcher does. Port only mods whose licence allows it.

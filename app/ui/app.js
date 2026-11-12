@@ -270,7 +270,7 @@ function renderSummary() {
       change.hidden = false;
       blocked = true;
     } else {
-      const cost = estimate.local ? "free, on this computer" : dollars(estimate.dollars);
+      const cost = estimate.local ? "free, on this computer" : estimate.free ? "free, within its daily limits" : dollars(estimate.dollars);
       code.textContent = `${count(estimate.functions, "function")} to translate with ${estimate.model}, ${cost}`;
       change.textContent = "Change";
       change.hidden = false;
@@ -437,7 +437,7 @@ async function translateNow(ported, added) {
     }
     if (estimate.functions) {
       running = "translate";
-      notice("busy", `Translating ${possessive(modName)} code`, `${count(estimate.functions, "function")}, ${estimate.local ? "free" : dollars(estimate.dollars)}`);
+      notice("busy", `Translating ${possessive(modName)} code`, `${count(estimate.functions, "function")}, ${estimate.local || estimate.free ? "free" : dollars(estimate.dollars)}`);
       translated = await invoke("translate");
     }
     running = "add";
@@ -562,6 +562,7 @@ async function renderSettings() {
   const box = $("choices");
   box.querySelectorAll(".choice").forEach((c) => c.remove());
   const options = settings.models.map((m) => ({ provider: "anthropic", id: m.id, name: m.name, note: m.note }));
+  options.push({ provider: settings.freeProvider, id: settings.free.id, name: settings.free.name, note: settings.free.note });
   options.push({ provider: "ollama", id: "", name: "A model on this computer", note: "Free, and nothing leaves this computer. Needs Ollama (ollama.com) and a model pulled into it." });
   for (const o of options) {
     const label = document.createElement("label");
@@ -585,12 +586,21 @@ async function renderSettings() {
   $("local").hidden = !local;
   $("key-box").hidden = local;
   if (local) await renderLocal();
+  // The key of whoever is chosen: Claude's, or the free service's.
+  const free = settings.choice.provider === settings.freeProvider;
+  const who = free
+    ? { name: "Gemini API key", hint: "A key from aistudio.google.com", host: "generativelanguage.googleapis.com", from: "Create one at aistudio.google.com/apikey: it is free and asks for no card." }
+    : { name: "Claude API key", hint: "sk-ant-...", host: "api.anthropic.com", from: "Create one at platform.claude.com, under API keys." };
+  $("key-label").textContent = who.name;
+  $("key-input").placeholder = who.hint;
+  $("key-input").setAttribute("aria-label", who.name);
   $("key-saved").hidden = !settings.hasKey;
   $("key-entry").hidden = settings.hasKey;
   $("key-saved-text").textContent = `Saved in ${settings.store}`;
+  const shared = free ? " On its free tier Google may use what is sent to improve its products: here, the mod's code." : "";
   $("key-note").textContent = settings.hasKey
-    ? "Sent only to api.anthropic.com when you translate. Remove it here at any time."
-    : `Create one at platform.claude.com, under API keys. It is kept in ${settings.store}, sent only to api.anthropic.com, and never shown again.${settings.envKey ? " ANTHROPIC_API_KEY is set, so that one is used until you save a key here." : ""}`;
+    ? `Sent only to ${who.host} when you translate. Remove it here at any time.${shared}`
+    : `${who.from} It is kept in ${settings.store}, sent only to ${who.host}, and never shown again.${shared}${settings.envKey ? ` ${settings.keyVariable} is set, so that one is used until you save a key here.` : ""}`;
 }
 
 async function renderLocal() {

@@ -19,6 +19,11 @@ public class PressBlockEntity extends StampBlockEntity {
     }
 
     @Override
+    protected int pace() {
+        return stamping.running ? 2 : 1;
+    }
+
+    @Override
     protected void onSecond() {
         if (!stamping.running) {
             stamping.ticks = 0;

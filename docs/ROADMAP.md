@@ -83,8 +83,10 @@ scenarios we check.
   from `.porter/translate.json`, and `port --force` keeps ported functions. The Java
   mod's static fields are carried into `runtime.rs` as Rust (constants, atomics,
   mutexes) so ported functions share state. Claude Haiku 5.5 is the default (Create's
-  whole pass is about $0.20), with Sonnet and Opus by `--model`, a free local model
-  with `--ai ollama`, Claude Code, or any command. **Tested live:** Haiku 5.5 ported
+  whole pass is an estimated $4, its prompts kept under the 100,000 tokens where Haiku's
+  price goes up five times), with Sonnet and Opus by `--model`, Google's Gemini and
+  OpenRouter's free models with `--ai gemini` and `--ai openrouter`, a free local model
+  with `--ai ollama`, any chat completions server by its URL, Claude Code, or any command. **Tested live:** Haiku 5.5 ported
   Steady View's HUD, pickup counter and fixed field of view and the demo crank's tick,
   each on its first try, for about a cent; both built with the launcher and played in
   Horizon: the HUD counts pickups, the view stays steady, and the crank's `Speed` rises.

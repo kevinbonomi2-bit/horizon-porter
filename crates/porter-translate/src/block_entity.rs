@@ -78,6 +78,10 @@ pub struct BlockEntity {
     /// The nearest class of its own or above it whose tick is ported once for every
     /// block entity that inherits it (`shared_ticks`): `com.x.KineticBlockEntity`.
     pub shared: Option<String>,
+    /// With a shared tick: the methods of its classes that this block entity's own
+    /// classes override and do something in (`initialize`, `lazyTick`). The shared
+    /// tick reports the ones it called; this one's tick does what each override adds.
+    pub overrides: Vec<String>,
 }
 
 /// A class several block entities inherit, with a tick of its own: Create's
@@ -100,6 +104,13 @@ pub struct SharedTick {
     pub users: Vec<String>,
     /// Methods of it and of the classes above that classes below override.
     pub overridden: Vec<String>,
+    /// Every method of them a class below overrides: those the tick's own classes call
+    /// on the block entity and that answer something are questions to it, ported once
+    /// (`questions::find`).
+    pub asks: Vec<String>,
+    /// Of them, those that are such questions: the Java method and the function that
+    /// answers it (`getGeneratedSpeed`, `kinetic_block_entity_get_generated_speed`).
+    pub answered: Vec<(String, String)>,
     /// What the ticks of those block entities reach, any of them.
     pub neighbours: bool,
     pub far: bool,
@@ -259,6 +270,8 @@ pub fn shared_ticks(
             next,
             fields: part(most),
             users: of.iter().map(|i| entities[*i].id.clone()).collect(),
+            asks: overridden.iter().map(|(m, _)| m.to_string()).collect(),
+            answered: Vec::new(),
             overridden: overridden
                 .into_iter()
                 .take(14)
@@ -272,6 +285,35 @@ pub fn shared_ticks(
     }
     for (be, chain) in entities.iter_mut().zip(&chains) {
         be.shared = chain.iter().find(|x| shared.contains(x.as_str())).cloned();
+        // What its own classes (below the shared one) override of that class and the
+        // classes above it.
+        if let Some(at) = chain.iter().position(|x| shared.contains(x.as_str())) {
+            let theirs: BTreeSet<&str> = chain[at..]
+                .iter()
+                .filter_map(|n| class(n))
+                .flat_map(|k| k.method_names.iter().map(String::as_str))
+                .collect();
+            let skip = [
+                "tick",
+                "write",
+                "read",
+                "saveAdditional",
+                "loadAdditional",
+                "addBehaviours",
+            ];
+            let mut own: Vec<String> = Vec::new();
+            for k in chain[..at].iter().filter_map(|n| class(n)) {
+                for m in &k.method_names {
+                    if theirs.contains(m.as_str())
+                        && !skip.contains(&m.as_str())
+                        && !own.contains(m)
+                    {
+                        own.push(m.clone());
+                    }
+                }
+            }
+            be.overrides = own;
+        }
     }
     out
 }
@@ -411,6 +453,19 @@ fn shared_runtime(shared: &[SharedTick]) -> String {
                 t.overridden
                     .iter()
                     .map(|m| format!("`{m}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
+        // What a class below answers its own way, by the function that asks it.
+        let overridden = if t.answered.is_empty() {
+            overridden
+        } else {
+            format!(
+                "{overridden}\n/// What a class below answers its own way is asked of `me`, by the function of this module that\n/// has every class's answer: {}. Never answer one of these as these classes alone would.",
+                t.answered
+                    .iter()
+                    .map(|(java, rust)| format!("`{java}(..)` is `{rust}(me, ..)`"))
                     .collect::<Vec<_>>()
                     .join(", ")
             )
@@ -714,6 +769,7 @@ pub fn find(scan: &ModScan, ns: &str) -> Vec<BlockEntity> {
             held: Vec::new(),
             called_by: Vec::new(),
             shared: None,
+            overrides: Vec::new(),
         };
         if let Some(class) = class {
             state_of(scan, class, &mut be);
@@ -743,6 +799,13 @@ pub fn find(scan: &ModScan, ns: &str) -> Vec<BlockEntity> {
                     if !be.fields.iter().any(|x| x.name == f.name || x.key == f.key) {
                         be.fields.push(f);
                         took = true;
+                    }
+                }
+                // (And the fields of it that have no place in the state: a tick that calls
+                // a method of the base class reads them. Its constants are its own.)
+                for l in theirs.left_out {
+                    if l.contains("no Rust type for it yet") && !be.left_out.contains(&l) {
+                        be.left_out.push(l);
                     }
                 }
                 if took {
@@ -1181,8 +1244,10 @@ fn state_of(scan: &ModScan, class: &ClassInfo, be: &mut BlockEntity) {
         // An enum of the mod's own is kept as its constant's name.
         let is_enum = is_mod_enum(scan, class, &f.ty);
         let Some(kind) = Kind::from_java(&f.ty).or(is_enum.then_some(Kind::Text)) else {
-            be.left_out
-                .push(format!("`{} {}`: no Rust type for it yet", f.ty, f.name));
+            be.left_out.push(format!(
+                "`{} {}`: no Rust type for it yet; where the Java fills it by looking something up (a recipe it found), look it up again where the Java reads it",
+                f.ty, f.name
+            ));
             continue;
         };
         let key = if keys.contains(f.name.as_str()) {
@@ -1490,6 +1555,22 @@ pub enum Saved {
     Text(String),
 }
 
+/// A position as a block entity keeps one in its saved values (a `BlockPos` field: its
+/// source, its controller): `x y z`, as `4 64 -2`. Every function writes one with this
+/// and reads it with `text_pos`, so what one saves another can read.
+pub fn pos_text(pos: [i32; 3]) -> String {
+    format!("{} {} {}", pos[0], pos[1], pos[2])
+}
+
+/// The position `text` holds (`pos_text`); none where it is empty (null) or isn't one.
+pub fn text_pos(text: &str) -> Option<[i32; 3]> {
+    let mut parts = text.split_whitespace().map(str::parse::<i32>);
+    match (parts.next(), parts.next(), parts.next(), parts.next()) {
+        (Some(Ok(x)), Some(Ok(y)), Some(Ok(z)), None) => Some([x, y, z]),
+        _ => None,
+    }
+}
+
 /// The mod's blocks with a block entity: (block, block entity id, whether it ticks).
 pub const BLOCK_ENTITIES: &[(&str, &str, bool)] = &[
 "#,
@@ -1549,7 +1630,9 @@ pub const BLOCK_ENTITIES: &[(&str, &str, bool)] = &[
             let how = if f.java.contains("enum ") {
                 format!("{how}; the constant's name (`BELT`), empty before it is set")
             } else if f.java.starts_with("BlockPos ") {
-                format!("{how}; the position as `x y z` (`4 64 -2`), empty for none (null)")
+                format!(
+                    "{how}; the position as `x y z` (`4 64 -2`: written with `pos_text(pos)`, read with `text_pos(&text)`), empty for none (null)"
+                )
             } else if f.kind == Kind::Item {
                 format!("{how}; the item's id (`minecraft:bowl`), empty for none")
             } else {
@@ -1690,9 +1773,31 @@ pub const BLOCK_ENTITIES: &[(&str, &str, bool)] = &[
                         let part = shared_snake(&t.class);
                         let function = t.function();
                         let doc = format!(
-                            "\n/// The tick of `{simple}` and the classes above it is ported once, as `{function}`. Where\n/// this block entity's Java calls `super.tick()` into them, do:\n/// `let me = machine.me(pos, &state.save());`\n/// `let mut base = state.{part}_base();`\n/// `let called = {function}(pos, &mut base, &me, machine);`\n/// `state.set_{part}_base(base);`\n/// `called` names the methods of those classes it called on this block entity\n/// ({examples}): for each one a class of this block entity overrides, do what the override adds\n/// (what those classes do for it is done). Port nothing else of those classes here: their\n/// counters, and their walk over the blocks around, are that function's.",
+                            "\n/// The tick of `{simple}` and the classes above it is ported once, as `{function}`. Where\n/// this block entity's Java calls `super.tick()` into them, do:\n/// `let me = machine.me(pos, &state.save());`\n/// `let mut base = state.{part}_base();`\n/// `let called = {function}(pos, &mut base, &me, machine);`\n/// `state.set_{part}_base(base);`\n/// `called` names the methods of those classes it called on this block entity\n/// ({examples}): for each one a class of this block entity overrides, do what the override adds\n/// (what those classes do for it is done).{overrides} Port nothing of those classes' ticks here: their\n/// counters, and their walk over the blocks around, are that function's. A method of those classes\n/// that this class's own code calls outside their tick (`applyRecipe()` from its own `tick()`) is\n/// ported here, where it is called, from the Java shown for it.",
                             simple = t.simple(),
-                            examples = t.examples(),
+                            examples = if be.overrides.is_empty() {
+                                t.examples()
+                            } else {
+                                be.overrides
+                                    .iter()
+                                    .take(2)
+                                    .map(|m| format!("`\"{m}\"`"))
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            },
+                            overrides = if be.overrides.is_empty() {
+                                " This block entity's own classes override none of the methods that tick calls."
+                                    .to_string()
+                            } else {
+                                format!(
+                                    "\n/// This block entity's own classes override these of them: {}. Each is to be done here when\n/// `called` names it, whatever else the tick does.",
+                                    be.overrides
+                                        .iter()
+                                        .map(|m| format!("`{m}`"))
+                                        .collect::<Vec<_>>()
+                                        .join(", ")
+                                )
+                            },
                         );
                         // Its own class and those between, where it isn't the shared one itself.
                         let own = be.class.clone().unwrap_or_default();

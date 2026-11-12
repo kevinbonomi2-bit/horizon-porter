@@ -15,10 +15,15 @@ public abstract class StampBlockEntity extends BlockEntity {
     }
 
     public void tick() {
-        age++;
+        age += pace();
         if (age % 20 == 0) {
             onSecond();
         }
+    }
+
+    /** How fast it ages; a class below may age faster. */
+    protected int pace() {
+        return 1;
     }
 
     /** Called each second; a class below does its own work here. */

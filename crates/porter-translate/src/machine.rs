@@ -873,15 +873,19 @@ impl<'a> Machine<'a> {
         self.neighbours.get(i)?.as_ref()
     }
 
-    /// This block entity as its neighbours see it: its block, its state properties
-    /// and `values`, its saved values (`machine.me(pos, &state.save())`). What the
-    /// mod's own questions to a block entity take, for asking one of itself.
+    /// This block entity as its neighbours see it: its block, its own id as a block
+    /// entity, its state properties and `values`, its saved values
+    /// (`machine.me(pos, &state.save())`). What the mod's own questions to a block
+    /// entity take, for asking one of itself.
     pub fn me(&self, pos: [i32; 3], values: &[(&str, Saved)]) -> Neighbour {
         Neighbour {
             block: self.block.clone(),
             pos,
             properties: self.properties.clone(),
-            entity: None,
+            entity: BLOCK_ENTITIES
+                .iter()
+                .find(|(block, _, _)| *block == self.block)
+                .map(|(_, entity, _)| entity.to_string()),
             values: values
                 .iter()
                 .map(|(k, v)| (k.to_string(), v.clone()))

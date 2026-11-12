@@ -194,6 +194,7 @@ table of them, read from Horizon's source, so `port`:
 ```
 horizon-porter translate my-mod-horizon --dry-run   # what it would do, and what it costs
 horizon-porter translate my-mod-horizon             # Claude Haiku 5.5 (ANTHROPIC_API_KEY)
+horizon-porter translate my-mod-horizon --ai gemini # Google's Gemini, free (GEMINI_API_KEY)
 horizon-porter translate my-mod-horizon --ai ollama --model <a local model>   # free
 ```
 
@@ -228,12 +229,41 @@ fails keeps its old port. The app does this when you port a mod again.
 each ported function that couldn't do part of what its Java does, and what that part is.
 
 **What it costs.** `--dry-run` prints an estimate before anything is spent, and more
-than five functions need `--yes`. Claude Haiku 5.5 is the default: about $2 for
-Farmer's Delight's 117 functions.
-`--model claude-sonnet-5-5` or `claude-opus-5-5` costs more (Create about $7.80 on
-Opus 5.5) and is for what Haiku gets wrong. `--ai ollama --model <name>` runs a model
-on your own computer with [Ollama](https://ollama.com): free, and nothing leaves the
-computer. `--ai claude-code` uses your `claude` command, and `--ai "<command>"` any
+than five functions need `--yes`; `--dry-run --count` has the Claude API count each
+prompt's tokens (free, and exact). Claude Haiku 5.5 is the default: an estimated $0.50
+for Farmer's Delight's 127 functions and $4 for Create's 700, one try each. After a
+run, `translate` prints what it spent, every request counted.
+
+Haiku has two prices: $0.10 a million tokens in and $0.50 out while a prompt is
+100,000 tokens or fewer, and five times that for a longer one. `translate` keeps every
+prompt under that length: it sends a class without its imports, the classes the code
+uses cut to the methods it reaches, and of a large mod's module only what the function
+can use. The part of the module every function of a kind shares is sent first and read
+from the API's cache at a tenth of the price. An estimate that says a prompt is past
+100,000 tokens is saying it will cost five times as much.
+
+`--model claude-sonnet-5-5` or `claude-opus-5-5` costs 20 and 40 times as much and is
+for what Haiku gets wrong. The free ones:
+
+- `--ai gemini` asks Google's Gemini (`gemini-3.8-flash` unless `--model` names
+  another), free within Google's limits a minute and a day. Its key is free at
+  [aistudio.google.com/apikey](https://aistudio.google.com/apikey) and goes in
+  `GEMINI_API_KEY`. On the free tier Google may use what is sent to improve its
+  products: here, the mod's code. When the day's share runs out `translate` stops, and
+  carries on when you run it again.
+- `--ai openrouter --model <one ending in :free>` asks one of
+  [OpenRouter](https://openrouter.ai)'s free models (`OPENROUTER_API_KEY`): 50 requests
+  a day, 1,000 once the account has ever bought $10 of credits. Without `--model` it
+  lists them.
+- `--ai ollama --model <name>` runs a model on your own computer with
+  [Ollama](https://ollama.com): nothing leaves the computer.
+- `--ai http://localhost:1234/v1 --model <name>` asks any server with a chat
+  completions API (LM Studio, llama.cpp), its key, if it wants one, in `PORTER_AI_KEY`.
+
+Gemini and OpenRouter are new: checked against a stand-in server, not yet on a whole
+mod. The compile-and-test check and the checks on names are the same for every model,
+and an answer that does nothing but say the Java isn't ported is sent back, whoever
+gave it. `--ai claude-code` uses your `claude` command, and `--ai "<command>"` any
 program that reads the prompt on stdin.
 
 ### Adding it to your Horizon

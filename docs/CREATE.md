@@ -285,14 +285,94 @@ the kinetic step, the same in sixty block entities, ported once.
   all hundred of them, and translated again for each (about two cents and 50 to 170 lines a
   time). Porting a base class's tick once, for every block entity that inherits it, would end
   that.
-- **The whole of it** is 662 functions to translate: about 45 million tokens in, some $5 with
-  Claude Haiku for one try each, and more with the tries that need fixing.
+- **The whole of it** is 700 functions to translate: see "What it costs" below.
 - **Everything after this**: the 600 functions left, then the systems in the table above.
   Belts, fluids, contraptions and trains each need more from Horizon than a hook to paste into.
 
 So: Create is not ported. But "can the tool do anything with Create" has an answer now: the
 first step of the order below and the first machine of the second, done by the tool rather than
 by hand.
+
+### What it costs (2026-11-12)
+
+The figure this page gave before, "some $5" for the whole of Create, was wrong by nearly ten
+times, and so was what `translate` printed. Two things were off:
+
+- **Tokens.** The estimate took four characters to a token. Create's prompts (Java and
+  generated Rust) are 2.3 characters to a token on Claude Haiku 5.5, counted by the API.
+- **Price.** Haiku 5.5 costs $0.10 a million tokens in and $0.50 out only while the prompt is
+  100,000 tokens or fewer; a longer one costs five times as much, in and out. Create's
+  prompts averaged 225,000 tokens.
+
+So a function cost about 12 cents, not one or two, and the 125 or so translated for this page
+cost about $15 that the tool recorded, more with the answers that were cut off and asked
+again (those were not counted at all). The whole of Create would have been about $85.
+
+What changed in `translate`:
+
+- A prompt is priced from what the API says it used, at the card its own length picks, with
+  cache writes and reads at their own rates. Requests whose answer was cut off are counted.
+- A class is sent without its `import` lines (a fifth of Create's Java). A class the code uses
+  is cut to the methods that code reaches, the rest by signature.
+- Of a large module, a function called from here is shown by the first paragraph of its
+  comment and its signature; a state's `load` and `save` by their signatures.
+- The part of the module every function with the same parameters is shown (the types they
+  reach, the generated functions and tables) is sent first, the same text each time, and read
+  from the API's cache at a tenth of the price. Measured: the nozzle's tick read 11,482 of its
+  36,298 tokens from the cache; the press's, 22,539 of 84,088 on each request.
+- No prompt is written past 90,000 tokens: the classes it uses are cut back first.
+
+The press's tick, the largest prompt, went from 225,000 tokens or more to 85,299 (counted).
+The estimate for the 678 functions then left: 34 million tokens in and **$3.66**, one try
+each. Three ticks translated on those prompts cost $0.004, $0.004 and $0.041.
+
+The $0.041 is the press, and it is the other finding. Haiku thinks before it answers, and
+its thinking counts against the room for the answer. On the press it used all 16,000 tokens
+thinking and wrote nothing, twice in earlier runs with room for 48,000 too. Asked again with
+less thinking and room for 48,000 it wrote a 319-line tick that compiles. Asked instead with
+thinking off, it wrote a tick that did nothing but say the Java wasn't ported, and that
+compiled and passed the tests too: it had replaced a working port. So now a cut-off answer
+that was all thinking is asked again with less of it, thinking is turned off only when that
+fails as well, and an answer with no statement of its own under a note that nothing is ported
+is sent back; twice, and the function is left as it was.
+
+### The shared kinetic step, checked (2026-11-12)
+
+The build with the ticks ported once (17 of them, with the 12 block entity ticks ported again
+around them) passed 20 of the 29 checks, down from 29. What broke, and what the tool does
+about each:
+
+- **A large cogwheel no longer turned a small one.** `SimpleKineticBlockEntity` overrides
+  `addPropagationLocations`, which places a block meshes with. The shared tick is ported from
+  `KineticBlockEntity` alone and knew only its answer. A method that takes or gives back a list
+  of places can be a question to a block entity now, ported once with every class's answer.
+- **The crank did nothing when clicked.** Its tick left `updateGeneratedRotation` to the class
+  below, which did not do it, because `getGeneratedSpeed()` is each class's own. A method the
+  shared classes call on the block entity itself and a class below overrides is a question
+  too now, and the shared tick's comment names the function that answers it. Create has 36
+  such questions.
+- **The click set a key no tick reads.** A click cannot run `updateGeneratedRotation()`; Java's
+  own tick has a switch for it (`if (reActivateSource) { updateGeneratedRotation(); .. }`). The
+  prompt for a function without a tick's reach now names that switch and its key, read from
+  the Java.
+- **The motors stayed at 16.** That one was the check: it set `ScrollValue` with `data merge`,
+  which changes nothing in Java either. It sets `reActivateSource` with it now, which is what
+  scrolling the value does.
+
+More came out on the way, each fixed in the tool: a tick's view of its own block entity carried
+no block entity id (a generator bug: every question that tells classes apart by it answered for
+none); answers compared a block's id with a block entity's (`create:motor` is the block entity
+of `create:creative_motor`), which is sent back now; a position kept as text was written
+`x,y,z` by one function and read `x y z` by the rest, so there is one `pos_text` and one
+`text_pos`; a tick is told by name which methods its own classes override, and one that never
+calls its shared tick, or returns before the work others call it for, is sent back.
+
+Where it stands: **25 of 29** on the best build so far. Every kinetic check passes again
+(chains, gearbox faces, clutch and gearshift, the diagonal cogwheels, the crank, motors set to
+64). The press and the mixer do not make their items yet on these ticks: the press's last
+port (it calls its shared tick now) is not built or checked, and the mixer's still leaves
+`applyBasinRecipe` out because the recipe it found (`currentRecipe`) has no place in its state.
+The build before the shared ticks passed all 29 and is still installed beside it.
 
 ## Suggested order
 
