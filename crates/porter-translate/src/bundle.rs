@@ -201,6 +201,8 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
         crate::questions::find(scan, &ns, &block_entities)
     };
     let mut machines = machine::find(scan, &ns, &id, &block_entities);
+    // The ticks several block entities share, ported once each.
+    let shared_ticks = block_entity::shared_ticks(scan, &mut block_entities, &machines);
     let recipe_types = machine::recipe_types(scan, &ns);
     let machine_blocks: BTreeMap<String, String> = machines
         .iter()
@@ -508,6 +510,7 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
         stubbed: &stubbed,
         hooks,
         block_entities: &block_entities,
+        shared_ticks: &shared_ticks,
         questions: &questions,
         machines: &machines,
         recipe_types: &recipe_types,
@@ -1141,6 +1144,8 @@ struct Ctx<'a> {
     stubbed: &'a BTreeMap<&'static str, Uses>,
     hooks: u32,
     block_entities: &'a [BlockEntity],
+    /// The ticks several of them share (`block_entity::shared_ticks`).
+    shared_ticks: &'a [block_entity::SharedTick],
     /// The mod's own questions to a block (`questions::find`).
     questions: &'a [crate::questions::Question],
     machines: &'a [Machine],
@@ -1550,6 +1555,7 @@ pub const DESCRIPTION: &str = "{description}";
                 self.block_entities,
                 self.machines,
                 self.recipe_types,
+                self.shared_ticks,
             ));
             // The mod's own questions to a block, ported once for all who ask.
             r.push_str(&crate::questions::runtime(self.questions));

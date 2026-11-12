@@ -403,8 +403,7 @@ fn tells_a_tick_which_block_entities_call_the_code_it_gave() {
     );
     // Its TODO names both classes, so translate reads them.
     assert!(runtime.contains(
-        "/// TODO: port the tick of `net.stamp.PressBlockEntity` and what it keeps in `net.stamp.StampBehaviour`, and what `net.stamp.ProcessBehaviour` is called for by `net.stamp.TrayBehaviour`.
-pub fn tick_press("
+        "/// TODO: port the tick of `net.stamp.PressBlockEntity` (the classes above it are `stamp_block_entity_tick`) and what it keeps in `net.stamp.StampBehaviour`, and what `net.stamp.ProcessBehaviour` is called for by `net.stamp.TrayBehaviour`.\npub fn tick_press("
     ));
     // The tray's own tick isn't called by anything.
     let tray = &runtime[runtime
@@ -414,6 +413,51 @@ pub fn tick_press("
     assert!(!tray.contains("call code this one gave"));
     // Both reach two steps: the tray looks up for the press, the press down for it.
     assert!(runtime.contains("pub const FAR: &[&str] = &[\"stamp:press\", \"stamp:tray\"];"));
+}
+
+#[test]
+fn ports_a_tick_several_block_entities_share_once() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../porter-java/tests/fixtures/neoforge-press-demo");
+    let scan = porter_java::scan(&path).unwrap();
+    let b = bundle::generate(&scan, &bundle::load_lang(&scan));
+    let runtime = &b.files["mixins/stamp/runtime.rs"];
+    // The press and the tray both inherit `StampBlockEntity`, which ticks: its part of
+    // their state, and its tick as one function to port.
+    assert!(
+        runtime.contains(
+            "pub struct StampBlockEntityBase {\n    /// `int age`, saved as `Age`.\n    pub age: i32,\n}"
+        ),
+        "{runtime}"
+    );
+    assert!(runtime.contains(
+        "/// TODO: port the tick of `net.stamp.StampBlockEntity`.\npub fn stamp_block_entity_tick(pos: [i32; 3], base: &mut StampBlockEntityBase, me: &Neighbour, machine: &mut Machine<'_>) -> Vec<&'static str> {"
+    ));
+    // It names what classes below override, which its tick can only report.
+    assert!(runtime.contains("/// Classes below override these methods of them: `onSecond`."));
+    assert!(runtime.contains("by name (`\"onSecond\"`)"));
+    // Each state gives that part and takes it back.
+    for ty in ["Press", "Tray"] {
+        assert!(
+            runtime.contains(&format!(
+                "impl {ty} {{\n    /// The part of it `StampBlockEntity` and the classes above keep, for `stamp_block_entity_tick`.\n    pub fn stamp_block_entity_base(&self) -> StampBlockEntityBase {{\n        StampBlockEntityBase {{\n            age: self.age,\n        }}\n    }}"
+            )),
+            "{ty}: {runtime}"
+        );
+    }
+    // And each one's own tick is told to call it, and to port only its own class.
+    assert!(runtime.contains(
+        "/// The tick of `StampBlockEntity` and the classes above it is ported once, as `stamp_block_entity_tick`."
+    ));
+    assert!(
+        runtime
+            .contains("/// `let called = stamp_block_entity_tick(pos, &mut base, &me, machine);`")
+    );
+    assert!(runtime.contains(
+        "/// TODO: port the tick of `net.stamp.TrayBlockEntity` (the classes above it are `stamp_block_entity_tick`) and what it keeps in `net.stamp.TrayBehaviour`.\npub fn tick_tray("
+    ));
+    // The generated tests check that round trip too.
+    assert!(runtime.contains("fn press_gives_and_takes_its_shared_part() {"));
 }
 
 #[test]

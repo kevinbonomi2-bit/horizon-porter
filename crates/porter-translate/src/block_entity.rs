@@ -75,6 +75,375 @@ pub struct BlockEntity {
     /// The classes of other block entities that take something it holds and call the
     /// code it gave it: a depot's `DepotBehaviour`, for a press.
     pub called_by: Vec<Caller>,
+    /// The nearest class of its own or above it whose tick is ported once for every
+    /// block entity that inherits it (`shared_ticks`): `com.x.KineticBlockEntity`.
+    pub shared: Option<String>,
+}
+
+/// A class several block entities inherit, with a tick of its own: Create's
+/// `KineticBlockEntity`, above sixty of them. Its tick is ported once, as a function
+/// over the part of a block entity's state the class keeps, and each block entity's
+/// own tick calls it where its Java calls `super.tick()`. Otherwise the same code is
+/// translated again for each, differs between them, and makes each tick too long.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SharedTick {
+    /// The class: `com.x.KineticBlockEntity`.
+    pub class: String,
+    /// The mod's classes above it that its part takes fields or a tick from, up to
+    /// the next shared one, nearest first.
+    pub above: Vec<String>,
+    /// The next shared class above it: its `super.tick()`.
+    pub next: Option<String>,
+    /// Its part of a block entity's state: the fields of it and of every class above.
+    pub fields: Vec<StateField>,
+    /// The block entities that inherit it, by id.
+    pub users: Vec<String>,
+    /// Methods of it and of the classes above that classes below override.
+    pub overridden: Vec<String>,
+    /// What the ticks of those block entities reach, any of them.
+    pub neighbours: bool,
+    pub far: bool,
+    pub around: bool,
+    pub drawn: bool,
+}
+
+impl SharedTick {
+    /// Two of the methods classes below override, as an example of what its tick
+    /// returns: `"onSpeedChanged"`, `"lazyTick"`.
+    fn examples(&self) -> String {
+        if self.overridden.is_empty() {
+            return "`\"onChanged\"`".to_string();
+        }
+        self.overridden
+            .iter()
+            .take(2)
+            .map(|m| format!("`\"{m}\"`"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    /// Its simple name: `KineticBlockEntity`.
+    pub fn simple(&self) -> &str {
+        self.class.rsplit(['.', '$']).next().unwrap_or(&self.class)
+    }
+
+    /// The function its tick is ported as: `kinetic_block_entity_tick`.
+    pub fn function(&self) -> String {
+        format!("{}_tick", shared_snake(&self.class))
+    }
+}
+
+/// `kinetic_block_entity` for `com.x.KineticBlockEntity`.
+fn shared_snake(class: &str) -> String {
+    let simple = class.rsplit(['.', '$']).next().unwrap_or(class);
+    let mut out = String::new();
+    for (i, c) in simple.chars().enumerate() {
+        if c.is_ascii_uppercase() && i > 0 {
+            out.push('_');
+        }
+        out.push(c.to_ascii_lowercase());
+    }
+    out
+}
+
+/// The shared ticks of a mod's block entities, and each block entity told which is
+/// its nearest (`BlockEntity::shared`). A class is shared when two or more block
+/// entities whose tick is the plain kind (a state and a `Machine`) have it as their
+/// own class or above it, and it declares a `tick` itself.
+pub fn shared_ticks(
+    scan: &ModScan,
+    entities: &mut [BlockEntity],
+    machines: &[crate::machine::Machine],
+) -> Vec<SharedTick> {
+    let class = |name: &str| scan.classes.iter().find(|c| c.name == name);
+    let ticks_itself =
+        |name: &str| class(name).is_some_and(|c| c.method_names.iter().any(|m| m == "tick"));
+    // Each one's classes, its own first; none for one whose tick is another kind.
+    let chains: Vec<Vec<String>> = entities
+        .iter()
+        .map(|be| {
+            let plain =
+                be.ticks && takes_machine(be) && !machines.iter().any(|m| m.entity == be.id);
+            if plain {
+                be.class.iter().chain(&be.bases).cloned().collect()
+            } else {
+                Vec::new()
+            }
+        })
+        .collect();
+    let mut users: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
+    for (i, chain) in chains.iter().enumerate() {
+        for c in chain {
+            users.entry(c.as_str()).or_default().push(i);
+        }
+    }
+    let shared: BTreeSet<&str> = users
+        .iter()
+        .filter(|(c, of)| of.len() >= 2 && ticks_itself(c))
+        .map(|(c, _)| *c)
+        .collect();
+    let mut out: Vec<SharedTick> = Vec::new();
+    for c in &shared {
+        let of = &users[c];
+        // The one that has the most of its fields stands for all (another may have
+        // lost one to a field of its own with the same name).
+        let part = |i: usize| -> Vec<StateField> {
+            let chain = &chains[i];
+            let at = chain.iter().position(|x| x == c).unwrap_or(0);
+            entities[i]
+                .fields
+                .iter()
+                .filter(|f| chain[at..].contains(&f.from))
+                .cloned()
+                .collect()
+        };
+        let Some(most) = of.iter().copied().max_by_key(|i| part(*i).len()) else {
+            continue;
+        };
+        let chain = &chains[most];
+        let at = chain.iter().position(|x| x == c).unwrap_or(0);
+        let rest = &chain[at + 1..];
+        let next = rest.iter().find(|x| shared.contains(x.as_str())).cloned();
+        let above: Vec<String> = rest
+            .iter()
+            .take_while(|x| !shared.contains(x.as_str()))
+            .cloned()
+            .collect();
+        // What classes below it override of it and of those above.
+        let mut theirs: BTreeSet<&str> = BTreeSet::new();
+        for name in std::iter::once(*c).chain(rest.iter().map(String::as_str)) {
+            if let Some(k) = class(name) {
+                theirs.extend(k.method_names.iter().map(String::as_str));
+            }
+        }
+        let mut overridden: BTreeMap<&str, usize> = BTreeMap::new();
+        for i in of {
+            let below = chains[*i].iter().take_while(|x| x.as_str() != *c);
+            for k in below.filter_map(|n| class(n)) {
+                for m in &k.method_names {
+                    // (Not the tick itself, nor saving and making, which no tick calls.)
+                    let skip = [
+                        "tick",
+                        "write",
+                        "read",
+                        "saveAdditional",
+                        "loadAdditional",
+                        "addBehaviours",
+                    ];
+                    if theirs.contains(m.as_str()) && !skip.contains(&m.as_str()) {
+                        *overridden.entry(m.as_str()).or_default() += 1;
+                    }
+                }
+            }
+        }
+        // Those that do something first, the ones most classes override before the rest;
+        // a method that only answers (`getGeneratedSpeed`, `isSource`) after them.
+        let answers = |m: &str| {
+            ["get", "is", "has", "can", "should", "calculate"]
+                .iter()
+                .any(|p| {
+                    m.strip_prefix(p)
+                        .is_some_and(|r| r.starts_with(char::is_uppercase))
+                })
+        };
+        let mut overridden: Vec<(&str, usize)> = overridden.into_iter().collect();
+        overridden.sort_by(|a, b| {
+            answers(a.0)
+                .cmp(&answers(b.0))
+                .then(b.1.cmp(&a.1))
+                .then(a.0.cmp(b.0))
+        });
+        out.push(SharedTick {
+            class: c.to_string(),
+            above,
+            next,
+            fields: part(most),
+            users: of.iter().map(|i| entities[*i].id.clone()).collect(),
+            overridden: overridden
+                .into_iter()
+                .take(14)
+                .map(|(m, _)| m.to_string())
+                .collect(),
+            neighbours: of.iter().any(|i| entities[*i].neighbours),
+            far: of.iter().any(|i| entities[*i].far),
+            around: of.iter().any(|i| entities[*i].around),
+            drawn: of.iter().any(|i| entities[*i].renderer.is_some()),
+        });
+    }
+    for (be, chain) in entities.iter_mut().zip(&chains) {
+        be.shared = chain.iter().find(|x| shared.contains(x.as_str())).cloned();
+    }
+    out
+}
+
+/// What a tick's `machine` reaches of the world around the block entity, a phrase each.
+fn reach(neighbours: bool, far: bool, around: bool, drawn: bool) -> Vec<String> {
+    let mut has = Vec::new();
+    if neighbours {
+        has.push("the blocks beside it (`machine.neighbour(Side::Up)`, with their saved state; `machine.set_neighbour(...)` changes one after the tick)".to_string());
+    }
+    if far {
+        has.push("the mod block entities two steps away along each axis too (`machine.at(pos)` for `level.getBlockEntity(pos.above(2))`, each with its block, state, saved values and item slots; `machine.set_at(pos, key, value)` changes a saved value of one after the tick, `machine.set_item_at(pos, slot, stack)` one of its item slots)".to_string());
+    }
+    if around {
+        has.push("the mod block entities at the other places of the 3×3×3 around it too, diagonals included (`machine.at(pos)` for what `BlockPos.betweenClosed(pos.offset(-1, -1, -1), pos.offset(1, 1, 1))` walks, each with its block, state, saved values and item slots)".to_string());
+    }
+    if drawn {
+        has.push("`machine.sync()`, which sends clients its state again for its renderer (`sendBlockUpdated`)".to_string());
+    }
+    has
+}
+
+/// The two functions that give a state struct's shared part and take it back:
+/// `struct_fields` are the struct's own, `shared` the class whose part it is.
+fn shared_part_impl(ty: &str, struct_fields: &[StateField], shared: &SharedTick) -> String {
+    let snake = shared_snake(&shared.class);
+    let base = format!("{}Base", shared.simple());
+    let both: Vec<&StateField> = shared
+        .fields
+        .iter()
+        .filter(|f| {
+            struct_fields
+                .iter()
+                .any(|g| g.name == f.name && g.kind == f.kind)
+        })
+        .collect();
+    let mut r = String::new();
+    let _ = write!(
+        r,
+        "\nimpl {ty} {{\n    /// The part of it `{simple}` and the classes above keep, for `{function}`.\n    pub fn {snake}_base(&self) -> {base} {{\n",
+        simple = shared.simple(),
+        function = shared.function(),
+    );
+    if both.is_empty() {
+        let _ = writeln!(r, "        {base}::default()");
+    } else {
+        let _ = writeln!(r, "        {base} {{");
+        for f in &both {
+            let value = match f.kind {
+                Kind::Text | Kind::Item => format!("self.{}.clone()", f.name),
+                _ => format!("self.{}", f.name),
+            };
+            let _ = writeln!(r, "            {}: {value},", f.name);
+        }
+        if both.len() < shared.fields.len() {
+            r.push_str("            ..Default::default()\n");
+        }
+        r.push_str("        }\n");
+    }
+    let _ = write!(
+        r,
+        "    }}\n\n    /// Takes that part back, as `{function}` left it.\n    pub fn set_{snake}_base(&mut self, base: {base}) {{\n",
+        function = shared.function(),
+    );
+    if both.is_empty() {
+        r.push_str("        let _ = base;\n");
+    }
+    for f in &both {
+        let _ = writeln!(r, "        self.{0} = base.{0};", f.name);
+    }
+    r.push_str("    }\n}\n");
+    r
+}
+
+/// The runtime.rs code of the shared ticks: each one's part of the state, how a part
+/// gives the part of the next one up, and the function its tick is ported as.
+fn shared_runtime(shared: &[SharedTick]) -> String {
+    let mut r = String::new();
+    for t in shared {
+        let base = format!("{}Base", t.simple());
+        let function = t.function();
+        let above: Vec<String> = t
+            .above
+            .iter()
+            .map(|c| format!("`{}`", c.rsplit(['.', '$']).next().unwrap_or(c)))
+            .collect();
+        let with = if above.is_empty() {
+            String::new()
+        } else {
+            format!(" (with {} above it)", above.join(", "))
+        };
+        let _ = write!(
+            r,
+            "\n/// The part of a block entity's state that `{simple}` keeps{with}, and every class above:\n/// what `{function}` works on, for each of the {n} block entities that inherit it. A block\n/// entity's state gives it (`state.{snake}_base()`) and takes it back\n/// (`state.set_{snake}_base(base)`).\n#[derive(Clone, Debug, Default, PartialEq)]\npub struct {base} {{\n",
+            simple = t.simple(),
+            n = t.users.len(),
+            snake = shared_snake(&t.class),
+        );
+        for f in &t.fields {
+            let how = if f.saved_by_java {
+                format!("saved as `{}`", one_line(&f.key))
+            } else {
+                format!("kept as `{}`", one_line(&f.key))
+            };
+            let _ = writeln!(
+                r,
+                "    /// `{}`, {how}.\n    pub {}: {},",
+                f.java,
+                f.name,
+                f.kind.rust()
+            );
+        }
+        r.push_str("}\n");
+        let next = t
+            .next
+            .as_ref()
+            .and_then(|n| shared.iter().find(|s| s.class == *n));
+        if let Some(next) = next {
+            r.push_str(&shared_part_impl(&base, &t.fields, next));
+        }
+        // Its tick.
+        let mut has = reach(t.neighbours, t.far, t.around, t.drawn);
+        if has.is_empty() {
+            has.push("what a tick has".to_string());
+        }
+        let some: Vec<String> = t.users.iter().take(6).map(|u| format!("`{u}`")).collect();
+        let more = if t.users.len() > 6 {
+            format!(" and {} more", t.users.len() - 6)
+        } else {
+            String::new()
+        };
+        let overridden = if t.overridden.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "\n/// Classes below override these methods of them: {}. Where the tick calls one on the block\n/// entity itself: one that only answers is asked of `me` where this module has it ported (named\n/// with this function's Java), else answered as these classes do; one that changes the block\n/// entity's own state is done as these classes do it and its name returned.",
+                t.overridden
+                    .iter()
+                    .map(|m| format!("`{m}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
+        let up = match next {
+            Some(next) => format!(
+                "\n/// Its `super.tick()` is the tick of `{}`, ported once too: `let mut above = base.{snake}_base();`\n/// `let mut called = {function}(pos, &mut above, me, machine); base.set_{snake}_base(above);`, and what it\n/// returned is returned with this one's.",
+                next.simple(),
+                snake = shared_snake(&next.class),
+                function = next.function(),
+            ),
+            None => String::new(),
+        };
+        let java = if t.above.is_empty() {
+            t.class.clone()
+        } else {
+            format!(
+                "{}` and what it inherits from `{}",
+                t.class,
+                t.above.join("`, `")
+            )
+        };
+        let _ = write!(
+            r,
+            "\n/// The tick of `{simple}`{with}, ported once for the {n} block entities that inherit it\n/// ({some}{more}). `base` is the part of the block entity's state these classes keep; `me` is the\n/// whole block entity as a view (its block, its state properties, and its saved values as the tick\n/// began), for what its own class answers; `machine` has {has}. What the tick changes in `base`\n/// and through `machine` is kept.\n/// It returns the methods of these classes it called on the block entity that a class below may\n/// override with effects of its own, by name ({examples}), having done what\n/// these classes themselves do for each: the caller adds what its own class does.{overridden}{up}\n/// The parts a block entity keeps in classes of its own (a behaviour it holds) are ticked by its\n/// own tick, not here.\n///\n/// TODO: port the tick of `{java}`.\npub fn {function}(pos: [i32; 3], base: &mut {base}, me: &Neighbour, machine: &mut Machine<'_>) -> Vec<&'static str> {{\n    let _ = (pos, base, me, machine);\n    Vec::new()\n}}\n",
+            simple = t.simple(),
+            n = t.users.len(),
+            some = some.join(", "),
+            has = has.join("; "),
+            examples = t.examples(),
+        );
+    }
+    r
 }
 
 /// A class of the mod that takes something a block entity holds and calls the code
@@ -110,6 +479,9 @@ pub struct StateField {
     /// `generatedSpeed.value = DEFAULT_SPEED`): a Rust expression. None starts it at
     /// zero, false or empty.
     pub init: Option<String>,
+    /// The class that declares it: the block entity's own, one above it, or one it
+    /// keeps part of itself in.
+    pub from: String,
 }
 
 /// The NBT kinds a state field can have.
@@ -341,6 +713,7 @@ pub fn find(scan: &ModScan, ns: &str) -> Vec<BlockEntity> {
             around: false,
             held: Vec::new(),
             called_by: Vec::new(),
+            shared: None,
         };
         if let Some(class) = class {
             state_of(scan, class, &mut be);
@@ -792,6 +1165,7 @@ fn state_of(scan: &ModScan, class: &ClassInfo, be: &mut BlockEntity) {
             init: field
                 .and_then(|f| f.init.as_deref())
                 .and_then(|i| initial(kind, i, class)),
+            from: class.name.clone(),
         });
     }
     // Fields saveAdditional leaves out still have to last from tick to tick.
@@ -832,6 +1206,7 @@ fn state_of(scan: &ModScan, class: &ClassInfo, be: &mut BlockEntity) {
                 .as_deref()
                 .filter(|_| !is_enum)
                 .and_then(|i| initial(kind, i, class)),
+            from: class.name.clone(),
         });
     }
     for f in class.fields.iter().filter(|f| f.is_static) {
@@ -1098,6 +1473,7 @@ pub fn runtime(
     entities: &[BlockEntity],
     machines: &[crate::machine::Machine],
     recipe_types: &[String],
+    shared: &[SharedTick],
 ) -> String {
     let machine_of = |be: &BlockEntity| machines.iter().find(|m| m.entity == be.id);
     let mut r = String::from(
@@ -1124,6 +1500,7 @@ pub const BLOCK_ENTITIES: &[(&str, &str, bool)] = &[
         }
     }
     r.push_str("];\n");
+    r.push_str(&shared_runtime(shared));
 
     for be in entities {
         // Its class, with the base classes it takes state or its tick from.
@@ -1253,6 +1630,13 @@ pub const BLOCK_ENTITIES: &[(&str, &str, bool)] = &[
             );
         }
         r.push_str("        ]\n    }\n}\n");
+        let its_shared = be
+            .shared
+            .as_ref()
+            .and_then(|c| shared.iter().find(|t| t.class == *c));
+        if let Some(t) = its_shared {
+            r.push_str(&shared_part_impl(&be.rust, &be.fields, t));
+        }
 
         let storage = storage_text(be);
         if be.ticks {
@@ -1261,18 +1645,12 @@ pub const BLOCK_ENTITIES: &[(&str, &str, bool)] = &[
                 if !storage.is_empty() {
                     has.push(storage.clone());
                 }
-                if be.neighbours {
-                    has.push("the blocks beside it (`machine.neighbour(Side::Up)`, with their saved state; `machine.set_neighbour(...)` changes one after the tick)".to_string());
-                }
-                if be.far {
-                    has.push("the mod block entities two steps away along each axis too (`machine.at(pos)` for `level.getBlockEntity(pos.above(2))`, each with its block, state, saved values and item slots; `machine.set_at(pos, key, value)` changes a saved value of one after the tick, `machine.set_item_at(pos, slot, stack)` one of its item slots)".to_string());
-                }
-                if be.around {
-                    has.push("the mod block entities at the other places of the 3×3×3 around it too, diagonals included (`machine.at(pos)` for what `BlockPos.betweenClosed(pos.offset(-1, -1, -1), pos.offset(1, 1, 1))` walks, each with its block, state, saved values and item slots)".to_string());
-                }
-                if be.renderer.is_some() {
-                    has.push("`machine.sync()`, which sends clients its state again for its renderer (`sendBlockUpdated`)".to_string());
-                }
+                has.extend(reach(
+                    be.neighbours,
+                    be.far,
+                    be.around,
+                    be.renderer.is_some(),
+                ));
                 if be.blocks.len() > 1 {
                     has.push(format!(
                         "`machine.block`, its own block ({})",
@@ -1283,9 +1661,69 @@ pub const BLOCK_ENTITIES: &[(&str, &str, bool)] = &[
                             .join(", ")
                     ));
                 }
+                let extras = animate_doc(be) + &redstone_doc(be) + &lands_doc(be) + &called_doc(be);
+                let extras_todo =
+                    animate_todo(be) + &redstone_todo(be) + &lands_todo(be) + &called_todo(be);
+                // Its tick is the shared one and nothing more: written here, whole.
+                let only_shared = its_shared.filter(|t| {
+                    be.class.as_deref() == Some(t.class.as_str())
+                        && be.held.is_empty()
+                        && extras.is_empty()
+                });
+                if let Some(t) = only_shared {
+                    let _ = write!(
+                        r,
+                        "\n/// A server tick of the `{id}` block entity at `pos`, 20 a second: the tick of `{simple}`,\n/// its class, which is ported once as `{function}`.\npub fn tick_{snake}(pos: [i32; 3], state: &mut {ty}, machine: &mut Machine<'_>) {{\n    let me = machine.me(pos, &state.save());\n    let mut base = state.{part}_base();\n    let _ = {function}(pos, &mut base, &me, machine);\n    state.set_{part}_base(base);\n}}\n",
+                        id = be.id,
+                        simple = t.simple(),
+                        function = t.function(),
+                        part = shared_snake(&t.class),
+                        snake = be.snake,
+                        ty = be.rust
+                    );
+                    continue;
+                }
+                // With a shared tick above it: that is called, and only what is its
+                // own is to port.
+                let (above_doc, tick_java) = match its_shared {
+                    Some(t) => {
+                        let part = shared_snake(&t.class);
+                        let function = t.function();
+                        let doc = format!(
+                            "\n/// The tick of `{simple}` and the classes above it is ported once, as `{function}`. Where\n/// this block entity's Java calls `super.tick()` into them, do:\n/// `let me = machine.me(pos, &state.save());`\n/// `let mut base = state.{part}_base();`\n/// `let called = {function}(pos, &mut base, &me, machine);`\n/// `state.set_{part}_base(base);`\n/// `called` names the methods of those classes it called on this block entity\n/// ({examples}): for each one a class of this block entity overrides, do what the override adds\n/// (what those classes do for it is done). Port nothing else of those classes here: their\n/// counters, and their walk over the blocks around, are that function's.",
+                            simple = t.simple(),
+                            examples = t.examples(),
+                        );
+                        // Its own class and those between, where it isn't the shared one itself.
+                        let own = be.class.clone().unwrap_or_default();
+                        let between: Vec<&String> =
+                            be.bases.iter().take_while(|b| **b != t.class).collect();
+                        let mut subject = if own == t.class {
+                            format!("this block entity around `{function}`")
+                        } else if between.is_empty() {
+                            format!("`{own}` (the classes above it are `{function}`)")
+                        } else {
+                            format!(
+                                "`{own}` and what it inherits from `{}` (the classes above them are `{function}`)",
+                                between
+                                    .iter()
+                                    .map(|b| b.as_str())
+                                    .collect::<Vec<_>>()
+                                    .join("`, `")
+                            )
+                        };
+                        if !be.held.is_empty() {
+                            let held: Vec<&str> = be.held.iter().map(|(_, c)| c.as_str()).collect();
+                            let _ =
+                                write!(subject, " and what it keeps in `{}`", held.join("`, `"));
+                        }
+                        (doc, subject)
+                    }
+                    None => (String::new(), format!("`{java}`")),
+                };
                 let _ = write!(
                     r,
-                    "\n/// A server tick of the `{id}` block entity at `pos`, 20 a second. `machine` has\n/// {has}{no_slots}. What the tick changes in them and in `state` is\n/// kept.{animate}\n///\n/// TODO: port the tick of `{java}`{animate_todo}.\npub fn tick_{snake}(pos: [i32; 3], state: &mut {ty}, machine: &mut Machine<'_>) {{\n    let _ = (pos, state, machine);\n}}\n",
+                    "\n/// A server tick of the `{id}` block entity at `pos`, 20 a second. `machine` has\n/// {has}{no_slots}. What the tick changes in them and in `state` is\n/// kept.{above_doc}{extras}\n///\n/// TODO: port the tick of {tick_java}{extras_todo}.\npub fn tick_{snake}(pos: [i32; 3], state: &mut {ty}, machine: &mut Machine<'_>) {{\n    let _ = (pos, state, machine);\n}}\n",
                     id = be.id,
                     has = has.join("; "),
                     no_slots = if be.items == 0 {
@@ -1293,10 +1731,6 @@ pub const BLOCK_ENTITIES: &[(&str, &str, bool)] = &[
                     } else {
                         ""
                     },
-                    animate =
-                        animate_doc(be) + &redstone_doc(be) + &lands_doc(be) + &called_doc(be),
-                    animate_todo =
-                        animate_todo(be) + &redstone_todo(be) + &lands_todo(be) + &called_todo(be),
                     snake = be.snake,
                     ty = be.rust
                 );
@@ -1836,6 +2270,15 @@ impl Draw {
 pub fn runtime_tests(entities: &[BlockEntity]) -> String {
     let mut t = String::new();
     for be in entities {
+        if let Some(shared) = &be.shared {
+            let _ = write!(
+                t,
+                "\n    #[test]\n    fn {snake}_gives_and_takes_its_shared_part() {{\n        let state = super::{ty}::default();\n        let mut back = state.clone();\n        back.set_{part}_base(state.{part}_base());\n        assert_eq!(back, state);\n    }}\n",
+                snake = be.snake,
+                ty = be.rust,
+                part = shared_snake(shared)
+            );
+        }
         let _ = write!(
             t,
             "\n    #[test]\n    fn {snake}_state_saves_and_loads() {{\n        let state = super::{ty}::default();\n        let saved = state.save();\n        let loaded = super::{ty}::load(|key| {{\n            saved.iter().find(|(k, _)| *k == key).map(|(_, v)| v.clone())\n        }});\n        assert_eq!(loaded, state);\n        assert_eq!(super::block_entity_defaults(\"{id}\"), saved);\n    }}\n",

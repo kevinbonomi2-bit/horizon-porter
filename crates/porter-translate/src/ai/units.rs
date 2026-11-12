@@ -570,13 +570,13 @@ pub fn keep_ported(fresh: &str, existing: &str) -> String {
         let from_then = prev_comment
             .lines()
             .find_map(|l| l.find(PORTED).map(|i| todo_of(&l[i..]).trim().to_string()));
-        // Or one that is to read more Java now: the class of another block entity
-        // that calls the code this one gave it.
+        // Or one that is to be ported from other Java now: more (the class of another
+        // block entity that calls the code this one gave it) or less (what a tick
+        // shared with others has taken over).
         let source_changed = match (&from_then, &from_now) {
             (Some(a), Some(b)) => {
-                let then = java_classes(a);
                 (a.contains("(not found)") && !b.contains("(not found)"))
-                    || java_classes(b).iter().any(|c| !then.contains(c))
+                    || java_classes(b) != java_classes(a)
             }
             _ => false,
         };

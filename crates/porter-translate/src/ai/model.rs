@@ -230,6 +230,39 @@ impl Model for Anthropic {
                     api_error(&json)
                 );
             }
+            // What a cut-off answer was made of, to tell a long function from one that
+            // went round in circles or never got to its answer: each kind of block and
+            // its length, and how the text ended.
+            let cut_off = || -> String {
+                let blocks = json["content"].as_array().cloned().unwrap_or_default();
+                let mut kinds: Vec<String> = Vec::new();
+                let mut text = String::new();
+                for b in &blocks {
+                    let kind = b["type"].as_str().unwrap_or("?");
+                    let body = b["text"].as_str().or(b["thinking"].as_str()).unwrap_or("");
+                    kinds.push(format!("{kind} of {} characters", body.len()));
+                    if kind == "text" {
+                        text.push_str(body);
+                    }
+                }
+                let lines = text.lines().count();
+                let distinct: std::collections::BTreeSet<&str> =
+                    text.lines().map(str::trim).collect();
+                let tail: String = text
+                    .chars()
+                    .rev()
+                    .take(160)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect();
+                format!(
+                    "{}; {lines} lines of text, {} of them different; it ended: {:?}",
+                    kinds.join(", "),
+                    distinct.len(),
+                    tail
+                )
+            };
             match json["stop_reason"].as_str() {
                 Some("refusal") => bail!(
                     "Claude declined this one ({})",
@@ -242,6 +275,7 @@ impl Model for Anthropic {
                     eprintln!(
                         "  the answer was cut off at 16000 tokens; asking again with room for 48000"
                     );
+                    eprintln!("    ({})", cut_off());
                     body["max_tokens"] = 48000.into();
                     continue;
                 }
@@ -252,12 +286,15 @@ impl Model for Anthropic {
                     eprintln!(
                         "  the answer was cut off at 48000 tokens too; asking once more for a shorter one"
                     );
+                    eprintln!("    ({})", cut_off());
                     if let Some(content) = body["messages"][0]["content"].as_array_mut() {
                         content.push(serde_json::json!({ "type": "text", "text": SHORTER }));
                     }
                     continue;
                 }
-                Some("max_tokens") => bail!("the answer was cut off at 48000 tokens"),
+                Some("max_tokens") => {
+                    bail!("the answer was cut off at 48000 tokens ({})", cut_off())
+                }
                 _ => {}
             }
             let text = json["content"]

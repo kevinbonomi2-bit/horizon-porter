@@ -549,17 +549,15 @@ pub fn translate(
         let outcome = translate_one(dir, unit, &prompt, model, opts, cargo, &mut progress);
         progress(&format!("  {}", describe(&outcome.status)));
         let stop = matches!(outcome.status, Status::NoAnswer(_));
-        // A shared function of the mod it calls that is still to port (a question to a
-        // block, a helper over block entities) answers nothing until it is: ported too,
-        // though `--only` didn't name it.
+        // A function of the mod it calls that is still to port (a question to a block, a
+        // helper over block entities, a tick it shares with others) does nothing until it
+        // is: ported too, though `--only` didn't name it.
         if matches!(outcome.status, Status::Ported | Status::Unchecked) && !rest.is_empty() {
             let file = fs::read_to_string(dir.join(&unit.file)).unwrap_or_default();
             let body = units::function_source(&file, &unit.function).unwrap_or_default();
-            let (called, left): (Vec<Unit>, Vec<Unit>) = rest.into_iter().partition(|u| {
-                u.file == unit.file
-                    && crate::questions::is_question(&file, &u.function)
-                    && body.contains(&format!("{}(", u.function))
-            });
+            let (called, left): (Vec<Unit>, Vec<Unit>) = rest
+                .into_iter()
+                .partition(|u| u.file == unit.file && calls(&body, &u.function));
             rest = left;
             for u in called {
                 progress(&format!(
@@ -1219,7 +1217,11 @@ fn prompt(dir: &Path, scan: &ModScan, unit: &Unit) -> Result<Prompt> {
                 let _ = writeln!(p, "{CALLBACKS}\n");
             }
             // A tick that looks at its neighbours, where the Java walks further.
-            if stub.contains("Machine<'_>") && unit.comment.contains("machine.neighbour(") {
+            // (Not one whose walk is the shared tick's above it.)
+            if stub.contains("Machine<'_>")
+                && unit.comment.contains("machine.neighbour(")
+                && !unit.comment.contains("is ported once, as")
+            {
                 let connect = if questions.is_empty() {
                     "Whether two blocks connect is in the Java of their block classes (which face has a \
                      shaft, which axis turns): read it from their state properties."
@@ -1292,32 +1294,19 @@ fn prompt(dir: &Path, scan: &ModScan, unit: &Unit) -> Result<Prompt> {
     Ok(out)
 }
 
+/// A module this long (Create's is a megabyte) is cut to what the function can reach:
+/// below it, everything is shown, as it always was.
+const LARGE_MODULE: usize = 150_000;
+
 /// The parts of a mod's module a function can use: everything but the other block
 /// entities' state structs and tick stubs (a mod like Create has a hundred), and
-/// the module's tests.
+/// the module's tests. Of a large module, also only the types the function's own
+/// reach (from its signature and comment, through what those types name), and other
+/// functions by their comment and signature alone: a prompt over 100,000 tokens costs
+/// five times as much a token on the model `translate` uses, and reads no better.
 fn module_context(module: &str, stub: &str, function: &str, java: &str) -> String {
-    // The state structs: `pub struct Crank` under "The state of a ...".
-    let mut states = Vec::new();
-    let mut prev_state_doc = false;
-    for line in module.lines() {
-        if let Some(name) = line.strip_prefix("pub struct ")
-            && prev_state_doc
-        {
-            states.push(
-                name.split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
-                    .next()
-                    .unwrap_or_default()
-                    .to_string(),
-            );
-        }
-        if !line.starts_with("#[") {
-            prev_state_doc = line.starts_with("/// The state of a `");
-        }
-    }
-    let uses = |name: &str| {
-        stub.split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
-            .any(|w| w == name)
-    };
+    let large = module.len() > LARGE_MODULE;
+    let ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
     // Top-level chunks: a blank line followed by a line that is not indented
     // (blank lines inside an `impl` stay in its chunk).
     let mut chunks: Vec<String> = Vec::new();
@@ -1332,22 +1321,136 @@ fn module_context(module: &str, stub: &str, function: &str, java: &str) -> Strin
         }
         after_blank = line.trim().is_empty();
     }
+    let first_code_of = |chunk: &str| -> String {
+        chunk
+            .lines()
+            .find(|l| !l.starts_with("//") && !l.starts_with("#["))
+            .unwrap_or("")
+            .to_string()
+    };
+    // The type a chunk defines or gives methods to: `Machine` for `pub struct Machine<'a>`,
+    // `impl<'a> Machine<'a>` and `impl Default for Machine`.
+    let type_of = |first: &str| -> Option<String> {
+        let first = first.trim_start_matches("pub ");
+        let rest = ["struct ", "enum ", "trait ", "type "]
+            .iter()
+            .find_map(|k| first.strip_prefix(k))
+            .or_else(|| {
+                let after = first.strip_prefix("impl")?;
+                // Past its own generics, and to the type a trait is implemented for.
+                let after = match after.strip_prefix('<') {
+                    Some(g) => g.split_once('>').map_or(g, |(_, r)| r),
+                    None => after,
+                };
+                Some(after.split_once(" for ").map_or(after, |(_, t)| t))
+            })?;
+        let name: String = rest
+            .trim_start()
+            .chars()
+            .take_while(|c| ident(*c))
+            .collect();
+        (!name.is_empty()).then_some(name)
+    };
+    // The state structs, and the parts of them shared ticks work on: `pub struct Crank`
+    // under a comment that says so.
+    let mut states = Vec::new();
+    for chunk in &chunks {
+        let doc: Vec<&str> = chunk.lines().take_while(|l| l.starts_with("///")).collect();
+        let is_state = doc.iter().any(|l| {
+            l.starts_with("/// The state of a `")
+                || l.starts_with("/// The part of a block entity's state that")
+        });
+        if let (true, Some(name)) = (is_state, type_of(&first_code_of(chunk))) {
+            states.push(name);
+        }
+    }
+    let uses = |name: &str| stub.split(|c: char| !ident(c)).any(|w| w == name);
+    let names_class = |class: &str| {
+        let simple = class.rsplit(['.', '$']).next().unwrap_or(class);
+        java.split(|c: char| !ident(c)).any(|w| w == simple)
+    };
+    // Whether another function is one this one may call: generated, or from a class its
+    // Java names (a subclass calling `super`). A large mod has hundreds of the rest.
+    // (And not one that needs what this one isn't given: a block click's function takes
+    // the `World`, which a tick has none of to hand it.)
+    let stub_head = stub
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let callable = |chunk: &str| {
+        let from = chunk
+            .lines()
+            .filter(|l| l.contains(units::TODO) || l.contains(units::PORTED))
+            .flat_map(units::java_classes)
+            .collect::<Vec<_>>();
+        let head = first_code_of(chunk);
+        let handed = ["dyn ", "&mut "].iter().all(|kind| {
+            head.match_indices(kind).all(|(at, k)| {
+                let name: String = head[at + k.len()..]
+                    .chars()
+                    .take_while(|c| ident(*c))
+                    .collect();
+                !name.starts_with(|c: char| c.is_ascii_uppercase())
+                    || stub_head.split(|c: char| !ident(c)).any(|w| w == name)
+            })
+        });
+        (
+            from.is_empty(),
+            handed && (from.is_empty() || from.iter().any(|c| names_class(c))),
+        )
+    };
+    // In a large module, the types the function reaches: those its own text names, those
+    // in the signatures of functions it may call, and those their definitions name.
+    let reached: Option<std::collections::BTreeSet<String>> = large.then(|| {
+        let words = |text: &str| -> Vec<String> {
+            text.split(|c: char| !ident(c))
+                .filter(|w| w.starts_with(|c: char| c.is_ascii_uppercase()))
+                .map(str::to_string)
+                .collect()
+        };
+        let code = |chunk: &str| -> String {
+            chunk
+                .lines()
+                .filter(|l| !l.trim_start().starts_with("//"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let mut reached: std::collections::BTreeSet<String> = words(stub).into_iter().collect();
+        for chunk in &chunks {
+            let first = first_code_of(chunk);
+            if (first.starts_with("fn ") || first.starts_with("pub fn ")) && callable(chunk).1 {
+                reached.extend(words(&first));
+            }
+        }
+        loop {
+            let before = reached.len();
+            for chunk in &chunks {
+                let first = first_code_of(chunk);
+                if type_of(&first).is_some_and(|t| reached.contains(&t)) {
+                    reached.extend(words(&code(chunk)));
+                }
+            }
+            if reached.len() == before {
+                break;
+            }
+        }
+        reached
+    });
     let mut out = String::new();
     for chunk in chunks.iter().map(|c| c.trim_end_matches('\n')) {
         if chunk.trim().is_empty() {
             continue;
         }
-        let first_code = chunk
-            .lines()
-            .find(|l| !l.starts_with("//") && !l.starts_with("#["))
-            .unwrap_or("");
+        let first_code = first_code_of(chunk);
+        let first_code = first_code.as_str();
         if chunk.contains("#[cfg(test)]") {
             continue;
         }
+        let defines = type_of(first_code);
         let other_state = states.iter().any(|s| {
             !uses(s)
-                && (first_code == format!("pub struct {s} {{")
-                    || first_code == format!("impl {s} {{")
+                && (defines.as_deref() == Some(s.as_str())
                     || chunk.starts_with(&format!("// Left out of {s},")))
         });
         let other_tick = first_code.starts_with("pub fn tick_")
@@ -1357,13 +1460,13 @@ fn module_context(module: &str, stub: &str, function: &str, java: &str) -> Strin
         let unused_statics = chunk
             .strip_prefix("/// `")
             .and_then(|r| r.split_once("`'s static fields."))
-            .is_some_and(|(class, _)| {
-                let simple = class.rsplit('.').next().unwrap_or(class);
-                !java
-                    .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
-                    .any(|w| w == simple)
-            });
-        if other_state || other_tick || unused_statics {
+            .is_some_and(|(class, _)| !names_class(class));
+        // A type the function can't reach (a block click's `World` for a tick).
+        let out_of_reach = match (&reached, &defines) {
+            (Some(reached), Some(name)) => !reached.contains(name),
+            _ => false,
+        };
+        if other_state || other_tick || unused_statics || out_of_reach {
             continue;
         }
         let is_fn = first_code.starts_with("fn ") || first_code.starts_with("pub fn ");
@@ -1375,26 +1478,18 @@ fn module_context(module: &str, stub: &str, function: &str, java: &str) -> Strin
             continue;
         }
         let long = chunk.lines().count();
-        // Another Java class's function (to port, or ported): this one can call it only
-        // when its own Java names that class (a subclass calling `super`). A large mod has
-        // hundreds; they would be most of the prompt.
-        if is_fn && !own {
-            let from = chunk
-                .lines()
-                .filter(|l| l.contains(units::TODO) || l.contains(units::PORTED))
-                .flat_map(units::java_classes)
-                .collect::<Vec<_>>();
-            if !from.is_empty()
-                && !from.iter().any(|class| {
-                    let simple = class.rsplit(['.', '$']).next().unwrap_or(class);
-                    java.split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
-                        .any(|w| w == simple)
-                })
-            {
+        if is_fn {
+            let (generated, may_call) = callable(chunk);
+            if !may_call {
                 continue;
             }
-            // A generated dispatch (a match over every block): its head says enough.
-            if from.is_empty() && long > 60 {
+            // Its comment and signature say what a caller needs: a generated dispatch (a
+            // match over every block) always, and in a large module any long function.
+            let body = chunk
+                .lines()
+                .skip_while(|l| l.starts_with("//") || l.starts_with("#["))
+                .count();
+            if (generated && long > 60) || (large && body > 12) {
                 for line in chunk
                     .lines()
                     .take_while(|l| l.starts_with("//") || l.starts_with("#["))
@@ -1403,7 +1498,8 @@ fn module_context(module: &str, stub: &str, function: &str, java: &str) -> Strin
                     out.push('\n');
                 }
                 let head = first_code.trim_end_matches('{').trim_end();
-                let _ = writeln!(out, "{head} {{ /* {long} lines, generated */ }}\n");
+                let what = if generated { "generated" } else { "ported" };
+                let _ = writeln!(out, "{head} {{ /* {body} lines, {what} */ }}\n");
                 continue;
             }
         }
@@ -1421,8 +1517,28 @@ fn module_context(module: &str, stub: &str, function: &str, java: &str) -> Strin
             let _ = writeln!(out, "{first_code}/* {} entries */];\n", long - 2);
             continue;
         }
+        // A table a generated function of the module looks things up in (which blocks a
+        // click's function is for): nothing this function names, in a large module.
+        if large && first_code.starts_with("const ") {
+            let name: String = first_code["const ".len()..]
+                .chars()
+                .take_while(|c| ident(*c))
+                .collect();
+            if !uses(&name) {
+                continue;
+            }
+        }
         // The tag table: its tags' names say what `in_tag` knows; their blocks would
-        // only fill the prompt.
+        // only fill the prompt. (In a large module, not even the names where the Java
+        // asks about no tag.)
+        if first_code.starts_with("pub const BLOCK_TAGS:") && large && !java.contains("Tags.") {
+            let _ = writeln!(
+                out,
+                "pub const BLOCK_TAGS: &[(&str, &[&str])] = &[/* {} tags */];\n",
+                long.saturating_sub(2)
+            );
+            continue;
+        }
         if first_code.starts_with("pub const BLOCK_TAGS:") {
             let names: Vec<&str> = chunk
                 .lines()
@@ -1996,6 +2112,19 @@ fn read_recipe_values(function: &str) -> Vec<String> {
         }
     }
     out
+}
+
+/// Whether `body` calls the function `function` of its module: not a longer name
+/// ending in it, and not a method (`behaviour.tick()` is no call of the module's `tick`).
+fn calls(body: &str, function: &str) -> bool {
+    let call = format!("{function}(");
+    body.match_indices(&call).any(|(at, _)| {
+        !body[..at]
+            .chars()
+            .next_back()
+            // (Nor a method of that name on something, or another module's.)
+            .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.' || c == ':')
+    })
 }
 
 /// Whether a ported function of `module` names something that isn't there: a state
