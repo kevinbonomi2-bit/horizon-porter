@@ -451,6 +451,9 @@ pub fn generate_with(
         let (declared, mut default_state) =
             declared_states(&template, &all_states, block_name, &mut content.skipped);
         for (name, value) in java_defaults {
+            // One of its own, or its template's: where Java starts a property the template
+            // has elsewhere (an analog lever on the floor, a lever on a wall), the block
+            // starts where Java's does.
             let valid = declared
                 .get(&name)
                 .is_some_and(|d| match d["type"].as_str() {
@@ -458,6 +461,11 @@ pub fn generate_with(
                     _ => d["values"]
                         .as_array()
                         .is_some_and(|v| v.iter().any(|x| x.as_str() == Some(&value))),
+                })
+                || vanilla_block(&template).is_some_and(|v| {
+                    v.properties
+                        .iter()
+                        .any(|(k, vals)| *k == name && vals.iter().any(|x| *x == value))
                 });
             if valid {
                 default_state.insert(name, value.into());
@@ -2008,6 +2016,12 @@ fn java_states(
                 "FACING_HOPPER",
                 "AXIS",
                 "HORIZONTAL_AXIS",
+                "ATTACH_FACE",
+                "BELL_ATTACHMENT",
+                "HALF",
+                "DOUBLE_BLOCK_HALF",
+                "SLAB_TYPE",
+                "DOOR_HINGE",
             ]
             .into_iter()
             .find(|k| *k == c)
@@ -2015,7 +2029,11 @@ fn java_states(
         if init.is_empty() {
             return match (constant, vanilla_above.as_deref()) {
                 ("FACING", Some("DirectionalBlock")) => Some("FACING"),
-                ("FACING", Some("HorizontalDirectionalBlock")) => Some("HORIZONTAL_FACING"),
+                (
+                    "FACING",
+                    Some("HorizontalDirectionalBlock" | "FaceAttachedHorizontalDirectionalBlock"),
+                ) => Some("HORIZONTAL_FACING"),
+                ("FACE", Some("FaceAttachedHorizontalDirectionalBlock")) => Some("ATTACH_FACE"),
                 ("AXIS", Some("RotatedPillarBlock")) => Some("AXIS"),
                 _ => None,
             };
@@ -2055,13 +2073,33 @@ fn java_states(
             .find(|(n, _)| n == class)
             .map(|(_, v)| v.clone())
     };
+    // A field's initializer, followed through another class's constant of the mod's
+    // (`CONNECTED = DirectionalAxisKineticBlock.AXIS_ALONG_FIRST_COORDINATE`, a boolean).
     let init_of = |field: &str| {
-        chain
+        let mut init = chain
             .iter()
             .flat_map(|c| c.fields.iter())
             .find(|f| f.name == field)
             .and_then(|f| f.init.clone())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        for _ in 0..4 {
+            let Some((class, constant)) = init.trim().rsplit_once('.') else {
+                break;
+            };
+            let class = class.rsplit('.').next().unwrap_or(class);
+            let Some(next) = scan
+                .classes
+                .iter()
+                .filter(|c| c.name.rsplit(['.', '$']).next() == Some(class))
+                .flat_map(|c| c.fields.iter())
+                .find(|f| f.name == constant)
+                .and_then(|f| f.init.clone())
+            else {
+                break;
+            };
+            init = next;
+        }
+        init
     };
     // A property field's name and values: `PART = EnumProperty.create("part", ..)`,
     // `POWERED = BlockStateProperties.POWERED`, `FACING` inherited from vanilla.
@@ -2114,19 +2152,70 @@ fn java_states(
             }
         }
     }
+    // What each class's constructor sets (`registerDefaultState(defaultBlockState()
+    // .setValue(AXIS, Axis.Y))`), from the top of its line down: each builds on its
+    // parent's, the class nearest the block having the last word.
     let mut defaults = BTreeMap::new();
-    if let Some((_, _, d)) = definition(false) {
-        for (f, v) in d {
-            defaults.insert(property(f).0, v.clone());
+    for c in chain.iter().rev() {
+        if let Some((_, _, d)) = scan
+            .state_definitions
+            .iter()
+            .find(|(k, _, d)| *k == c.name && !d.is_empty())
+        {
+            for (f, v) in d {
+                defaults.insert(property(f).0, v.clone());
+            }
         }
     }
-    // An enum property `registerDefaultState` leaves starts at the enum's first value.
-    if let Some((_, fields, _)) = definition(true) {
+    // A property `registerDefaultState` leaves starts at its first value
+    // (`StateDefinition.any()`): `true` for a boolean, the lowest number, `x` of an axis,
+    // `floor` of a face, an enum's first constant. Those of every class of the mod's in
+    // its line, as each adds to the builder (`DirectionalAxisKineticBlock`'s
+    // `axis_along_first` under a piston's `state`).
+    let all_fields: Vec<&String> = chain
+        .iter()
+        .filter_map(|c| {
+            scan.state_definitions
+                .iter()
+                .find(|(k, f, _)| *k == c.name && !f.is_empty())
+        })
+        .flat_map(|(_, f, _)| f.iter())
+        .collect();
+    {
+        let fields = all_fields;
         for f in fields {
             let name = property(f).0;
-            if !defaults.contains_key(&name)
-                && let Some(first) = enum_values(&init_of(f)).and_then(|v| v.into_iter().next())
+            if defaults.contains_key(&name) {
+                continue;
+            }
+            let init = init_of(f);
+            let constant = init
+                .rsplit('.')
+                .next()
+                .filter(|c| {
+                    !c.is_empty()
+                        && c.chars()
+                            .all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit() || ch == '_')
+                })
+                .unwrap_or(f)
+                .to_string();
+            let first = if init.starts_with("BooleanProperty")
+                || (!init.contains(".create(\"") && BOOLEAN_PROPERTIES.contains(&constant.as_str()))
             {
+                Some("true".to_string())
+            } else if init.starts_with("IntegerProperty.create(") {
+                init.split([',', '(', ')'])
+                    .filter_map(|w| w.trim().parse::<i64>().ok())
+                    .next()
+                    .map(|n| n.to_string())
+            } else if let Some(order) =
+                vanilla_kind(&init, &constant).and_then(vanilla_property_values)
+            {
+                order.first().map(|v| v.to_string())
+            } else {
+                enum_values(&init).and_then(|v| v.into_iter().next())
+            };
+            if let Some(first) = first {
                 defaults.insert(name, first);
             }
         }
@@ -2139,12 +2228,20 @@ fn java_states(
 /// `registerDefaultState` doesn't set it (`StateDefinition.any()`).
 fn vanilla_property_values(constant: &str) -> Option<&'static [&'static str]> {
     Some(match constant {
-        "FACING" => &["down", "up", "north", "south", "west", "east"],
-        "HORIZONTAL_FACING" => &["north", "south", "west", "east"],
+        // As `BlockStateProperties` makes them: `FACING` from NORTH, EAST, SOUTH, WEST,
+        // UP, DOWN; the horizontal plane NORTH, EAST, SOUTH, WEST.
+        "FACING" => &["north", "east", "south", "west", "up", "down"],
+        "HORIZONTAL_FACING" => &["north", "east", "south", "west"],
         "VERTICAL_DIRECTION" => &["up", "down"],
         "FACING_HOPPER" => &["down", "north", "south", "west", "east"],
         "AXIS" => &["x", "y", "z"],
         "HORIZONTAL_AXIS" => &["x", "z"],
+        "ATTACH_FACE" => &["floor", "wall", "ceiling"],
+        "BELL_ATTACHMENT" => &["floor", "ceiling", "single_wall", "double_wall"],
+        "HALF" => &["top", "bottom"],
+        "DOUBLE_BLOCK_HALF" => &["upper", "lower"],
+        "SLAB_TYPE" => &["top", "bottom", "double"],
+        "DOOR_HINGE" => &["left", "right"],
         _ => return None,
     })
 }
@@ -3608,7 +3705,8 @@ mod tests {
         let (values, _) = java_states(&scan, Some("m.Controller"));
         let facing = &values["facing"];
         assert_eq!(facing.len(), 6);
-        assert_eq!(java_first_value(facing), Some("down"));
+        // `BlockStateProperties.FACING` lists NORTH first.
+        assert_eq!(java_first_value(facing), Some("north"));
         let (values, _) = java_states(&scan, Some("m.Shutter"));
         assert_eq!(values["facing"].len(), 4);
         assert_eq!(java_first_value(&values["facing"]), Some("north"));
