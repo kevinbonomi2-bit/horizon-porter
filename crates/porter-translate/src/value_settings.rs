@@ -50,6 +50,9 @@ pub struct ValueBox {
     /// `getValueSettings` and `setValueSettings`: None where none of the mod's does
     /// (Create's own defaults then).
     pub methods: [Option<String>; 3],
+    /// Where `class` is declared, when it is nested in another class (`Outer.Inner`,
+    /// which the scan doesn't list): the outer class, whose source has it.
+    pub nested_in: Option<String>,
 }
 
 impl ValueBox {
@@ -100,7 +103,11 @@ pub fn find(scan: &ModScan, block_entities: &[BlockEntity]) -> Vec<ValueBox> {
             }
             // `generatedSpeed = new KineticScrollValueBehaviour(..)`, in the class that
             // makes it; else the class the field is declared as.
+            // A class below the maker whose own `addBehaviours` doesn't call
+            // `super.addBehaviours` never adds it (an elevator pulley has no movement
+            // mode, though the linear actuator above it makes one).
             let mut made = None;
+            let mut skipped = false;
             for owner in &owners {
                 let Ok(text) =
                     std::fs::read_to_string(std::path::Path::new(&scan.input).join(&owner.path))
@@ -111,12 +118,21 @@ pub fn find(scan: &ModScan, block_entities: &[BlockEntity]) -> Vec<ValueBox> {
                     made = Some((owner.name.clone(), text, m));
                     break;
                 }
+                if let Some(body) = body_after(&text, "void addBehaviours(")
+                    && !body.contains("super.addBehaviours(")
+                {
+                    skipped = true;
+                    break;
+                }
+            }
+            if skipped {
+                continue;
             }
             let (owner, text, making) = match made {
                 Some(m) => m,
                 None => (own.clone(), String::new(), String::new()),
             };
-            let class = making
+            let made_as = making
                 .split_once("new ")
                 .map(|(_, rest)| {
                     rest.split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '.'))
@@ -124,13 +140,46 @@ pub fn find(scan: &ModScan, block_entities: &[BlockEntity]) -> Vec<ValueBox> {
                         .unwrap_or_default()
                         .to_string()
                 })
-                .and_then(|simple| class_named(scan, &simple))
-                .filter(|c| is_value_setting(scan, &c.name))
-                .map_or_else(|| held.clone(), |c| c.name.clone());
+                .unwrap_or_default();
+            // A class of the mod's; or one declared inside the class that makes it
+            // (`ValveHandleBlockEntity.ValveHandleScrollValueBehaviour`), which the scan
+            // doesn't list: named `Outer.Inner`, its methods read from the outer source.
+            let mut inner = None;
+            let class = match class_named(scan, &made_as) {
+                Some(c) if is_value_setting(scan, &c.name) => c.name.clone(),
+                Some(_) => held.clone(),
+                None => match nested_class(scan, &text, &made_as) {
+                    Some(n) if is_value_setting(scan, &n.parent) => {
+                        let name = format!("{owner}.{made_as}");
+                        inner = Some(n);
+                        name
+                    }
+                    _ => held.clone(),
+                },
+            };
             // The mod's classes the making names besides it: `new MotorValueBox()`,
-            // `RotationMode.class`.
+            // `RotationMode.class`; and those a method it calls makes
+            // (`getMovementModeSlot()`, a default method of `IBearingBlockEntity`, makes a
+            // `DirectionalExtenderScrollOptionSlot`).
+            let mut words: Vec<String> = making
+                .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                .map(str::to_string)
+                .collect();
+            // (The class that declares such a method is named too: its rule for which
+            // sides have the box is there, `PulleyBlockEntity`'s `d == Direction.UP`.)
             let mut named = Vec::new();
-            for word in making.split(|c: char| !(c.is_alphanumeric() || c == '_')) {
+            for call in called_methods(&making) {
+                if let Some((declared_in, body)) = method_body(scan, &owners, &call) {
+                    words.extend(
+                        body.split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                            .map(str::to_string),
+                    );
+                    if declared_in != owner && !named.contains(&declared_in) {
+                        named.push(declared_in);
+                    }
+                }
+            }
+            for word in &words {
                 if !word.starts_with(|c: char| c.is_ascii_uppercase()) {
                     continue;
                 }
@@ -138,13 +187,55 @@ pub fn find(scan: &ModScan, block_entities: &[BlockEntity]) -> Vec<ValueBox> {
                     && c.name != class
                     && !named.contains(&c.name)
                     && c.name != owner
+                    && !c.name.ends_with("BlockEntity")
                 {
                     named.push(c.name.clone());
+                } else if class_named(scan, word).is_none()
+                    && let Some(outer) =
+                        nested_in(scan, &text, word).or_else(|| declared_above(scan, &owner, word))
+                    && outer != owner
+                    && !named.contains(&outer)
+                {
+                    // A type nested in another (`IControlContraption.RotationMode`, whose
+                    // options' lang keys are there): the scan has the class it is in.
+                    named.push(outer);
                 }
+            }
+            // And the classes those extend, to Create's own `ValueBoxTransform`: where a
+            // box is often lives there (`CenteredSideValueBoxTransform.getSouthLocation`).
+            let mut i = 0;
+            while i < named.len() && named.len() < 8 {
+                let mut parent = scan
+                    .classes
+                    .iter()
+                    .find(|c| c.name == named[i])
+                    .and_then(|c| c.superclass.clone());
+                while let Some(p) = parent.take() {
+                    let Some(c) = scan.classes.iter().find(|c| c.name == p) else {
+                        break;
+                    };
+                    if simple(&c.name) == "Sided" || simple(&c.name) == "ValueBoxTransform" {
+                        if !named.contains(&c.name) {
+                            named.push(c.name.clone());
+                        }
+                        break;
+                    }
+                    if !named.contains(&c.name) {
+                        named.push(c.name.clone());
+                    }
+                    parent = c.superclass.clone();
+                }
+                i += 1;
             }
             let callback = text.contains(&format!("{field}.withCallback("))
                 || making.contains(".withCallback(");
-            let methods = METHODS.map(|(method, _)| defining(scan, &class, method));
+            // A nested class's own methods are in its body; the rest its parent's.
+            let methods = METHODS.map(|(method, _)| match &inner {
+                Some(n) if declares(&n.body, method) => Some(class.clone()),
+                Some(n) => defining(scan, &n.parent, method),
+                None => defining(scan, &class, method),
+            });
+            let nested_in = inner.as_ref().map(|_| owner.clone());
             out.push(ValueBox {
                 entity: be.id.clone(),
                 rust: be.rust.clone(),
@@ -156,6 +247,7 @@ pub fn find(scan: &ModScan, block_entities: &[BlockEntity]) -> Vec<ValueBox> {
                 named,
                 callback,
                 methods,
+                nested_in,
             });
         }
     }
@@ -207,6 +299,217 @@ fn making(text: &str, field: &str) -> Option<String> {
             continue;
         }
         return Some(rest.split(';').next().unwrap_or(rest).to_string());
+    }
+    None
+}
+
+/// A class declared inside another, as its source has it.
+struct Nested {
+    /// The mod's class it extends, fully qualified.
+    parent: String,
+    /// Its body, between its braces.
+    body: String,
+}
+
+/// Class `name` as `text` (its outer class's source) declares it: `class
+/// ValveHandleScrollValueBehaviour extends ScrollValueBehaviour {`.
+fn nested_class(scan: &ModScan, text: &str, name: &str) -> Option<Nested> {
+    if name.is_empty() {
+        return None;
+    }
+    let head = format!("class {name} extends ");
+    let at = text.find(&head)?;
+    let rest = &text[at + head.len()..];
+    let parent: String = rest
+        .chars()
+        .take_while(|c| c.is_alphanumeric() || *c == '_')
+        .collect();
+    let parent = class_named(scan, &parent)?.name.clone();
+    let body = body_after(&text[at..], &head)?;
+    Some(Nested { parent, body })
+}
+
+/// Whether a class body declares method `name` (`public ValueSettingsBoard createBoard(`).
+fn declares(body: &str, name: &str) -> bool {
+    let call = format!(" {name}(");
+    body.match_indices(&call).any(|(at, _)| {
+        // A declaration: a type before it, a block after its parameters.
+        let after = &body[at + call.len()..];
+        after
+            .find(')')
+            .is_some_and(|close| after[close + 1..].trim_start().starts_with('{'))
+            && !body[..at].trim_end().ends_with(['=', '(', ',', '.'])
+    })
+}
+
+/// The class a type nested in it is reached through from `text`: by its import
+/// (`import com.x.IControlContraption.RotationMode;`) or as `Outer.Inner`.
+fn nested_in(scan: &ModScan, text: &str, inner: &str) -> Option<String> {
+    let tail = format!(".{inner}");
+    for line in text.lines() {
+        let Some(path) = line
+            .trim()
+            .strip_prefix("import ")
+            .and_then(|p| p.strip_suffix(';'))
+        else {
+            continue;
+        };
+        if let Some(outer) = path.strip_suffix(&tail)
+            && scan.classes.iter().any(|c| c.name == outer)
+        {
+            return Some(outer.to_string());
+        }
+    }
+    let mut from = 0;
+    while let Some(at) = text[from..].find(&tail) {
+        let end = from + at;
+        from = end + tail.len();
+        let outer: String = text[..end]
+            .chars()
+            .rev()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        if outer.starts_with(|c: char| c.is_ascii_uppercase())
+            && let Some(c) = class_named(scan, &outer)
+        {
+            return Some(c.name.clone());
+        }
+    }
+    None
+}
+
+/// The class or interface above `class` (its own included) whose source declares type
+/// `inner` inside it: a type a class reaches by inheriting it (`MechanicalBearingBlockEntity`
+/// names `RotationMode`, declared in `IControlContraption`, which it implements through
+/// `IBearingBlockEntity`).
+fn declared_above(scan: &ModScan, class: &str, inner: &str) -> Option<String> {
+    let mut seen: Vec<String> = Vec::new();
+    let mut todo: std::collections::VecDeque<String> = [class.to_string()].into();
+    let heads = [
+        format!("enum {inner} "),
+        format!("class {inner} "),
+        format!("interface {inner} "),
+    ];
+    while let Some(next) = todo.pop_front() {
+        if seen.contains(&next) || seen.len() > 24 {
+            continue;
+        }
+        seen.push(next.clone());
+        let Some(c) = scan.classes.iter().find(|c| c.name == next) else {
+            continue;
+        };
+        if let Ok(text) = std::fs::read_to_string(std::path::Path::new(&scan.input).join(&c.path))
+            && heads.iter().any(|h| text.contains(h.as_str()))
+        {
+            return Some(c.name.clone());
+        }
+        todo.extend(c.superclass.iter().cloned());
+        todo.extend(
+            c.interfaces
+                .iter()
+                .map(|i| i.split('<').next().unwrap_or(i).to_string()),
+        );
+    }
+    None
+}
+
+/// The body of the first method whose declaration contains `head` (`void
+/// addBehaviours(`), between its braces.
+fn body_after(text: &str, head: &str) -> Option<String> {
+    let start = text.find(head)?;
+    let open = start + text[start..].find('{')?;
+    let mut depth = 0;
+    for (i, ch) in text[open..].char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(text[open + 1..open + i].to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// The methods a statement calls with no arguments on its own object
+/// (`getMovementModeSlot()`).
+fn called_methods(statement: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut rest = statement;
+    while let Some(at) = rest.find("()") {
+        let before = &rest[..at];
+        let name: String = before
+            .chars()
+            .rev()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        let preceded = before[..before.len() - name.len()].chars().next_back();
+        if name.starts_with(|c: char| c.is_ascii_lowercase())
+            && preceded != Some('.')
+            && !out.contains(&name)
+        {
+            out.push(name);
+        }
+        rest = &rest[at + 2..];
+    }
+    out
+}
+
+/// The class and body of method `name` as the nearest of `owners` (the block entity's
+/// own class first), the classes above them or the interfaces any of them has declares
+/// it with a body (a default method).
+fn method_body(scan: &ModScan, owners: &[&ClassInfo], name: &str) -> Option<(String, String)> {
+    let mut seen: Vec<String> = Vec::new();
+    let mut todo: std::collections::VecDeque<String> =
+        owners.iter().map(|c| c.name.clone()).collect();
+    while let Some(next) = todo.pop_front() {
+        if seen.contains(&next) || seen.len() > 16 {
+            continue;
+        }
+        seen.push(next.clone());
+        let Some(c) = scan.classes.iter().find(|c| c.name == next) else {
+            continue;
+        };
+        todo.extend(c.superclass.iter().cloned());
+        todo.extend(
+            c.interfaces
+                .iter()
+                .map(|i| i.split('<').next().unwrap_or(i).to_string()),
+        );
+        if !c.method_names.iter().any(|m| m == name) {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(std::path::Path::new(&scan.input).join(&c.path))
+        else {
+            continue;
+        };
+        let decl = format!("{name}() {{");
+        let Some(start) = text.find(&decl) else {
+            continue;
+        };
+        let body = &text[start + decl.len()..];
+        let mut depth = 1;
+        for (i, ch) in body.char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some((c.name.clone(), body[..i].to_string()));
+                    }
+                }
+                _ => {}
+            }
+        }
     }
     None
 }
@@ -291,7 +594,7 @@ pub fn runtime(boxes: &[ValueBox], id: &str) -> String {
             done.push(f.clone());
             let doc = match *what {
                 "board" => format!(
-                    "/// The board `{s}` opens for `v` (its `{method}`): its title, the largest value along a\n/// row, every how many values a milestone is marked, its rows' labels, and what its formatter\n/// shows for each choice (`texts[row][value]`, for every value from 0 to `max_value`).\n/// A label is a lang key (`create.kinetics.creative_motor.rotation_speed`) or text.\n",
+                    "/// The board `{s}` opens for `v` (its `{method}`): its title, the largest value along a\n/// row, every how many values a milestone is marked, its rows' labels, and what its formatter\n/// shows for each choice (`texts[row][value]`, for every value from 0 to `max_value`).\n/// A label is a lang key or text: `CreateLang.translateDirect(\"x.y\")` is the key\n/// `create.x.y`, `Component.literal(\"⟳\")` the text `⟳`.\n",
                     s = simple(class)
                 ),
                 "settings" => format!(
@@ -314,9 +617,18 @@ pub fn runtime(boxes: &[ValueBox], id: &str) -> String {
                     "    (chosen != ValueSettings { row: 0, value: v.value }).then_some(chosen.value)",
                 ),
             };
+            // A nested class is found through the class it is in.
+            let of = match boxes
+                .iter()
+                .find(|b| &b.class == class)
+                .and_then(|b| b.nested_in.as_ref())
+            {
+                Some(outer) => format!("`{}`, a class inside `{outer}`", simple(class)),
+                None => format!("`{class}`"),
+            };
             let _ = write!(
                 r,
-                "\n{doc}///\n/// TODO: port `{method}` of `{class}`.\npub fn {f}{sig} {{\n{body}\n}}\n"
+                "\n{doc}///\n/// TODO: port `{method}` of {of}.\npub fn {f}{sig} {{\n{body}\n}}\n"
             );
         }
     }
@@ -342,7 +654,9 @@ pub fn runtime(boxes: &[ValueBox], id: &str) -> String {
 /// `{field}` of a `{entity}` (a `{class_simple}`): what `addBehaviours` sets up in it and what it is
 /// now, read from `state` and the block (`me`). `label` is its label's lang key
 /// (`CreateLang.translateDirect("x.y")` is `create.x.y`); `min` and `max` are what
-/// `between` gives (a config value is its default); `value` is `state.{value}`;
+/// `between` gives (a config value is its default; a `ScrollOptionBehaviour`'s are 0 and its
+/// options' count less one), not the state's `_min` and `_max` fields, which only keep what
+/// the Java fields start as; `value` is `state.{value}`;
 /// `text` is what `formatValue()` gives (`withFormatter`, else the number); `active` is
 /// `isActive()` (`onlyActiveWhen`); `options` are a `ScrollOptionBehaviour`'s options'
 /// lang keys (`getTranslationKey()` of each of the enum's constants, in order).
@@ -367,7 +681,8 @@ pub fn {f}(state: &{rust}, me: &Neighbour) -> ScrollValue {{
 /// `fromSide`), in blocks from the block's corner; None where it isn't on that side
 /// (`isSideActive`, `shouldRender`). A `Sided` box's `super.getLocalOffset(..)` is
 /// `sided_offset(getSouthLocation(), side)`; `VecHelper.voxelSpace(x, y, z)` is
-/// `[x / 16.0, y / 16.0, z / 16.0]`; `VecHelper.rotateCentered` is `rotate_centered`;
+/// `[x / 16.0, y / 16.0, z / 16.0]`; `VecHelper.rotateCentered` is `rotate_centered` and
+/// `VecHelper.rotate` (about the origin) `vec_rotate`; `Vec3.add` adds each coordinate;
 /// `AngleHelper.horizontalAngle` and `verticalAngle` are `side_horizontal_angle` and
 /// `side_vertical_angle`. The block's state properties are in `me.properties`.
 ///
@@ -411,7 +726,7 @@ pub fn {f}_changed(state: &mut {rust}, value: i32) {{
     for b in boxes {
         let _ = writeln!(
             r,
-            "        ({:?}, {:?}) => Some({}(&{}::load(get), me)),",
+            "        ({:?}, {:?}) => Some(option_range({}(&{}::load(get), me))),",
             b.entity,
             b.field,
             b.function(),
@@ -451,9 +766,19 @@ pub fn {f}_changed(state: &mut {rust}, value: i32) {{
                     .to_string(),
             ),
         };
+        // An option value's board picks by icons, as `ScrollOptionSettingsFormatter`
+        // makes every `ScrollOptionBehaviour`'s, whatever its port said.
+        let (open, close) = if *what == "board" {
+            (
+                "    let mut board = match (entity, field) {\n",
+                "    };\n    board.icons |= !v.options.is_empty();\n    board\n}\n",
+            )
+        } else {
+            ("    match (entity, field) {\n", "    }\n}\n")
+        };
         let _ = write!(
             r,
-            "\n/// `{what}` of the class value `field` of `entity` is made as.\npub fn value_{what}(entity: &str, field: &str, {sig} {{\n    match (entity, field) {{\n"
+            "\n/// `{what}` of the class value `field` of `entity` is made as.\npub fn value_{what}(entity: &str, field: &str, {sig} {{\n{open}"
         );
         for b in boxes {
             if let Some(class) = &b.methods[i] {
@@ -466,7 +791,7 @@ pub fn {f}_changed(state: &mut {rust}, value: i32) {{
                 );
             }
         }
-        let _ = write!(r, "        _ => {default},\n    }}\n}}\n");
+        let _ = write!(r, "        _ => {default},\n{close}");
     }
     r.push_str(
         "\n/// A choice on the board of value `field` of the block entity `me` is, on the server\n/// (`setValueSettings`, then `setValue`): its values to save when it changed, else None.\npub fn choose_value(entity: &str, field: &str, me: &Neighbour, chosen: ValueSettings) -> Option<Vec<(&'static str, Saved)>> {\n    let get = |k: &str| me.values.iter().find(|(key, _)| key == k).map(|(_, v)| v.clone());\n    match (entity, field) {\n",
@@ -479,7 +804,7 @@ pub fn {f}_changed(state: &mut {rust}, value: i32) {{
         };
         let _ = writeln!(
             r,
-            "        ({e:?}, {fl:?}) => {{\n            let mut state = {rust}::load(get);\n            let v = {f}(&state, me);\n            let to = value_set(entity, field, &v, chosen)?.clamp(v.min.min(v.max), v.max);\n            if to == state.{value} {{\n                return None;\n            }}\n            state.{value} = to;{changed}\n            Some(state.save())\n        }}",
+            "        ({e:?}, {fl:?}) => {{\n            let mut state = {rust}::load(get);\n            let v = option_range({f}(&state, me));\n            let to = value_set(entity, field, &v, chosen)?.clamp(v.min.min(v.max), v.max);\n            if to == state.{value} {{\n                return None;\n            }}\n            state.{value} = to;{changed}\n            Some(state.save())\n        }}",
             e = b.entity,
             fl = b.field,
             rust = b.rust,
@@ -525,6 +850,9 @@ pub fn tests(boxes: &[ValueBox]) -> String {
         assert_eq!(decode_choice(&data[..5]), None);
         assert_eq!(value_field({e:?}, 0), Some({f:?}));
         assert_eq!(value_index({e:?}, {f:?}), Some(0));
+        // Options span all of them, whatever the port said.
+        let v = option_range(ScrollValue {{ options: vec!["a".into(), "b".into(), "c".into()], max: 1, ..Default::default() }});
+        assert_eq!((v.min, v.max), (0, 2));
     }}
 
     #[test]
@@ -625,6 +953,18 @@ pub fn default_board(v: &ScrollValue) -> Board {
 "#;
 
 const SHARED: &str = r#"
+/// An option value's range as `ScrollOptionBehaviour`'s constructor sets it,
+/// `between(0, options.length - 1)`, whatever a port of its block entity said.
+/// Its box shows the option chosen (Java draws that option's icon; here its name).
+pub fn option_range(mut v: ScrollValue) -> ScrollValue {
+    if !v.options.is_empty() {
+        v.min = 0;
+        v.max = v.options.len() as i32 - 1;
+        v.text = v.options[v.value.clamp(0, v.max) as usize].clone();
+    }
+    v
+}
+
 /// Value `index` of block entity `entity` (`netId`), and back.
 pub fn value_field(entity: &str, index: usize) -> Option<&'static str> {
     VALUE_BOXES.iter().filter(|(e, _)| *e == entity).nth(index).map(|(_, f)| *f)
@@ -851,6 +1191,7 @@ const CURSOR_LEFT: [f32; 4] = [0.0, 9.0, 3.0, 14.0];
 const CURSOR: [f32; 4] = [4.0, 9.0, 56.0, 14.0];
 const CURSOR_RIGHT: [f32; 4] = [61.0, 9.0, 3.0, 14.0];
 const LABEL_BG: [f32; 4] = [0.0, 31.0, 161.0, 11.0];
+const CURSOR_ICON: [f32; 4] = [0.0, 44.0, 22.0, 20.0];
 
 fn stretched(ops: &mut Vec<GuiOp>, part: [f32; 4], dst: [f32; 4]) {
     if dst[2] > 0.0 && dst[3] > 0.0 {
@@ -972,6 +1313,18 @@ pub fn draw_board(
     // The cursor, on the choice.
     let at = coordinate_of_value(l, board, chosen.row, chosen.value);
     let shown = tr(&board.text(chosen), &[]);
+    if board.icons {
+        // An option's cursor holds its icon (not drawn here: Create's icon sheet), and
+        // the option's name is under the board.
+        let cx = at[0].floor() - 9.0;
+        let cy = at[1].floor() - 7.0;
+        whole(ops, CURSOR_ICON, [cx - 2.0, cy - 3.0]);
+        if fade_width > fattest {
+            let tx = x - 11.0 - fat_offset + ((bg_width - width_of(&shown)) / 2.0).floor();
+            text(ops, &shown, [tx, y + l.height + extra - 40.0], 0xFBDC7D);
+        }
+        return;
+    }
     let cursor_w = ((width_of(&shown) / 2.0).floor()) * 2.0 + 3.0;
     let cx = at[0].floor() - (cursor_w / 2.0).floor();
     let cy = at[1].floor() - 7.0;
@@ -1048,16 +1401,22 @@ impl OpenBoard {
     }
 }
 
-/// `VecHelper.rotateCentered(v, degrees, axis)`: `v` (blocks from the corner) turned
-/// about the block's middle, `axis` `'x'`, `'y'` or `'z'`, as Create turns it.
-pub fn rotate_centered(v: [f64; 3], degrees: f64, axis: char) -> [f64; 3] {
+/// `VecHelper.rotate(v, degrees, axis)`: `v` turned about the origin (not the block's
+/// middle), `axis` `'x'`, `'y'` or `'z'`, as Create turns it.
+pub fn vec_rotate(v: [f64; 3], degrees: f64, axis: char) -> [f64; 3] {
     let (s, c) = degrees.to_radians().sin_cos();
-    let [x, y, z] = [v[0] - 0.5, v[1] - 0.5, v[2] - 0.5];
-    let [x, y, z] = match axis {
+    let [x, y, z] = v;
+    match axis {
         'x' => [x, y * c - z * s, z * c + y * s],
         'y' => [x * c + z * s, y, z * c - x * s],
         _ => [x * c - y * s, y * c + x * s, z],
-    };
+    }
+}
+
+/// `VecHelper.rotateCentered(v, degrees, axis)`: `v` (blocks from the corner) turned
+/// about the block's middle.
+pub fn rotate_centered(v: [f64; 3], degrees: f64, axis: char) -> [f64; 3] {
+    let [x, y, z] = vec_rotate([v[0] - 0.5, v[1] - 0.5, v[2] - 0.5], degrees, axis);
     [x + 0.5, y + 0.5, z + 0.5]
 }
 
@@ -1651,6 +2010,25 @@ mod tests {
                 .unwrap()
                 .starts_with("new ValveHandleScrollValueBehaviour(this)")
         );
+    }
+
+    #[test]
+    fn reads_which_methods_a_nested_class_declares() {
+        let body = "\n\t\t@Override\n\t\tpublic ValueSettingsBoard createBoard(Player player, BlockHitResult hit) {\n\t\t\treturn board;\n\t\t}\n\t\tvoid other() { x.setValueSettings(a, b); }\n";
+        assert!(declares(body, "createBoard"));
+        assert!(!declares(body, "setValueSettings"));
+        assert!(!declares(body, "getValueSettings"));
+    }
+
+    #[test]
+    fn finds_the_methods_a_making_calls() {
+        assert_eq!(
+            called_methods(
+                "new ScrollOptionBehaviour<>(RotationMode.class, label, this, getMovementModeSlot())"
+            ),
+            vec!["getMovementModeSlot".to_string()]
+        );
+        assert!(called_methods("new X(this, other.getSlot())").is_empty());
     }
 
     #[test]

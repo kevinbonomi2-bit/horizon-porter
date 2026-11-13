@@ -474,6 +474,41 @@ set 1, as Java does. All 29 checks still pass. The motor's and speed controller'
 functions were translated by Gemini (`gemini-3.6-flash`, free; `gemini-3.8-flash` answered
 only "high demand" that night).
 
+Then every other value (`ai-test/create_values.py` places each block so the face it looks at
+carries a box, photographs the box and its tip, holds right click and photographs the board):
+all 14 blocks open their board on build native-66f3981-3615c9927eb3, with Java's labels, ranges,
+rows and option names (the bearings' "Always Place when Stopped", the arm's "Round Robin", the
+clockwork bearing's "Hour hand first", the diodes' ticks/seconds/minutes rows, the valve
+handle's ⟳/⟲ rows to 180°, the chassis' "Distance" with a wrench in hand). The elevator pulley
+has none, as in Java. Getting there showed what a value's port needs to be told, now all in the
+porter:
+
+- **Where a box is** is often not in the class that makes the value: a method makes its
+  `ValueBoxTransform` (`getMovementModeSlot()`, a default method of `IBearingBlockEntity`, or
+  `PulleyBlockEntity`'s override, where the "top only" rule is), and that class extends another
+  (`CenteredSideValueBoxTransform`, where the position is). Those classes are named in the
+  prompt now, with `VecHelper.rotate` given as a function beside `rotateCentered`.
+- **Types nested in a class** aren't in the scan: an option enum reached by inheritance
+  (`RotationMode`, declared in `IControlContraption`) or a behaviour class declared inside its
+  block entity (`ValveHandleBlockEntity.ValveHandleScrollValueBehaviour`). The class they are in
+  is named instead, and a nested behaviour class's own methods are ported from its body.
+- **A class that doesn't call `super.addBehaviours`** never has its parent's values (the
+  elevator pulley), so they are left out.
+- **Lang keys**: `translate` now sends back an answer that names a key of the mod's that its
+  lang files don't have (`create.gui.contraptions.rotation_mode...`, made up), or Create's key
+  without its `create.` (`generic.unit.ticks`), with the keys it may have meant.
+- Option values span all their options and their box shows the chosen one, and their board is
+  drawn in icon mode (the option's name under it), whatever a port said; a start set with
+  `x.setValue(45)` is read like `x.value = 45`.
+
+Translated for these: 51 functions by `gemini-3.5-flash-lite`, 17 box functions again by
+`gemini-3.5-flash` (Lite placed boxes wrongly), the bearing's options by Claude Haiku ($0.01,
+Lite twice took the piston's enum). Google's free tier gave 20 requests a day per flash model.
+
+Still short of Java: an option's icon isn't drawn (Create's icon sheet), a value Java starts
+from a method or a config (`defaultValue()`, `max / 2`) starts at 0 here (the diodes, the
+chassis), and the valve handle's zero column reads 0° where Java shows 1°.
+
 ## Suggested order
 
 1. Catnip and Registrate shims, kinetic block entities, shafts, cogs and a hand crank:

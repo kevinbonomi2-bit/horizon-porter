@@ -1098,6 +1098,13 @@ fn translate_one(
             );
             continue;
         }
+        if let Some((wrong, right)) = prompt.lang.check(&function) {
+            feedback = format!(
+                "Your last answer names the lang key `\"{wrong}\"`, which this mod's lang files don't have: it \
+                 would show as that text. {right} Your answer was:\n```rust\n{function}\n```"
+            );
+            continue;
+        }
         if let Some((constant, name)) = prompt.properties.iter().find(|(constant, _)| {
             function.contains(&format!("\"{}\"", constant.to_ascii_lowercase()))
         }) {
@@ -1303,6 +1310,11 @@ pub struct Prompt {
     /// together: an answer that reads another (`recipe.number("processingTime")`
     /// where the files say `processing_time`) reads nothing, and is sent back.
     pub recipe_values: Vec<String>,
+    /// The mod's own lang keys (`content/assets/<ns>/lang/en_us.json`), by namespace: an
+    /// answer that names a key of the mod's it doesn't have (made up from a Java name,
+    /// or `CreateLang`'s key without its `create.`) shows that key as text, and is sent
+    /// back.
+    pub lang: std::sync::Arc<Lang>,
     /// Whether it is a placement whose Java asks where the block goes
     /// (`context.getClickedPos()`): an answer that only ever reads the block clicked
     /// is asked once whether it meant that.
@@ -1864,6 +1876,7 @@ fn prompt_with(dir: &Path, scan: &ModScan, unit: &Unit, used_budget: usize) -> R
         }
     }
     out.properties = properties;
+    out.lang = mod_lang(dir);
     out.recipe_values = recipe_values
         .into_iter()
         .flat_map(|(_, keys)| keys)
@@ -3265,6 +3278,104 @@ fn recipe_values_of(module: &str) -> Vec<(String, Vec<String>)> {
 }
 
 /// The recipe values a function reads by a literal: each `.number("key")`.
+/// A mod's own lang keys, by namespace (`create`), from the port's content.
+#[derive(Debug, Default)]
+pub struct Lang {
+    pub keys: std::collections::HashMap<String, std::collections::HashSet<String>>,
+}
+
+impl Lang {
+    /// The first string in `function` that looks like a lang key of the mod's and isn't
+    /// one, with what to write instead: a key with the mod's namespace that it lacks, or a
+    /// key that is the mod's once the namespace is put before it (`generic.unit.ticks`
+    /// for `create.generic.unit.ticks`).
+    pub fn check(&self, function: &str) -> Option<(String, String)> {
+        if self.keys.is_empty() {
+            return None;
+        }
+        for lit in function.split('"').skip(1).step_by(2) {
+            let parts: Vec<&str> = lit.split('.').collect();
+            if parts.len() < 3
+                || !parts.iter().all(|p| {
+                    !p.is_empty()
+                        && p.chars()
+                            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+                })
+            {
+                continue;
+            }
+            if let Some(keys) = self.keys.get(parts[0]) {
+                if keys.contains(lit) {
+                    continue;
+                }
+                // The keys ending as it does are what it meant.
+                let last = parts[parts.len() - 1];
+                let mut near: Vec<&String> = keys
+                    .iter()
+                    .filter(|k| k.ends_with(&format!(".{last}")))
+                    .collect();
+                near.sort();
+                near.truncate(8);
+                let near: Vec<String> = near.iter().map(|k| format!("`{k}`")).collect();
+                let right = if near.is_empty() {
+                    "Use the key the Java names (the enum's or the class's own, as it builds it), never one made up from a name.".to_string()
+                } else {
+                    format!(
+                        "Keys of the mod's ending the same way: {}.",
+                        near.join(", ")
+                    )
+                };
+                return Some((lit.to_string(), right));
+            }
+            for (ns, keys) in &self.keys {
+                let full = format!("{ns}.{lit}");
+                if keys.contains(&full) {
+                    return Some((
+                        lit.to_string(),
+                        format!(
+                            "The mod's key is `{full}`: its lang helper puts `{ns}.` before what the Java writes."
+                        ),
+                    ));
+                }
+            }
+        }
+        None
+    }
+}
+
+/// The lang keys of the port in `dir`, read once a run.
+fn mod_lang(dir: &Path) -> std::sync::Arc<Lang> {
+    use std::sync::{Arc, Mutex, OnceLock};
+    static SEEN: OnceLock<Mutex<BTreeMap<PathBuf, Arc<Lang>>>> = OnceLock::new();
+    let seen = SEEN.get_or_init(Default::default);
+    if let Some(l) = seen.lock().ok().and_then(|m| m.get(dir).cloned()) {
+        return l;
+    }
+    let mut lang = Lang::default();
+    if let Ok(namespaces) = fs::read_dir(dir.join("content/assets")) {
+        for ns in namespaces.flatten() {
+            let file = ns.path().join("lang/en_us.json");
+            let Ok(text) = fs::read_to_string(&file) else {
+                continue;
+            };
+            let Ok(serde_json::Value::Object(map)) =
+                serde_json::from_str::<serde_json::Value>(text.trim_start_matches('\u{feff}'))
+            else {
+                continue;
+            };
+            lang.keys.insert(
+                ns.file_name().to_string_lossy().to_string(),
+                map.keys().cloned().collect(),
+            );
+        }
+    }
+    let lang = Arc::new(lang);
+    if let Ok(mut m) = seen.lock() {
+        m.insert(dir.to_path_buf(), lang.clone());
+    }
+    lang
+}
+
 fn read_recipe_values(function: &str) -> Vec<String> {
     let mut out = Vec::new();
     for (at, call) in function.match_indices(".number(") {
@@ -3642,6 +3753,40 @@ impl State {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn answers_naming_lang_keys_the_mod_lacks_go_back() {
+        let mut lang = Lang::default();
+        lang.keys.insert(
+            "create".into(),
+            [
+                "create.contraptions.movement_mode.rotate_place",
+                "create.generic.unit.ticks",
+            ]
+            .iter()
+            .map(|k| k.to_string())
+            .collect(),
+        );
+        // Made up from the enum's name: the key ending the same way is offered.
+        let (wrong, right) = lang
+            .check(r#"vec!["create.gui.contraptions.rotation_mode.rotate_place".into()]"#)
+            .unwrap();
+        assert_eq!(wrong, "create.gui.contraptions.rotation_mode.rotate_place");
+        assert!(right.contains("`create.contraptions.movement_mode.rotate_place`"));
+        // `CreateLang`'s key without its namespace.
+        let (wrong, right) = lang
+            .check(r#"rows: vec!["generic.unit.ticks".into()]"#)
+            .unwrap();
+        assert_eq!(wrong, "generic.unit.ticks");
+        assert!(right.contains("`create.generic.unit.ticks`"));
+        // Its own keys, other mods' and plain text pass.
+        assert!(
+            lang.check(
+                r#""create.generic.unit.ticks", "key.mouse.right", "Value", "minecraft:stone""#
+            )
+            .is_none()
+        );
+    }
 
     #[test]
     fn notes_list_what_ports_left_out() {

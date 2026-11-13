@@ -253,9 +253,12 @@ for what Haiku gets wrong. The free ones:
   `GEMINI_API_KEY` (or in the app's Translation settings, which the command line reads
   too). On the free tier Google may use what is sent to improve its products: here, the
   mod's code. When the day's share runs out `translate` stops, and carries on when you
-  run it again. A model can also be busy for everyone ("high demand", 503) for a while:
-  then another of Google's models may answer (`--model gemini-3.6-flash` did when
-  `gemini-3.8-flash` was busy).
+  run it again. The share is small: in November 2026 a free key had 20 requests a day for
+  each of the flash models (a retry counts), so it suits a small mod or a mod's last
+  functions, not all of Create. Each model has its own share, and the "lite" ones a
+  larger one. A model can also be busy for everyone ("high demand", 503) for a while:
+  then another of Google's models may answer (`--model gemini-3.6-flash` and
+  `gemini-3.5-flash` did while `gemini-3.8-flash` was busy).
 - `--ai openrouter --model <one ending in :free>` asks one of
   [OpenRouter](https://openrouter.ai)'s free models (`OPENROUTER_API_KEY`): 50 requests
   a day, 1,000 once the account has ever bought $10 of credits. Without `--model` it

@@ -1484,13 +1484,24 @@ fn hold(scan: &ModScan, owners: &[&ClassInfo], be: &mut BlockEntity) {
                 for x in &mut theirs.fields {
                     let member = x.java.rsplit(' ').next().unwrap_or_default();
                     let set = format!("{}.{member} = ", f.name);
-                    let Some(at) = source.find(&set) else {
+                    // Or through its setter, for Create's scroll values:
+                    // `angleInput.setValue(45);` starts `value` at 45.
+                    let setter = format!("{}.setValue(", f.name);
+                    let value = if let Some(at) = source.find(&set) {
+                        source[at + set.len()..].split(';').next()
+                    } else if member == "value"
+                        && let Some(at) = source.find(&setter)
+                    {
+                        source[at + setter.len()..]
+                            .split(';')
+                            .next()
+                            .and_then(|v| v.trim_end().strip_suffix(')'))
+                    } else {
+                        None
+                    };
+                    let Some(value) = value else {
                         continue;
                     };
-                    let value = source[at + set.len()..]
-                        .split(';')
-                        .next()
-                        .unwrap_or_default();
                     if let Some(init) = initial(x.kind, value, owner) {
                         x.init = Some(init);
                     }
