@@ -487,6 +487,9 @@ pub enum Effect {
         count: u32,
         at: [f64; 3],
         motion: [f64; 3],
+        /// Marked as the block entity's own output (`Machine::eject`): its
+        /// `dropped_in` leaves it out.
+        own: bool,
     },
     /// `level.playSound(null, x, y, z, sound, SoundSource.BLOCKS, volume, pitch)`.
     Sound {
@@ -863,6 +866,22 @@ impl<'a> Machine<'a> {
             count,
             at,
             motion,
+            own: false,
+        });
+    }
+
+    /// Drops `count` of `item` at `at` moving at `motion`, as `drop` does, marked as
+    /// this block entity's own output: its `dropped_in` never lists that item again,
+    /// however long it stays in reach. What Java tags so its machine doesn't take
+    /// back what it put out: Create's crushing wheels mark what they crush with
+    /// `BypassCrushingWheel` (their position) and skip an item that carries theirs.
+    pub fn eject(&mut self, item: &str, count: u32, at: [f64; 3], motion: [f64; 3]) {
+        self.effects.push(Effect::Drop {
+            item: item.to_string(),
+            count,
+            at,
+            motion,
+            own: true,
         });
     }
 

@@ -2160,7 +2160,9 @@ impl mod_api::BlockEntityPart for PortedEntity {
                         let _ = level.send_particles(host, &options, None, at, spread, speed, count);
                     }
                 }
-                runtime::Effect::Drop { item, count, at, motion } => {
+                // (An ejected item's mark, `own`, isn't kept on this route yet: its
+                // block entity may take it back in.)
+                runtime::Effect::Drop { item, count, at, motion, .. } => {
                     use mod_api::Tag;
                     let mut stack = mod_api::Compound::new();
                     stack.insert("id".into(), Tag::String(item.as_str().into()));

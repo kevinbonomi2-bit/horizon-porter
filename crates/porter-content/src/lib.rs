@@ -437,6 +437,14 @@ pub fn generate_with(
         let own = template_properties(&template).unwrap_or_default();
         for (name, values) in java_values {
             if !all_states.contains_key(&name) && !own.contains(&name.as_str()) {
+                // A direction its blockstate never draws by (a crushing wheel
+                // controller's `facing`, which says where it drops what it crushed)
+                // starts where Java's does.
+                if !java_defaults.contains_key(&name)
+                    && let Some(first) = java_first_value(&values)
+                {
+                    java_defaults.insert(name.clone(), first.to_string());
+                }
                 all_states.insert(name, values);
             }
         }
@@ -1947,6 +1955,48 @@ fn java_states(
             })
         })
     };
+    // Which of vanilla's direction or axis properties one is, by where it comes from:
+    // `HorizontalDirectionalBlock.FACING` (four ways), `BlockStateProperties.FACING`
+    // (six), or a `FACING` the block inherits from the vanilla class it extends
+    // (`DirectionalBlock`). None where that can't be told.
+    let vanilla_above = chain
+        .last()
+        .and_then(|c| c.superclass.as_deref())
+        .map(|s| s.rsplit('.').next().unwrap_or(s).to_string());
+    let vanilla_kind = |init: &str, constant: &str| -> Option<&'static str> {
+        let known = |c: &str| {
+            [
+                "FACING",
+                "HORIZONTAL_FACING",
+                "VERTICAL_DIRECTION",
+                "FACING_HOPPER",
+                "AXIS",
+                "HORIZONTAL_AXIS",
+            ]
+            .into_iter()
+            .find(|k| *k == c)
+        };
+        if init.is_empty() {
+            return match (constant, vanilla_above.as_deref()) {
+                ("FACING", Some("DirectionalBlock")) => Some("FACING"),
+                ("FACING", Some("HorizontalDirectionalBlock")) => Some("HORIZONTAL_FACING"),
+                ("AXIS", Some("RotatedPillarBlock")) => Some("AXIS"),
+                _ => None,
+            };
+        }
+        let init = init.trim();
+        if init == "HorizontalDirectionalBlock.FACING" {
+            Some("HORIZONTAL_FACING")
+        } else if init == "DirectionalBlock.FACING" {
+            Some("FACING")
+        } else if init == "RotatedPillarBlock.AXIS" {
+            Some("AXIS")
+        } else if init.starts_with("BlockStateProperties.") {
+            known(constant)
+        } else {
+            None
+        }
+    };
     // A property field's name and values: `PART = EnumProperty.create("part", ..)`,
     // `POWERED = BlockStateProperties.POWERED`, `FACING` inherited from vanilla.
     let property = |field: &str| -> (String, Option<BTreeSet<String>>) {
@@ -1985,6 +2035,11 @@ fn java_states(
                 }
                 _ => None,
             }
+        } else if literal.is_none()
+            && let Some(order) = vanilla_kind(&init, constant).and_then(vanilla_property_values)
+        {
+            // Vanilla's directions and axes (`FACING` from `DirectionalBlock`).
+            Some(order.iter().map(|v| v.to_string()).collect())
         } else {
             None
         };
@@ -2005,6 +2060,38 @@ fn java_states(
         }
     }
     (values, defaults)
+}
+
+/// The values of vanilla's direction and axis properties, as `BlockStateProperties`
+/// names them, in Java's order: the first is the one a block starts with when its
+/// `registerDefaultState` doesn't set it (`StateDefinition.any()`).
+fn vanilla_property_values(constant: &str) -> Option<&'static [&'static str]> {
+    Some(match constant {
+        "FACING" => &["down", "up", "north", "south", "west", "east"],
+        "HORIZONTAL_FACING" => &["north", "south", "west", "east"],
+        "VERTICAL_DIRECTION" => &["up", "down"],
+        "FACING_HOPPER" => &["down", "north", "south", "west", "east"],
+        "AXIS" => &["x", "y", "z"],
+        "HORIZONTAL_AXIS" => &["x", "z"],
+        _ => return None,
+    })
+}
+
+/// The value a block starts with for a direction or axis property with `values`, when
+/// its Java doesn't say: the first in Java's order (`down` of all six directions).
+fn java_first_value(values: &BTreeSet<String>) -> Option<&'static str> {
+    [
+        "FACING",
+        "HORIZONTAL_FACING",
+        "VERTICAL_DIRECTION",
+        "FACING_HOPPER",
+        "AXIS",
+        "HORIZONTAL_AXIS",
+    ]
+    .iter()
+    .filter_map(|c| vanilla_property_values(c))
+    .find(|order| order.len() == values.len() && order.iter().all(|v| values.contains(*v)))
+    .and_then(|order| order.first().copied())
 }
 
 /// Vanilla's boolean state properties, as `BlockStateProperties` names them.
@@ -3384,6 +3471,78 @@ fn holds_water(scan: &ModScan, class: Option<&str>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_java_direction_property_joins_its_states() {
+        let class =
+            |name: &str, superclass: &str, fields: &[(&str, &str)]| porter_model::ClassInfo {
+                name: format!("m.{name}"),
+                kind: porter_model::ClassKind::Class,
+                path: String::new(),
+                superclass: Some(superclass.to_string()),
+                interfaces: Vec::new(),
+                references: Vec::new(),
+                side: porter_model::Side::Common,
+                is_mixin: false,
+                lines: 0,
+                methods: 0,
+                fields: fields
+                    .iter()
+                    .map(|(name, init)| porter_model::FieldInfo {
+                        name: name.to_string(),
+                        ty: "EnumProperty<Direction>".into(),
+                        is_static: true,
+                        is_final: true,
+                        init: (!init.is_empty()).then(|| init.to_string()),
+                    })
+                    .collect(),
+                method_names: Vec::new(),
+                saved: Vec::new(),
+            };
+        let definition = |name: &str, fields: &[&str], defaults: &[(&str, &str)]| {
+            (
+                format!("m.{name}"),
+                fields.iter().map(|f| f.to_string()).collect(),
+                defaults
+                    .iter()
+                    .map(|(f, v)| (f.to_string(), v.to_string()))
+                    .collect(),
+            )
+        };
+        let scan = ModScan {
+            classes: vec![
+                // Create's crushing wheel controller: `FACING` from `DirectionalBlock`.
+                class(
+                    "Controller",
+                    "net.minecraft.world.level.block.DirectionalBlock",
+                    &[],
+                ),
+                // A shutter's own four-way `FACING`.
+                class(
+                    "Shutter",
+                    "Block",
+                    &[("FACING", "HorizontalDirectionalBlock.FACING")],
+                ),
+                // A `FACING` of a class it can't tell: left as before.
+                class("Odd", "SomeModLibraryBlock", &[]),
+            ],
+            state_definitions: vec![
+                definition("Controller", &["VALID", "FACING"], &[("VALID", "false")]),
+                definition("Shutter", &["FACING"], &[]),
+                definition("Odd", &["FACING"], &[]),
+            ],
+            ..ModScan::default()
+        };
+        let (values, _) = java_states(&scan, Some("m.Controller"));
+        let facing = &values["facing"];
+        assert_eq!(facing.len(), 6);
+        assert_eq!(java_first_value(facing), Some("down"));
+        let (values, _) = java_states(&scan, Some("m.Shutter"));
+        assert_eq!(values["facing"].len(), 4);
+        assert_eq!(java_first_value(&values["facing"]), Some("north"));
+        let (values, _) = java_states(&scan, Some("m.Odd"));
+        assert!(!values.contains_key("facing"));
+    }
 
     #[test]
     fn adds_the_loaders_common_tags_a_recipe_names() {

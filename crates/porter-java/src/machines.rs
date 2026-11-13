@@ -629,6 +629,9 @@ pub fn block_shape(class: &str, superclass: Option<&str>, source: &str) -> Optio
 pub struct OwnHandlers {
     /// Item handler classes, by simple name: their first argument is the slot count.
     pub items: Vec<String>,
+    /// Item handler classes that fix their own size, by simple name, with it: Create's
+    /// `ProcessingInventory(Consumer<ItemStack> callback)` calls `super(32)`.
+    pub sized_items: Vec<(String, usize)>,
     /// Tank classes, by simple name, with which argument counts the tanks (one tank
     /// where none does) and which is each tank's capacity.
     pub tanks: Vec<(String, Option<usize>, usize)>,
@@ -724,6 +727,19 @@ pub fn own_handlers(
             out.items.push(simple(&class.name));
             continue;
         }
+        // One that fixes its own size, whatever it is made with: `super(32)` in its
+        // constructor.
+        if handles_items && let Some(text) = source_of(&class.name) {
+            let size = calls(text, "super")
+                .iter()
+                .filter_map(|args| split_top(args).first().and_then(|a| constant(a, text)))
+                .find(|n| *n > 0);
+            if let Some(n) = size {
+                out.sized_items
+                    .push((simple(&class.name), n.clamp(0, 256) as usize));
+                continue;
+            }
+        }
         // A holder of tanks: it deals in fluids, and is made with a capacity.
         let fluids = source_of(&class.name)
             .is_some_and(|t| t.contains("FluidTank") || t.contains("IFluidHandler"));
@@ -811,15 +827,26 @@ pub fn storage(
     let mut items = 0usize;
     // Those a field is given, by where: `inputInv = new ItemStackHandler(1)`.
     let mut kept: Vec<(usize, String, usize)> = Vec::new();
-    let own_items: Vec<String> = own.items.iter().map(|n| format!("new {n}")).collect();
-    for name in [
+    // (With the size, for a class that fixes its own.)
+    let own_items: Vec<(String, Option<usize>)> = own
+        .items
+        .iter()
+        .map(|n| (format!("new {n}"), None))
+        .chain(
+            own.sized_items
+                .iter()
+                .map(|(n, size)| (format!("new {n}"), Some(*size))),
+        )
+        .collect();
+    for (name, sized) in [
         "new ItemStackHandler",
         "new SimpleContainer",
         "NonNullList.withSize",
         "new ItemStacksResourceHandler",
     ]
     .into_iter()
-    .chain(own_items.iter().map(String::as_str))
+    .map(|n| (n, None))
+    .chain(own_items.iter().map(|(n, s)| (n.as_str(), *s)))
     {
         let mut from = 0;
         while let Some(i) = source[from..].find(name).map(|i| from + i) {
@@ -839,7 +866,9 @@ pub fn storage(
                 continue;
             };
             // `new ItemStackHandler()` holds one.
-            let n = if args.trim().is_empty() {
+            let n = if let Some(size) = sized {
+                Some(size as i32)
+            } else if args.trim().is_empty() {
                 Some(1)
             } else {
                 split_top(args).first().and_then(|a| constant(a, source))
@@ -1691,6 +1720,31 @@ public class InfuserScreen extends AbstractWidgetsContainerScreen<InfuserMenu> i
         assert_eq!(s.tanks, [1000, 1000, 1000, 1000]);
         // The tank class itself makes one from what it is given: no storage of its own.
         assert_eq!(storage("TankBehaviour", &sources[2].1, &[], &own), None);
+        // A handler class that fixes its own size (Create's `ProcessingInventory`), made
+        // with a callback: its size wherever it is made.
+        let classes = [class(
+            "m.ProcessingInventory",
+            Some("ItemStackHandler"),
+            &[],
+        )];
+        let sources = [(
+            "m.ProcessingInventory".to_string(),
+            "class ProcessingInventory extends ItemStackHandler {
+	public ProcessingInventory(Consumer<ItemStack> callback) {
+		super(32);
+		this.callback = callback;
+	}
+	public void clear() { super.setSize(32); }
+}"
+            .to_string(),
+        )];
+        let own = own_handlers(&classes, &sources);
+        assert!(own.items.is_empty());
+        assert_eq!(own.sized_items, [("ProcessingInventory".to_string(), 32)]);
+        let crusher = "class Controller { ProcessingInventory inventory; Controller() { inventory = new ProcessingInventory(this::itemInserted) { public boolean isItemValid(int slot, ItemStack stack) { return slot == 0; } }; } }";
+        let s = storage("Controller", crusher, &["inventory".into()], &own).unwrap();
+        assert_eq!(s.items, 32);
+        assert_eq!(s.inventories, [("inventory".to_string(), 32)]);
         // One handler: as before.
         let pot = "class Pot { ItemStackHandler inventory = new ItemStackHandler(9); }";
         let s = storage("Pot", pot, &["inventory".into()], &OwnHandlers::default()).unwrap();

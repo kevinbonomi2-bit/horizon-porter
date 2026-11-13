@@ -1993,6 +1993,10 @@ fn {id}_block_entity_tick(
 ) {{
     use crate::game::{m} as m;
     use horizon_world::nbt::{{JavaString, Tag}};
+    // The items each block entity put out as its own (`machine.eject`), by entity id,
+    // with where it stands: its `dropped_in` leaves them out, as Java's tag on them
+    // does (Create's `BypassCrushingWheel`). The newest few thousand are kept.
+    static EJECTED: std::sync::Mutex<Vec<(u32, [i32; 3])>> = std::sync::Mutex::new(Vec::new());
     if !m::BLOCK_ENTITIES.iter().any(|(_, id, _)| *id == entity.id) {{
         return;
     }}
@@ -2262,11 +2266,15 @@ fn {id}_block_entity_tick(
     let data = entity.data.clone();
     // The dropped items its tick looked at, by the id it was given.
     let seen: std::cell::RefCell<Vec<(u32, horizon_client::items::ItemStack)>> = std::cell::RefCell::new(Vec::new());
+    let ejected: Vec<u32> = EJECTED
+        .lock()
+        .map(|list| list.iter().filter(|(_, at)| *at == pos).map(|(id, _)| *id).collect())
+        .unwrap_or_default();
     let dropped = |min: [f64; 3], max: [f64; 3]| -> Vec<m::Dropped> {{
         let mut seen = seen.borrow_mut();
         game.native_item_entities(&dimension_here, min, max)
             .into_iter()
-            .filter(|e| e.stack.count > 0)
+            .filter(|e| e.stack.count > 0 && !ejected.contains(&e.id))
             .map(|e| {{
                 let d = m::Dropped {{
                     id: seen.len() as u32,
@@ -2493,7 +2501,7 @@ fn {id}_block_entity_tick(
                     @@LEVEL_CALL(game; native_level_send_particles; &options, None, at, spread, speed, count)@@
                 }}
             }}
-            m::Effect::Drop {{ item, count, at, motion }} => {{
+            m::Effect::Drop {{ item, count, at, motion, own }} => {{
                 use horizon_world::nbt::{{Compound, Tag}};
                 let mut stack = Compound::new();
                 stack.insert(JavaString::from("id"), Tag::String(JavaString::from(item.as_str())));
@@ -2507,7 +2515,13 @@ fn {id}_block_entity_tick(
                     Tag::List(motion.iter().map(|v| Tag::Double(v.to_bits())).collect()),
                 );
                 let dimension = game.native_dimension();
-                let _ = game.native_summon(dimension, "minecraft:item", at, nbt);
+                let made = game.native_summon(dimension, "minecraft:item", at, nbt);
+                if let (true, Some(id), Ok(mut list)) = (own, made, EJECTED.lock()) {{
+                    list.push((id, pos));
+                    if list.len() > 4096 {{
+                        list.drain(..1024);
+                    }}
+                }}
             }}
             m::Effect::Sound {{ sound, at, volume, pitch }} => {{
                 // SoundSource.BLOCKS

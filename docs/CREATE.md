@@ -462,9 +462,11 @@ the chassis' range, the steam engine's direction. All of them are Create's
   behaviour class, its board, where its value sits on the board and what a choice sets (the
   motor's rows pick the way it turns).
 
-One thing differs from Java: the box is drawn over the world rather than in it (Horizon has no
-text drawing for block entities), so it isn't hidden behind blocks, and its number is the font's
-size on a dark square where Java draws it large to fill the box.
+The box was first drawn over the world from the HUD, which jittered as the player moved. It is
+now drawn with its block, as `ValueBox.render` does: the value in a 3×5 pixel font filling the
+box, an outline round the one looked at, a little in front of the box's anchor (a motor's sits at
+12.5/16, inside its side plate), depth-tested so it stays put. Horizon has no text drawing for
+block entities, hence the pixel font; the tip stays on the HUD.
 
 Checked in game (`ai-test/create_dial.py`, builds native-66f3981-db82e152d283 and
 -a8bfa6454f9d): looking at a creative motor's side shows its speed and Create's tip; holding
@@ -508,6 +510,58 @@ Lite twice took the piston's enum). Google's free tier gave 20 requests a day pe
 Still short of Java: an option's icon isn't drawn (Create's icon sheet), a value Java starts
 from a method or a config (`defaultValue()`, `max / 2`) starts at 0 here (the diodes, the
 chassis), and the valve handle's zero column reads 0° where Java shows 1°.
+
+### What playing it showed (2026-11-13)
+
+A round of play turned up machines that ran but not as in Java. Each was a gap in the porter,
+fixed for every mod rather than for Create:
+
+- **A fan's blades spun off their axis, the arm looked wrong:** Java draws each part from its
+  own `SuperByteBuffer` with its own turns; the ports turned one pose for all of them.
+  `translate` now sends back a renderer that does that, and says to push and pop per part.
+- **The cuckoo clock's hands ran unpowered and nothing happened at noon:** Catnip's
+  `LerpedFloat` is a type of the port now (chase, `tickChaser`, `getValue(partial)`), started as
+  the Java starts it, and a tick can read the day's time (`machine.day_time`). Tick stubs say
+  that what Java does on the client side of a tick to its state is done in the server tick.
+- **The valve handle drew a crank inside it, a gauge drew no shaft:** a renderer's stub names
+  the renderer classes above it and the block entity whose overrides it calls.
+- **Tracks were placed diagonally:** a Registrate entry made by a method reference
+  (`TrackMaterial.ANDESITE::createBlock`) now takes its class from the field's declared type
+  (`BlockEntry<TrackBlock>`), so the track's own placement runs. They lie flat.
+- **Crushing wheels spun but crushed nothing.** Five gaps, each now closed:
+  - the controller between the wheels is a block the wheel's code places two blocks out
+    (`pos.relative(side, 2)`): `machine.set_block_at` puts a block in the world after a tick;
+  - its `ProcessingInventory` fixes its own size (`super(32)`) and is made with a callback,
+    so the scan counted no slots: an item handler class of the mod's own that fixes its size
+    now counts wherever it is made;
+  - the wheel sets the controller's speed through the block registered for it
+    (`AllBlocks.CRUSHING_WHEEL_CONTROLLER.get().updateSpeed(..)`), whose code the translator
+    never saw: a call through a registered entry, or through a cast to a mod class, now shows
+    that class's code, and names its block entity's saved keys (`crushingspeed` → `Speed`);
+  - the controller's `facing` (which way it drops what it crushed) was missing, because its
+    blockstate file draws by `valid` alone: Java's direction and axis properties
+    (`FACING` from `DirectionalBlock`) now join a block's states, starting where Java's do
+    (`down`). Five of Create's blocks gain one, each as its Java has it;
+  - what it drops it took straight back in and crushed again, gravel to sand to nothing: Java
+    tags its output (`BypassCrushingWheel`). `machine.eject` drops an item marked as the block
+    entity's own, which its `dropped_in` never lists again.
+
+  In game (build native-66f3981-09aa360864cf): the controller carries Java's speed (0.32 for
+  16 RPM), a cobblestone drops out below as gravel, four gravel as four sand and a flint, at
+  Java's rate (the speed over log2 of the stack). All 29 checks still pass.
+- **Placing a crushing wheel looks odd:** the axis it ends with is Java's (where the player
+  looks, else a neighbouring shaft's), but Horizon asks a mod's placement only on the server,
+  so the client first shows the template's guess (the clicked face's axis) for a tick. That
+  needs Horizon to ask the mod when the client predicts a placement.
+
+Translated for this, with Claude Haiku: the wheel's and the controller's ticks ($0.08), then
+the controller's again once it could eject ($0.06).
+
+Still short: fluid pipes and brackets. Create draws a pipe's arms, rims, brackets and casing
+with a baked model of its own (`PipeAttachmentModel`, wrapping the block's model), which the
+porter doesn't port yet, so a pipe draws as its plain pieces and a bracket is saved but not
+drawn. A stressometer turns and passes on rotation, but reads 0: the network's stress isn't
+modelled yet.
 
 ## Suggested order
 

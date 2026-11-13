@@ -1492,6 +1492,18 @@ fn prompt_with(dir: &Path, scan: &ModScan, unit: &Unit, used_budget: usize) -> R
             }
         }
     }
+    // Those it reaches through a registered entry or a cast (`AllBlocks.X.get().f(..)`),
+    // which no import or name of theirs shows.
+    let mut reached: Vec<String> = Vec::new();
+    for class in reached_classes(scan, &java_text) {
+        reached.push(class.name.clone());
+        if sent.contains(&class.name) || used.iter().any(|(c, _)| c.name == class.name) {
+            continue;
+        }
+        if let Ok(source) = fs::read_to_string(Path::new(&scan.input).join(&class.path)) {
+            used.push((class, source));
+        }
+    }
     // Those whose static functions the code calls come first (`RotationPropagator.
     // handleAdded(..)`: what the tick hands its work to), then the smallest.
     let calls_into = |class: &porter_model::ClassInfo| {
@@ -1515,7 +1527,13 @@ fn prompt_with(dir: &Path, scan: &ModScan, unit: &Unit, used_budget: usize) -> R
         simple.ends_with("BlockEntity") || simple.ends_with("TileEntity")
     };
     // (The key reads all the Java: worked out once a class.)
-    used.sort_by_cached_key(|(class, s)| (!its_entity(class), !calls_into(class), s.len()));
+    used.sort_by_cached_key(|(class, s)| {
+        (
+            !its_entity(class),
+            !(calls_into(class) || reached.contains(&class.name)),
+            s.len(),
+        )
+    });
     let mut shown: Vec<String> = sent.clone();
     let mut used_chars = 0;
     // The Java of the classes too long to show.
@@ -1586,6 +1604,21 @@ fn prompt_with(dir: &Path, scan: &ModScan, unit: &Unit, used_budget: usize) -> R
             let (Some(next), None) = (of_name.next(), of_name.next()) else {
                 continue;
             };
+            if shown.contains(&next.name)
+                || followed.contains(&next.name)
+                || used.iter().any(|(c, _)| c.name == next.name)
+            {
+                continue;
+            }
+            if let Ok(text) = fs::read_to_string(Path::new(&scan.input).join(&next.path)) {
+                followed.push(next.name.clone());
+                used.push_front((next, text));
+            }
+        }
+        // And the classes they reach through a registered entry or a cast: a wheel's
+        // block sets the speed of the controller between it and the next
+        // (`AllBlocks.CRUSHING_WHEEL_CONTROLLER.get().updateSpeed(..)`).
+        for next in reached_classes(scan, &cut) {
             if shown.contains(&next.name)
                 || followed.contains(&next.name)
                 || used.iter().any(|(c, _)| c.name == next.name)
@@ -1769,7 +1802,27 @@ fn prompt_with(dir: &Path, scan: &ModScan, unit: &Unit, used_budget: usize) -> R
                      key here; write `// Missing:` only for what has no key:\n{asked}"
                 );
             }
-            let reached = reached_keys(&file, &own_java, &stub);
+            // A block the code reaches by its block (`AllBlocks.X.get().updateSpeed(..)`,
+            // which sets the controller's `crushingspeed`) names its block entity too.
+            let mut naming = own_java.clone();
+            for class in reached_classes(scan, &java_text) {
+                let simple = class.name.rsplit(['.', '$']).next().unwrap_or(&class.name);
+                let ids = scan.registrations.iter().filter(|r| {
+                    r.registry == "block"
+                        && r.creates.as_deref().and_then(|c| c.rsplit('.').next()) == Some(simple)
+                });
+                for id in ids.filter_map(|r| r.id.as_deref()) {
+                    for (entity, _, classes, _) in entity_keys(&file) {
+                        if entity.rsplit(':').next() == Some(id)
+                            && let Some(own) = classes.first()
+                        {
+                            naming.push('\n');
+                            naming.push_str(own.rsplit('.').next().unwrap_or(own));
+                        }
+                    }
+                }
+            }
+            let reached = reached_keys(&file, &naming, &stub);
             if !reached.is_empty() {
                 let _ = writeln!(
                     p,
@@ -2557,6 +2610,11 @@ fn equivalents(java: &str, stub: &str) -> String {
         ),
         (
             "Machine",
+            "getPersistentData()",
+            "an item the Java tags so this block entity won't take it back in (`entity.getPersistentData().put(\"BypassCrushingWheel\", ..)`) is dropped with `machine.eject(..)`: its `dropped_in` leaves that item out from then on",
+        ),
+        (
+            "Machine",
             "hasNeighborSignal(",
             "`level.hasNeighborSignal(pos)` is `machine.powered`",
         ),
@@ -3035,6 +3093,82 @@ fn leaves_out_for_a_field(function: &str, module: &str) -> Option<String> {
 }
 
 /// The classes `java` calls a static function of: each `Name` of a `Name.function(`.
+/// The mod's classes `java` reaches through an instance it doesn't name by class: a
+/// registered entry (`AllBlocks.CRUSHING_WHEEL_CONTROLLER.get().updateSpeed(..)`: the
+/// class registered as `crushing_wheel_controller` by `AllBlocks`) and a cast
+/// (`((CrushingWheelBlock) state.getBlock()).updateControllers(..)`). Their methods
+/// are the code's to port: what a block's code does to another block's.
+fn reached_classes<'a>(scan: &'a ModScan, java: &str) -> Vec<&'a porter_model::ClassInfo> {
+    let ident = |c: char| c.is_ascii_alphanumeric() || c == '_' || c == '$';
+    let by_simple = |simple: &str| {
+        let mut found = scan
+            .classes
+            .iter()
+            .filter(|c| !c.is_mixin && c.name.rsplit(['.', '$']).next() == Some(simple));
+        match (found.next(), found.next()) {
+            (Some(c), None) => Some(c),
+            _ => None,
+        }
+    };
+    let mut out: Vec<&porter_model::ClassInfo> = Vec::new();
+    let mut add = |c: &'a porter_model::ClassInfo| {
+        if !out.iter().any(|o| o.name == c.name) {
+            out.push(c);
+        }
+    };
+    // (The call may be on the next line: `AllBlocks.X.get()\n\t.updateSpeed(..)`.)
+    for (at, _) in java.match_indices(".get()") {
+        let Some(after) = java[at + ".get()".len()..].trim_start().strip_prefix('.') else {
+            continue;
+        };
+        let len = after.find(|c: char| !ident(c)).unwrap_or(after.len());
+        if len == 0
+            || !after.starts_with(|c: char| c.is_ascii_lowercase())
+            || !after[len..].starts_with('(')
+        {
+            continue;
+        }
+        let before = &java[..at];
+        let start = before
+            .rfind(|c: char| !(ident(c) || c == '.'))
+            .map_or(0, |i| i + 1);
+        let Some((holder, constant)) = before[start..].rsplit_once('.') else {
+            continue;
+        };
+        let holder = holder.rsplit('.').next().unwrap_or(holder);
+        if constant.is_empty()
+            || !constant
+                .chars()
+                .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+        {
+            continue;
+        }
+        let id = constant.to_ascii_lowercase();
+        let made = scan.registrations.iter().find_map(|r| {
+            (r.id.as_deref() == Some(id.as_str())
+                && r.class.rsplit(['.', '$']).next() == Some(holder))
+            .then_some(r.creates.as_deref()?)
+        });
+        if let Some(class) = made.and_then(|c| by_simple(c.rsplit('.').next().unwrap_or(c))) {
+            add(class);
+        }
+    }
+    for (at, m) in java.match_indices("((") {
+        let rest = &java[at + m.len()..];
+        let len = rest.find(|c: char| !ident(c)).unwrap_or(rest.len());
+        if len == 0
+            || !rest.starts_with(|c: char| c.is_ascii_uppercase())
+            || !rest[len..].starts_with(')')
+        {
+            continue;
+        }
+        if let Some(class) = by_simple(&rest[..len]) {
+            add(class);
+        }
+    }
+    out
+}
+
 fn static_receivers(java: &str) -> Vec<String> {
     let ident = |c: char| c.is_ascii_alphanumeric() || c == '_' || c == '$';
     let mut out: Vec<String> = Vec::new();
@@ -4250,6 +4384,70 @@ pub struct Gearbox {
             ),
             vec!["BasinRecipe".to_string(), "Mth".to_string()]
         );
+    }
+
+    #[test]
+    fn classes_reached_through_a_registered_entry_or_a_cast_are_found() {
+        let class = |name: &str| porter_model::ClassInfo {
+            name: format!("net.demo.{name}"),
+            kind: porter_model::ClassKind::Class,
+            path: format!("net/demo/{name}.java"),
+            superclass: None,
+            interfaces: Vec::new(),
+            references: Vec::new(),
+            side: porter_model::Side::Common,
+            is_mixin: false,
+            lines: 10,
+            methods: 1,
+            fields: Vec::new(),
+            method_names: Vec::new(),
+            saved: Vec::new(),
+        };
+        let registration = |id: &str, creates: &str| porter_model::Registration {
+            registry: "block".into(),
+            id: Some(id.into()),
+            via: "Registrate".into(),
+            class: "net.demo.AllBlocks".into(),
+            creates: Some(creates.into()),
+            args: String::new(),
+        };
+        let scan = ModScan {
+            classes: vec![
+                class("AllBlocks"),
+                class("WheelBlock"),
+                class("ControllerBlock"),
+            ],
+            registrations: vec![
+                registration("wheel", "WheelBlock"),
+                registration("controller", "ControllerBlock"),
+            ],
+            ..ModScan::default()
+        };
+        let names = |java: &str| {
+            reached_classes(&scan, java)
+                .iter()
+                .map(|c| c.name.clone())
+                .collect::<Vec<_>>()
+        };
+        // A wheel's code sets its controller's speed through the block registered for it.
+        assert_eq!(
+            names("AllBlocks.CONTROLLER.get().updateSpeed(world.getBlockState(p), world, p);"),
+            ["net.demo.ControllerBlock"]
+        );
+        // As Java is formatted, the call on the next line.
+        assert_eq!(
+            names(
+                "AllBlocks.CONTROLLER.get()\n\t\t\t.updateSpeed(world.getBlockState(p), world, p);"
+            ),
+            ["net.demo.ControllerBlock"]
+        );
+        // A block entity calls its own block's code through a cast.
+        assert_eq!(
+            names("((WheelBlock) getBlockState().getBlock()).updateControllers(s, l, p, d);"),
+            ["net.demo.WheelBlock"]
+        );
+        // Not an entry's method (`has`), a class of no one's, a cast to Minecraft's.
+        assert!(names("AllBlocks.CONTROLLER.has(state); AllItems.WRENCH.get().use(); ((ServerLevel) level).tick();").is_empty());
     }
 
     #[test]
