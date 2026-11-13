@@ -312,17 +312,17 @@ fn network_and_config(root: &Path, scan: &mut ModScan) {
             }
         }
     }
-    // Those built in a loop end in `*` (`create:block/fluid_pipe/*`): every model of the
-    // mod's under that prefix.
+    // Those built in a loop have a `*` for each computed part (`create:block/fluid_pipe/*/*`,
+    // `create:block/*_valve_handle`): every model of the mod's whose name fits.
     let looped: Vec<String> = scan
         .standalone_models
         .iter()
-        .filter(|m| m.ends_with('*'))
+        .filter(|m| m.contains('*'))
         .cloned()
         .collect();
-    scan.standalone_models.retain(|m| !m.ends_with('*'));
+    scan.standalone_models.retain(|m| !m.contains('*'));
     for marker in looped {
-        let Some((ns, prefix)) = marker.trim_end_matches('*').split_once(':') else {
+        let Some((ns, pattern)) = marker.split_once(':') else {
             continue;
         };
         for root in &scan.resources.roots {
@@ -335,7 +335,7 @@ fn network_and_config(root: &Path, scan: &mut ModScan) {
             walk_json(&dir, &dir, &mut found);
             found.sort();
             for rel in found {
-                if rel.starts_with(prefix) {
+                if fits_pattern(&rel, pattern) {
                     let id = format!("{ns}:{rel}");
                     if !scan.standalone_models.contains(&id) {
                         scan.standalone_models.push(id);
@@ -519,7 +519,7 @@ fn assemble(
         }
     }
 
-    let registrations = registrations(&parsed);
+    let registrations = by_dye_colour(registrations(&parsed));
     let client = client_features(&parsed);
     ModScan {
         input: root.display().to_string(),
@@ -839,6 +839,70 @@ fn second_type_argument(ty: &str) -> Option<&str> {
     None
 }
 
+/// The dye colours, as `DyeColor.getSerializedName()` gives them, in their order.
+const DYE_COLOURS: [&str; 16] = [
+    "white",
+    "orange",
+    "magenta",
+    "light_blue",
+    "yellow",
+    "lime",
+    "pink",
+    "gray",
+    "light_gray",
+    "cyan",
+    "purple",
+    "blue",
+    "brown",
+    "green",
+    "red",
+    "black",
+];
+
+/// A registration made once a dye colour, its id built from the colour's name
+/// (`new DyedBlockList<>(colour -> REGISTRATE.block(colourName + "_valve_handle",
+/// p -> ValveHandleBlock.dyed(p, colour)))`): one a colour, `black_valve_handle` and the
+/// rest, making the class its factory names.
+fn by_dye_colour(registrations: Vec<Registration>) -> Vec<Registration> {
+    let mut out = Vec::with_capacity(registrations.len());
+    for r in registrations {
+        let first = r.args.split(',').next().unwrap_or("").trim().to_string();
+        let dyed = r.id.is_none()
+            && first.split_once('+').is_some_and(|(var, rest)| {
+                let var = var.trim().to_ascii_lowercase();
+                (var.contains("colour") || var.contains("color") || var.contains("dye"))
+                    && rest.trim().starts_with('"')
+            });
+        if !dyed {
+            out.push(r);
+            continue;
+        }
+        let suffix = first
+            .split_once('+')
+            .map(|(_, rest)| rest.trim().trim_matches('"').to_string())
+            .unwrap_or_default();
+        // `p -> ValveHandleBlock.dyed(p, colour)`: the class whose factory it is.
+        let creates = r.creates.clone().or_else(|| {
+            let factory = r.args.split(',').nth(1)?;
+            let call = factory.split("->").nth(1)?.trim();
+            let call = call.strip_prefix("new ").unwrap_or(call);
+            let class: String = call
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            class.ends_with("Block").then_some(class)
+        });
+        for colour in DYE_COLOURS {
+            out.push(Registration {
+                id: Some(format!("{colour}{suffix}")),
+                creates: creates.clone(),
+                ..r.clone()
+            });
+        }
+    }
+    out
+}
+
 /// Blocks Java gives a baked model class of its own (Create's Registrate
 /// `.onRegister(CreateRegistrate.blockModel(() -> PipeAttachmentModel::withAO))`): (id,
 /// the model class's simple name).
@@ -904,6 +968,25 @@ fn stress_values(parsed: &[(String, ParsedFile)]) -> Vec<(String, String, f32)> 
         }
     }
     out
+}
+
+/// Whether a model's path fits a name pattern: each `*` one or more characters of one
+/// name or folder (no `/`); a pattern ending in `*` also takes deeper folders, as a
+/// prefix (`block/fluid_pipe/*`).
+fn fits_pattern(path: &str, pattern: &str) -> bool {
+    match pattern.split_once('*') {
+        None => path == pattern,
+        Some((lit, rest)) => {
+            let Some(after) = path.strip_prefix(lit) else {
+                return false;
+            };
+            if rest.is_empty() {
+                return !after.is_empty();
+            }
+            let segment = after.find('/').unwrap_or(after.len());
+            (1..=segment).any(|n| fits_pattern(&after[n..], rest))
+        }
+    }
 }
 
 /// The `.json` files under `dir`, as paths from `base` without the extension and with
@@ -1631,6 +1714,57 @@ mod tests {
         assert_eq!(id_param("prefix(id)", &params), Some(1));
         assert_eq!(id_param("\"id\"", &params), None);
         assert_eq!(id_param("\"a \\\" id\" + other", &params), None);
+    }
+
+    #[test]
+    fn a_block_registered_each_dye_colour_is_one_a_colour() {
+        let r = Registration {
+            registry: "block".into(),
+            id: None,
+            via: "Registrate".into(),
+            class: "m.AllBlocks".into(),
+            creates: None,
+            args: "colourName + \"_valve_handle\", p -> ValveHandleBlock.dyed(p, colour)".into(),
+        };
+        let out = by_dye_colour(vec![r]);
+        assert_eq!(out.len(), 16);
+        assert_eq!(out[0].id.as_deref(), Some("white_valve_handle"));
+        assert_eq!(out[15].id.as_deref(), Some("black_valve_handle"));
+        assert!(
+            out.iter()
+                .all(|r| r.creates.as_deref() == Some("ValveHandleBlock"))
+        );
+    }
+
+    #[test]
+    fn a_model_name_built_in_a_loop_fits_its_files() {
+        assert!(fits_pattern(
+            "block/fluid_pipe/rim/north",
+            "block/fluid_pipe/*/*"
+        ));
+        assert!(!fits_pattern(
+            "block/fluid_pipe/casing",
+            "block/fluid_pipe/*/*"
+        ));
+        assert!(fits_pattern(
+            "block/black_valve_handle",
+            "block/*_valve_handle"
+        ));
+        assert!(!fits_pattern(
+            "block/valve_handle/black",
+            "block/*_valve_handle"
+        ));
+        assert_eq!(
+            netconf::name_pattern(
+                "\"fluid_pipe/\" + asId + \"/\" + Lang.asId(d.getSerializedName())"
+            )
+            .as_deref(),
+            Some("fluid_pipe/*/*")
+        );
+        assert_eq!(
+            netconf::name_pattern("Lang.asId(color.name()) + \"_valve_handle\"").as_deref(),
+            Some("*_valve_handle")
+        );
     }
 
     #[test]

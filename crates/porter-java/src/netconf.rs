@@ -262,26 +262,58 @@ pub fn standalone_models(source: &str, mod_id: Option<&str>) -> Vec<String> {
         for args in calls(source, &helper) {
             if let Some(path) = string_literal(&args) {
                 keep(mod_id.unwrap_or("minecraft"), &format!("{prefix}{path}"));
-            } else if let Some(start) = literal_prefix(&args) {
-                // Built in a loop (`block("fluid_pipe/" + type + "/" + direction)`): every
-                // model under that prefix, which the scan expands from the mod's files.
-                keep(mod_id.unwrap_or("minecraft"), &format!("{prefix}{start}*"));
+            } else if let Some(pattern) = name_pattern(&args) {
+                // Built in a loop (`block("fluid_pipe/" + type + "/" + direction)`,
+                // `block(Lang.asId(color.name()) + "_valve_handle")`): every model whose
+                // name fits, each computed part one name or folder, which the scan finds
+                // among the mod's files.
+                keep(mod_id.unwrap_or("minecraft"), &format!("{prefix}{pattern}"));
             }
         }
     }
     out
 }
 
-/// The string literal an argument starts with when it is joined to more with `+`
-/// (`"fluid_pipe/" + asId`): `fluid_pipe/`. None for a plain literal or anything else.
-fn literal_prefix(arg: &str) -> Option<String> {
-    let arg = arg.trim();
-    let rest = arg.strip_prefix('"')?;
-    let end = rest.find('"')?;
-    let literal = &rest[..end];
-    let after = rest[end + 1..].trim_start();
-    (after.starts_with('+') && !literal.is_empty() && !literal.contains('\\'))
-        .then(|| literal.to_string())
+/// A name joined from literals and computed parts with `+`, the computed parts as `*`:
+/// `"fluid_pipe/" + type + "/" + d` is `fluid_pipe/*/*`, `Lang.asId(c.name()) + "_valve_handle"`
+/// is `*_valve_handle`. None for a plain literal, or a name with no literal in it.
+pub(crate) fn name_pattern(arg: &str) -> Option<String> {
+    let pieces: Vec<&str> = {
+        let (mut out, mut depth, mut in_string, mut start) = (Vec::new(), 0i32, false, 0);
+        for (i, c) in arg.char_indices() {
+            match c {
+                '"' => in_string = !in_string,
+                '(' if !in_string => depth += 1,
+                ')' if !in_string => depth -= 1,
+                '+' if !in_string && depth == 0 => {
+                    out.push(&arg[start..i]);
+                    start = i + 1;
+                }
+                _ => {}
+            }
+        }
+        out.push(&arg[start..]);
+        out
+    };
+    if pieces.len() < 2 {
+        return None;
+    }
+    let mut pattern = String::new();
+    let mut literal = false;
+    for p in pieces {
+        let p = p.trim();
+        if p.len() >= 2
+            && p.starts_with('"')
+            && p.ends_with('"')
+            && !p[1..p.len() - 1].contains('"')
+        {
+            pattern.push_str(&p[1..p.len() - 1]);
+            literal = true;
+        } else if !pattern.ends_with('*') {
+            pattern.push('*');
+        }
+    }
+    literal.then_some(pattern)
 }
 
 /// A class's one-string functions that put a folder before their argument

@@ -653,6 +653,26 @@ impl Kind {
     }
 }
 
+/// The dye colours, as `DyeColor.getSerializedName()` names them.
+const DYE_COLOURS: [&str; 16] = [
+    "white",
+    "orange",
+    "magenta",
+    "light_blue",
+    "yellow",
+    "lime",
+    "pink",
+    "gray",
+    "light_gray",
+    "cyan",
+    "purple",
+    "blue",
+    "brown",
+    "green",
+    "red",
+    "black",
+];
+
 /// The mod's block entity types, linked to their blocks. `ns` is the namespace of
 /// the mod's ids.
 pub fn find(scan: &ModScan, ns: &str) -> Vec<BlockEntity> {
@@ -686,6 +706,37 @@ pub fn find(scan: &ModScan, ns: &str) -> Vec<BlockEntity> {
             })
             .map(|b| format!("{ns}:{b}"))
             .collect();
+        // A list of blocks, one a dye colour (`AllBlocks.DYED_VALVE_HANDLES.toArray()`,
+        // `TOOLBOXES`): the blocks named after its stem, `black_valve_handle` and the rest.
+        for word in reg
+            .args
+            .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .filter(|w| w.len() > 3 && w.chars().all(|c| c.is_ascii_uppercase() || c == '_'))
+        {
+            let lower = word.to_ascii_lowercase();
+            let lower = lower.strip_prefix("dyed_").unwrap_or(&lower);
+            // (And its last words: `PACKAGE_POSTBOXES` holds `black_postbox`.)
+            let stems: Vec<&str> = [lower.strip_suffix("es"), lower.strip_suffix('s')]
+                .into_iter()
+                .flatten()
+                .flat_map(|s| {
+                    std::iter::once(s).chain(s.match_indices('_').map(move |(i, _)| &s[i + 1..]))
+                })
+                .filter(|s| !s.is_empty())
+                .collect();
+            for stem in stems {
+                for b in blocks.iter().filter(|b| {
+                    b.strip_suffix(stem)
+                        .and_then(|c| c.strip_suffix('_'))
+                        .is_some_and(|c| DYE_COLOURS.contains(&c))
+                }) {
+                    let id = format!("{ns}:{b}");
+                    if !its_blocks.contains(&id) {
+                        its_blocks.push(id);
+                    }
+                }
+            }
+        }
         // No constant of the call is named after a block: the block of the type's own name.
         let by_name = its_blocks.is_empty() && blocks.contains(&name);
         if by_name {
