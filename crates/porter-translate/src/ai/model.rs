@@ -189,14 +189,17 @@ impl Anthropic {
 /// The API key the app keeps in the system's credential store (Windows Credential
 /// Manager, the macOS keychain, the Secret Service), when one is saved there.
 fn saved_key() -> Option<String> {
-    keyring::Entry::new(
-        "io.github.kevinbonomi2bit.horizonporter",
-        "anthropic-api-key",
-    )
-    .ok()?
-    .get_password()
-    .ok()
-    .filter(|k| !k.trim().is_empty())
+    saved("anthropic-api-key")
+}
+
+/// A key the app keeps in the system's credential store under `name`
+/// (`gemini-api-key`), when one is saved there.
+fn saved(name: &str) -> Option<String> {
+    keyring::Entry::new("io.github.kevinbonomi2bit.horizonporter", name)
+        .ok()?
+        .get_password()
+        .ok()
+        .filter(|k| !k.trim().is_empty())
 }
 
 /// A short-lived token from the `ant` CLI, when it is installed and signed in.
@@ -782,12 +785,15 @@ impl Compatible {
 
     /// A service by name (`gemini`, `openrouter`), its key from the environment.
     fn named(service: &Service, model: Option<&str>, effort: Option<&str>) -> Result<Compatible> {
+        // The environment's, else the one saved in the app (Translation settings).
+        let saved_as = format!("{}-api-key", service.choice);
         let Some(key) = std::env::var(service.key)
             .ok()
             .filter(|k| !k.trim().is_empty())
+            .or_else(|| saved(&saved_as))
         else {
             bail!(
-                "no {} key: set {} to a key from {}",
+                "no {} key: set {} to a key from {}, or save one in the app's Translation settings",
                 service.name,
                 service.key,
                 service.key_from
@@ -982,6 +988,18 @@ impl Model for Compatible {
                     );
                     std::thread::sleep(std::time::Duration::from_secs(secs));
                     continue;
+                }
+                // 503: the model itself is overloaded for everyone (Gemini's "high
+                // demand"), not this key's share: another of the service's models may answer.
+                if status == 503 {
+                    bail!(
+                        "{}'s model {} is overloaded right now ({status}): {}. It is busy for everyone, \
+                         not out of your share: run translate again later, or name another of its models \
+                         with --model (what is ported stays ported)",
+                        self.service,
+                        self.model,
+                        compatible_error(&json)
+                    );
                 }
                 bail!(
                     "{} is still at its limit ({status}): {}. A free tier has so many requests a day: \

@@ -64,6 +64,14 @@ const HOOKS: &[(&str, &str)] = &[
         "&mut self, channel: &str, data: &[u8]",
     ),
     ("native_frame", "&mut self, elapsed: std::time::Duration"),
+    (
+        "native_interaction_key",
+        "&mut self, button: i32, key_mapping: &str, hand: crate::first_person::Hand, swing_hand: &mut bool, canceled: &mut bool",
+    ),
+    (
+        "native_screen_mouse_button_released_pre",
+        "&self, screen: &NativeScreenView<'_>, button: i32, modifiers: u32, canceled: &mut bool",
+    ),
     ("native_standalone_models", "models: &mut Vec<String>"),
     (
         "native_block_entity_fluids",
@@ -369,6 +377,21 @@ pub mod mod_api {
     pub trait LevelHost {
         fn block_state(&self, pos: [i32; 3]) -> crate::horizon_world::registry::BlockStateId;
     }
+    // Camera values from the most recently extracted world frame.
+    #[derive(Clone, Debug)]
+    pub struct NativeCamera {
+        pub position: [f64; 3],
+        pub eye_height: f32,
+        pub partial_tick: f32,
+        pub yaw: f32,
+        pub pitch: f32,
+        pub fov_degrees: f32,
+        pub near: f32,
+        pub far: f32,
+        pub view: [f32; 16],
+        pub projection: [f32; 16],
+        pub dimension: String,
+    }
     // The player whose action a hook hears (`native_acting_player`).
     pub struct NativeServerPlayer {
         pub uuid: u128,
@@ -382,7 +405,19 @@ pub mod mod_api {
 }
 
 pub mod hud {
-    pub struct HudBatch;
+    pub struct HudBatch {
+        pub width: f32,
+        pub height: f32,
+    }
+}
+// horizon-client-core's text, as `horizon_client::text`.
+pub mod text {
+    pub struct Text;
+    impl Text {
+        pub fn literal(s: impl Into<String>) -> Self { let _ = s.into(); Text }
+        pub fn translate(key: &str, args: &[Text]) -> Self { let _ = (key, args); Text }
+        pub fn plain(&self) -> String { String::new() }
+    }
 }
 pub mod extras {
     #[derive(Clone, Copy, PartialEq, Eq)]
@@ -683,6 +718,9 @@ __LEVEL_HOOKS__
             pub fn native_held(&self) -> Option<(String, u32, bool)> { None }
             pub fn native_give_items(&mut self, item: &str, count: u32) -> u32 { 0 }
             pub fn native_raycast(&self, distance: f32) -> Option<NativeHit> { None }
+            pub fn native_view_hit(&self) -> Option<(f32, NativeHit)> { None }
+            pub fn native_camera(&self) -> Option<crate::mod_api::NativeCamera> { None }
+            pub fn native_quad(&self, batch: &mut HudBatch, points: [[f32; 2]; 4], argb: u32) {}
             pub fn native_summon(&mut self, dimension: &str, kind: &str, pos: [f64; 3], nbt: Compound) -> Option<u32> { None }
             pub fn native_neighbor_signal(&mut self, dimension: &str, pos: [i32; 3]) -> i32 { 0 }
             pub fn native_update_output_neighbors(&mut self, dimension: &str, pos: [i32; 3]) -> bool { false }
@@ -841,6 +879,21 @@ fn kinetic_helpers_compile_against_horizon_api() {
         assert!(b.wired.contains_key(hook), "{hook}");
     }
     compiles_against_the_mock(&b, "kinetic");
+}
+
+#[test]
+fn value_settings_helpers_compile_against_horizon_api() {
+    // A Create-style motor whose speed is set in a box on it: the use key held on the
+    // box, its board, the message to the server, and the box drawn when looked at.
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../porter-java/tests/fixtures/neoforge-dial-demo");
+    let scan = porter_java::scan(&path).unwrap();
+    let lang = bundle::load_lang(&scan);
+    let b = bundle::generate(&scan, &lang);
+    for hook in porter_translate::value_settings::HOOKS {
+        assert!(b.wired.contains_key(hook), "{hook}");
+    }
+    compiles_against_the_mock(&b, "dial");
 }
 
 #[test]

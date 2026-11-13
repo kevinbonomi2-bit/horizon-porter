@@ -506,6 +506,18 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
             unwired.insert(hook, uses);
         }
     }
+    // Create's value settings (a motor's speed, set in a box on it): the hooks their
+    // board and box use, beside those the mod's own code uses.
+    let value_boxes = crate::value_settings::find(scan, &block_entities);
+    let own: BTreeSet<&'static str> = wired.keys().copied().collect();
+    if !value_boxes.is_empty() {
+        let classes: BTreeSet<String> = value_boxes.iter().map(|b| b.owner.clone()).collect();
+        for hook in crate::value_settings::HOOKS {
+            stubbed.remove(hook);
+            // (A hook of the mod's own keeps its classes: they name what its code ports.)
+            wired.entry(hook).or_insert_with(|| classes.clone());
+        }
+    }
     for name in wired.keys().chain(stubbed.keys()) {
         if let Some(h) = hooks::hook(name) {
             hooks = hooks.max(h.needs());
@@ -545,6 +557,8 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
         settings: &settings,
         screens: &mod_screens,
         overlays: &overlays,
+        value_boxes: &value_boxes,
+        own: &own,
         behaviours: &behaviours,
         behaviour_blocks: &behaviour_blocks,
         vanilla_containers: &vanilla_containers,
@@ -1187,6 +1201,10 @@ struct Ctx<'a> {
     screens: &'a [ModScreen],
     /// Its classes that draw over game screens.
     overlays: &'a BTreeSet<String>,
+    /// Its block entities' values in boxes (Create's value settings).
+    value_boxes: &'a [crate::value_settings::ValueBox],
+    /// The hooks its own code uses (the value settings use others too).
+    own: &'a BTreeSet<&'static str>,
     /// Its blocks that act in code, and every block (with its id).
     behaviours: &'a [Behaviour],
     behaviour_blocks: &'a [(String, porter_content::Block)],
@@ -1332,6 +1350,11 @@ const MACHINE_CONTAINER: &str = r#"    let Some(machine) = m::MACHINES.iter().fi
 impl Ctx<'_> {
     fn uses(&self, hook: &str) -> bool {
         self.wired.contains_key(hook)
+    }
+
+    /// Whether the mod's own code uses `hook` (not only the value settings).
+    fn uses_own(&self, hook: &str) -> bool {
+        self.own.contains(hook)
     }
 
     /// The Java classes a hook replaces, for comments.
@@ -1528,7 +1551,7 @@ pub const DESCRIPTION: &str = "{description}";
             r.push_str("];\n");
         }
 
-        if self.uses("key") {
+        if self.uses_own("key") {
             let _ = write!(
                 r,
                 "\n/// One of KEYS went down or up.\n///\n/// TODO: port from {}.\npub fn on_key(name: &str, pressed: bool, player: Option<Player>) {{\n    let _ = (name, pressed, player);\n}}\n",
@@ -1549,7 +1572,7 @@ pub const DESCRIPTION: &str = "{description}";
                 self.java_for("tick")
             );
         }
-        if self.uses("hud") {
+        if self.uses_own("hud") {
             let _ = write!(
                 r,
                 "\n/// Lines of text for the mod's HUD box (top right), while in a world; none hides it.\n///\n/// TODO: port from {}.\npub fn hud_lines(player: Player) -> Vec<String> {{\n    let _ = player;\n    Vec::new()\n}}\n",
@@ -1656,7 +1679,12 @@ pub const STATE_KEYS: &[&str] = &[{}];",
             );
         }
         r.push_str(&netconf::net_runtime(self.messages));
-        r.push_str(&screens::runtime(self.screens, self.overlays));
+        r.push_str(&screens::runtime(
+            self.screens,
+            self.overlays,
+            !self.value_boxes.is_empty(),
+        ));
+        r.push_str(&crate::value_settings::runtime(self.value_boxes, self.id));
         r.push_str(&blocks::runtime(
             self.behaviours,
             self.behaviour_blocks,
@@ -1709,13 +1737,43 @@ mod tests {
         r.push_str(&netconf::net_tests(self.messages));
         r.push_str(&netconf::config_tests(self.settings));
         r.push_str(&screens::tests(self.screens));
+        r.push_str(&crate::value_settings::tests(self.value_boxes));
         r.push_str(&blocks::tests(self.behaviours));
         r.push_str("}\n");
         r
     }
 
-    /// The helper file for a hook: (file name, source).
+    /// The helper file for a hook: (file name, source). Create's value settings add
+    /// their part to the mod's own helper for a hook they share, and have their own
+    /// helper for one the mod's code doesn't use.
     fn helper(&self, hook: &str) -> (&'static str, String) {
+        if !self.value_boxes.is_empty() && crate::value_settings::HOOKS.contains(&hook) {
+            if !self.uses_own(hook) {
+                let file = match hook {
+                    "interaction_key" => "interaction_key.rs",
+                    "key" => "key.rs",
+                    "frame" => "frame.rs",
+                    "hud" => "hud.rs",
+                    "screen_render_post" => "screen_render_post.rs",
+                    "screen_mouse_button_released_pre" => "screen_mouse_button_released_pre.rs",
+                    "screen_mouse_scrolled_pre" => "screen_mouse_scrolled_pre.rs",
+                    _ => "net_from_client.rs",
+                };
+                if let Some(source) = crate::value_settings::helper(hook, self.id, &self.module) {
+                    return (file, source);
+                }
+            }
+            let (file, source) = self.own_helper(hook);
+            return (
+                file,
+                crate::value_settings::into_helper(&source, hook, &self.module),
+            );
+        }
+        self.own_helper(hook)
+    }
+
+    /// The helper file for a hook the mod's own code uses: (file name, source).
+    fn own_helper(&self, hook: &str) -> (&'static str, String) {
         let id = self.id;
         let m = &self.module;
         let name = self.name;
@@ -3802,6 +3860,17 @@ fn bindings(hook: &str) -> &'static [(&'static str, &'static str, &'static str)]
             ),
         ],
         "screen_mouse_button_pressed_pre" => &[
+            ("game", "&crate::game::Game<'_>", "&*self"),
+            (
+                "screen",
+                "&horizon_client::mod_api::NativeScreenView<'_>",
+                "screen",
+            ),
+            ("button", "i32", "button"),
+            ("modifiers", "u32", "modifiers"),
+            ("canceled", "&mut bool", "&mut *canceled"),
+        ],
+        "screen_mouse_button_released_pre" => &[
             ("game", "&crate::game::Game<'_>", "&*self"),
             (
                 "screen",

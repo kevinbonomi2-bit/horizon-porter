@@ -2522,7 +2522,7 @@ fn has_word(text: &str, word: &str) -> bool {
 }
 
 /// A Rust identifier from a Java name or an id: `maxSpeed` → `max_speed`.
-fn rust_ident(name: &str) -> String {
+pub(crate) fn rust_ident(name: &str) -> String {
     let mut out = String::new();
     let mut prev_lower = false;
     for c in name.chars() {

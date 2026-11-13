@@ -428,16 +428,51 @@ pictures in sheets of twelve; `ai-test/create_place.py` places blocks by hand fr
 
 Still not there, by what it needs:
 
-- **The motor's speed, and every value Create sets in a box on a block** (a speed controller,
-  a sequenced gearshift, a funnel's filter count): Java opens a board on right click and you
-  drag to a value. Nothing of that is ported yet: it needs a client screen the porter makes from
-  Create's value settings, and a message back to the server.
+- ~~The motor's speed, and every value Create sets in a box on a block~~: done since, below.
 - **Contraptions**: pistons, bearings, pulleys, gantries and the rest move blocks as one
   structure, an entity Horizon has nothing like. They place, turn and draw their parts, and move
   nothing.
 - **Trains**: tracks place as straight pieces; curves, stations and trains need the same.
 - Smaller: the blaze in the blaze burner, the peculiar bell's bell, copycat blocks (drawn from
   the block they copy), the ascending track's collision (a full block here, none in Java).
+
+### Values set in a box on a block (2026-11-13)
+
+A creative motor's speed is set in Java by looking at the box on its side, holding right click
+until a board opens, dragging along it and letting go. Nineteen of Create's block entities do
+the same with a value of their own: the speed controller's target, a valve handle's angle, the
+bearings', pistons', pulleys' and cart assembler's movement modes, the ejector's stack size,
+the brass diodes' delays, the brass tunnel's and the arm's selection modes, the roller's mode,
+the chassis' range, the steam engine's direction. All of them are Create's
+`ScrollValueBehaviour` (or a class extending it), so the porter now knows that framework
+(`crates/porter-translate/src/value_settings.rs`), and a port of Create's add-ons gets it too:
+
+- **Generated, as Create does it for every one of them:** the use key held on a box for five
+  ticks opens the board (`ValueSettingsInputHandler`, `ValueSettingsClient`); the board is
+  drawn from Create's own texture, with its rows, milestones and the cursor's text
+  (`ValueSettingsScreen`), shift for milestones only, the wheel a step at a time; letting go
+  sends the choice to the server (`ValueSettingsPacket`, channel `create:value_settings`),
+  which sets the value clamped to its range, runs its callback, plays Create's two sounds and
+  sends the block to the clients. Looking at a block shows each box with its value, and the
+  one under the crosshair gets an outline and Create's tip ("Click and hold to edit").
+- **Translated, once each:** for each value, what its block entity's `addBehaviours` sets up
+  (label, range, formatter, when it shows), where its box is (its `ValueBoxTransform`, with
+  Create's rotation helpers given as functions so the turns match Catnip's), and its callback
+  (the motor's `updateGeneratedRotation()` becomes the switch its tick reads); for each
+  behaviour class, its board, where its value sits on the board and what a choice sets (the
+  motor's rows pick the way it turns).
+
+One thing differs from Java: the box is drawn over the world rather than in it (Horizon has no
+text drawing for block entities), so it isn't hidden behind blocks, and its number is the font's
+size on a dark square where Java draws it large to fill the box.
+
+Checked in game (`ai-test/create_dial.py`, builds native-66f3981-db82e152d283 and
+-a8bfa6454f9d): looking at a creative motor's side shows its speed and Create's tip; holding
+right click opens the board on the motor's speed (16 on the ⟲ row); dragging 40 pixels right
+and letting go set it to 52, and the shaft beside it turned at 52; dragging left past the start
+set 1, as Java does. All 29 checks still pass. The motor's and speed controller's nine
+functions were translated by Gemini (`gemini-3.6-flash`, free; `gemini-3.8-flash` answered
+only "high demand" that night).
 
 ## Suggested order
 

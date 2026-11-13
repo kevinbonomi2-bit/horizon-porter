@@ -20,5 +20,6 @@ pub mod questions;
 pub mod refused;
 pub mod screens;
 pub mod statics;
+pub mod value_settings;
 /// The content mod, from the `porter-content` crate.
 pub use porter_content as content;

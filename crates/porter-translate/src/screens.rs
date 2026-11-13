@@ -64,9 +64,14 @@ pub const HOOKS: &[&str] = &[
 
 /// The generated screens: the drawing types, a struct and functions to port for
 /// each screen, and the open screen's state.
-pub fn runtime(screens: &[ModScreen], overlays: &BTreeSet<String>) -> String {
+/// `gui` keeps the drawing types for others that draw (Create's value boards).
+pub fn runtime(screens: &[ModScreen], overlays: &BTreeSet<String>, gui: bool) -> String {
     if screens.is_empty() && overlays.is_empty() {
-        return String::new();
+        return if gui {
+            GUI_TYPES.to_string()
+        } else {
+            String::new()
+        };
     }
     let mut r = String::from(GUI_TYPES);
     if !overlays.is_empty() {

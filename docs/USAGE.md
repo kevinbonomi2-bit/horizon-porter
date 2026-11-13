@@ -250,9 +250,12 @@ for what Haiku gets wrong. The free ones:
 - `--ai gemini` asks Google's Gemini (`gemini-3.8-flash` unless `--model` names
   another), free within Google's limits a minute and a day. Its key is free at
   [aistudio.google.com/apikey](https://aistudio.google.com/apikey) and goes in
-  `GEMINI_API_KEY`. On the free tier Google may use what is sent to improve its
-  products: here, the mod's code. When the day's share runs out `translate` stops, and
-  carries on when you run it again.
+  `GEMINI_API_KEY` (or in the app's Translation settings, which the command line reads
+  too). On the free tier Google may use what is sent to improve its products: here, the
+  mod's code. When the day's share runs out `translate` stops, and carries on when you
+  run it again. A model can also be busy for everyone ("high demand", 503) for a while:
+  then another of Google's models may answer (`--model gemini-3.6-flash` did when
+  `gemini-3.8-flash` was busy).
 - `--ai openrouter --model <one ending in :free>` asks one of
   [OpenRouter](https://openrouter.ai)'s free models (`OPENROUTER_API_KEY`): 50 requests
   a day, 1,000 once the account has ever bought $10 of credits. Without `--model` it
@@ -262,8 +265,9 @@ for what Haiku gets wrong. The free ones:
 - `--ai http://localhost:1234/v1 --model <name>` asks any server with a chat
   completions API (LM Studio, llama.cpp), its key, if it wants one, in `PORTER_AI_KEY`.
 
-Gemini and OpenRouter are new: checked against a stand-in server, not yet on a whole
-mod. The compile-and-test check and the checks on names are the same for every model,
+Gemini has translated functions of Create (its value boards: 9 functions, each 30,000 to
+56,000 tokens in, at no cost); OpenRouter is checked against a stand-in server only. The
+compile-and-test check and the checks on names are the same for every model,
 and an answer that does nothing but say the Java isn't ported is sent back, whoever
 gave it. `--ai claude-code` uses your `claude` command, and `--ai "<command>"` any
 program that reads the prompt on stdin.
