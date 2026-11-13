@@ -910,6 +910,13 @@ fn value_settings_helpers_compile_against_horizon_api() {
         b.files["mixins/dial/block_entity_submit.rs"]
             .contains("m::draw_block_model(block, &me, &around, &mut ops);")
     );
+    // Its stress capacity, as its registration declares it, for the network it turns.
+    assert_eq!(
+        scan.stress,
+        [("motor".to_string(), "capacity".to_string(), 16384.0)]
+    );
+    assert!(runtime.contains("(\"dial:motor\", 16384.0),"));
+    assert!(runtime.contains("pub fn stress_capacity(block: &str) -> f32"));
     compiles_against_the_mock(&b, "dial");
 }
 

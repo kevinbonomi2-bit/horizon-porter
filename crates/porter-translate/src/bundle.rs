@@ -1670,6 +1670,49 @@ pub const DESCRIPTION: &str = "{description}";
                 self.shared_ticks,
                 !self.block_models.is_empty(),
             ));
+            // Create's stress values, by block: what a kinetic network adds up.
+            if !self.scan.stress.is_empty() {
+                let table = |kind: &str| -> String {
+                    self.scan
+                        .stress
+                        .iter()
+                        .filter(|(_, k, _)| k == kind)
+                        .map(|(id, _, v)| {
+                            format!(
+                                "    (\"{}:{id}\", {v:?}),
+",
+                                self.id
+                            )
+                        })
+                        .collect()
+                };
+                let _ = write!(
+                    r,
+                    "
+/// The stress each block applies to its kinetic network for each unit of speed
+/// (`BlockStressValues.getImpact(block)`, from `CStress.setImpact` in its registration).
+pub const STRESS_IMPACTS: &[(&str, f32)] = &[
+{}];
+
+/// The capacity each source block gives its network for each unit of speed
+/// (`BlockStressValues.getCapacity(block)`, from `CStress.setCapacity`).
+pub const STRESS_CAPACITIES: &[(&str, f32)] = &[
+{}];
+
+/// `BlockStressValues.getImpact(block)`: 0 for a block with none.
+pub fn stress_impact(block: &str) -> f32 {{
+    STRESS_IMPACTS.iter().find(|(b, _)| *b == block).map_or(0.0, |(_, v)| *v)
+}}
+
+/// `BlockStressValues.getCapacity(block)`: 0 for a block with none.
+pub fn stress_capacity(block: &str) -> f32 {{
+    STRESS_CAPACITIES.iter().find(|(b, _)| *b == block).map_or(0.0, |(_, v)| *v)
+}}
+",
+                    table("impact"),
+                    table("capacity")
+                );
+            }
             // The mod's own questions to a block, ported once for all who ask.
             r.push_str(&crate::questions::runtime(self.questions));
             if !self.recipe_values.is_empty() {
@@ -2064,6 +2107,11 @@ fn {id}_block_entity_tick(
     // with where it stands: its `dropped_in` leaves them out, as Java's tag on them
     // does (Create's `BypassCrushingWheel`). The newest few thousand are kept.
     static EJECTED: std::sync::Mutex<Vec<(u32, [i32; 3])>> = std::sync::Mutex::new(Vec::new());
+    // Each kinetic block entity's last report to its network (`machine.network_report`):
+    // by position, (network, stress, capacity, when). Create's `KineticNetwork` members.
+    #[allow(clippy::type_complexity)]
+    static NETWORKS: std::sync::Mutex<std::collections::BTreeMap<[i32; 3], (i64, f32, f32, std::time::Instant)>> =
+        std::sync::Mutex::new(std::collections::BTreeMap::new());
     if !m::BLOCK_ENTITIES.iter().any(|(_, id, _)| *id == entity.id) {{
         return;
     }}
@@ -2394,6 +2442,22 @@ fn {id}_block_entity_tick(
         .collect();
     machine.powered = powered;
     machine.dropped = Some(&dropped);
+    // The kinetic networks: what every member reported on its last tick, summed by
+    // network, a report a second old or older left out (a block broken, moved on).
+    let network_totals = |id: i64| -> Option<m::NetworkTotals> {{
+        let list = NETWORKS.lock().ok()?;
+        let now = std::time::Instant::now();
+        let mut totals = m::NetworkTotals::default();
+        for (_, (of, stress, capacity, at)) in list.iter() {{
+            if *of == id && now.duration_since(*at).as_secs_f32() < 1.0 {{
+                totals.stress += stress;
+                totals.capacity += capacity;
+                totals.size += 1;
+            }}
+        }}
+        (totals.size > 0).then_some(totals)
+    }};
+    machine.networks = Some(&network_totals);
     // Its tanks and energy, as Horizon keeps them: `fluids` (a list of
     // `{{Fluid, Amount}}`) and the int `energy`.
     let storage = m::STORAGE.iter().find(|(id, _, _)| *id == entity.id);
@@ -2587,6 +2651,15 @@ fn {id}_block_entity_tick(
                     list.push((id, pos));
                     if list.len() > 4096 {{
                         list.drain(..1024);
+                    }}
+                }}
+            }}
+            m::Effect::Network {{ id, stress, capacity }} => {{
+                if let Ok(mut list) = NETWORKS.lock() {{
+                    if id == 0 {{
+                        list.remove(&pos);
+                    }} else {{
+                        list.insert(pos, (id, stress, capacity, std::time::Instant::now()));
                     }}
                 }}
             }}

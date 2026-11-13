@@ -6,6 +6,7 @@ import com.tterrag.registrate.util.entry.BlockEntry;
 import net.minecraft.world.level.block.Blocks;
 import net.neoforged.fml.common.Mod;
 import com.simibubi.create.foundation.data.CreateRegistrate;
+import com.simibubi.create.infrastructure.config.CStress;
 
 /** A tiny Create-style mod: a motor whose speed is set in a box on it. */
 @Mod(Dial.ID)
@@ -17,6 +18,7 @@ public class Dial {
         .initialProperties(() -> Blocks.IRON_BLOCK)
         .lang("Dial Motor")
         .onRegister(CreateRegistrate.blockModel(() -> BracketModel::new))
+        .transform(CStress.setCapacity(16384.0))
         .simpleItem()
         .register();
 

@@ -466,6 +466,18 @@ pub struct Machine<'a> {
     /// The world's time of day in ticks (`level.getDayTime()`): it keeps counting past
     /// 24000 (noon is 6000), so take it modulo 24000 for the hour.
     pub day_time: i64,
+    /// A kinetic network's totals: see `network_totals`.
+    pub networks: Option<&'a dyn Fn(i64) -> Option<NetworkTotals>>,
+}
+
+/// What a network of block entities that turn together adds up to, as Create's
+/// `KineticNetwork` keeps it: the stress its members apply and the capacity its sources
+/// give (each already times the speed it turns at), and how many it has.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct NetworkTotals {
+    pub stress: f32,
+    pub capacity: f32,
+    pub size: i32,
 }
 
 /// A particle burst or a sound a tick plays, near its block.
@@ -480,6 +492,8 @@ pub enum Effect {
         speed: f64,
         count: i32,
     },
+    /// Its part in a kinetic network this tick: see `Machine::network_report`.
+    Network { id: i64, stress: f32, capacity: f32 },
     /// An item dropped into the world (`level.addFreshEntity(new ItemEntity(..))`,
     /// `Containers.dropItemStack`): a skillet's cooked food, a stove's.
     Drop {
@@ -743,7 +757,27 @@ impl<'a> Machine<'a> {
             dropped: None,
             mobs: None,
             day_time: 0,
+            networks: None,
         }
+    }
+
+    /// The totals of network `id` (`KineticNetwork.calculateStress()`,
+    /// `calculateCapacity()`, `getSize()`), as every member reported itself with
+    /// `network_report` on the last tick: what `updateFromNetwork(capacity, stress, size)`
+    /// takes. None for a network nothing reports to.
+    pub fn network_totals(&self, id: i64) -> Option<NetworkTotals> {
+        self.networks.and_then(|f| f(id))
+    }
+
+    /// This block entity's part in network `id` this tick, as Create's `KineticNetwork`
+    /// keeps its members and sources: the stress it applies, `calculateStressApplied()`
+    /// times its speed (`Math.abs(getTheoreticalSpeed())`), and the capacity it gives,
+    /// `calculateAddedStressCapacity()` times its generated speed (0 unless it is a
+    /// source). Report it every tick it is in the network (`network != 0`): one that stops
+    /// reporting (broken, or moved to another network) leaves the totals within a second.
+    /// The totals come back on the next tick through `network_totals`.
+    pub fn network_report(&mut self, id: i64, stress: f32, capacity: f32) {
+        self.effects.push(Effect::Network { id, stress, capacity });
     }
 
     /// Its block's state property `key` (`getBlockState().getValue(ENABLED)`): `"true"`.

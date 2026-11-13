@@ -2623,6 +2623,16 @@ fn equivalents(java: &str, stub: &str) -> String {
         ),
         (
             "Machine",
+            "KineticNetwork",
+            "Create's `KineticNetwork` (`getOrCreateNetwork()`, `network.updateStressFor`, `updateFromNetwork(capacity, stress, size)`) is kept by the module: each tick a member of a network (`network != 0`) reports its part with `machine.network_report(network, stress_applied * speed.abs(), capacity_added * generated_speed.abs())`, and `machine.network_totals(network)` gives the network's stress, capacity and size, which it takes as `updateFromNetwork` does (`overStressed` where the capacity is below the stress)",
+        ),
+        (
+            "fn ",
+            "BlockStressValues.get",
+            "`BlockStressValues.getImpact(block)` is `stress_impact(block)` and `getCapacity(block)` is `stress_capacity(block)`, by the block's id",
+        ),
+        (
+            "Machine",
             "getPersistentData()",
             "an item the Java tags so this block entity won't take it back in (`entity.getPersistentData().put(\"BypassCrushingWheel\", ..)`) is dropped with `machine.eject(..)`: its `dropped_in` leaves that item out from then on",
         ),

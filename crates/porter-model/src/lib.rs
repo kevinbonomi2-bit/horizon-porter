@@ -236,6 +236,11 @@ pub struct ModScan {
     /// PipeAttachmentModel::withAO))`): (block id, the model class's simple name).
     #[serde(default)]
     pub block_models: Vec<(String, String)>,
+    /// The stress each block applies to its kinetic network, and the capacity each adds,
+    /// as Create's registrations declare them (`.transform(CStress.setImpact(4.0))`,
+    /// `setCapacity(256.0)`, `setNoImpact()`): (block id, `impact` or `capacity`, value).
+    #[serde(default)]
+    pub stress: Vec<(String, String, f32)>,
     /// The enums block classes make state properties of (`EnumProperty.create("blaze",
     /// HeatLevel.class)`), by simple name, with their values as the game names them
     /// (`none`, `smouldering`, ..), in declaration order: the first is a block's start.

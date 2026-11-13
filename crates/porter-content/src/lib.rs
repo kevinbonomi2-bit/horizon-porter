@@ -629,8 +629,11 @@ pub fn generate_with(
             };
             schema.insert(k.clone(), values);
         }
+        // (Only where its Java gives it a shape of its own: a class of the mod's that
+        // defines no `getShape` keeps vanilla's, the whole block, whatever its model draws.)
         if connecting.is_none()
             && vanilla_block(&template).is_some_and(|v| v.full_cube || shutter)
+            && (class.is_none() || defines_shape(scan, class.as_deref()))
             && let Some(b) = blockstate.as_ref()
             && let Some((outline, collision)) = model_shapes(&content, b, &schema)
         {
@@ -1820,6 +1823,39 @@ fn bounds(boxes: &[Box6]) -> Box6 {
         }
     }
     out
+}
+
+/// Whether a block class, or one of the mod's above it, gives the block a shape of its
+/// own (`getShape`, `getCollisionShape`): otherwise Java's is vanilla `Block`'s, the
+/// whole block, whatever its model draws.
+fn defines_shape(scan: &ModScan, class: Option<&str>) -> bool {
+    let mut name = class.map(str::to_string);
+    for _ in 0..16 {
+        let Some(n) = name.take() else {
+            return false;
+        };
+        let Some(c) = scan.classes.iter().find(|c| c.name == n) else {
+            // A vanilla parent past the mod's own: those that are whole blocks give none,
+            // the rest (a slab, a wall) one of their own.
+            let simple = n.rsplit('.').next().unwrap_or(&n);
+            return ![
+                "Block",
+                "BaseEntityBlock",
+                "HorizontalDirectionalBlock",
+                "DirectionalBlock",
+                "RotatedPillarBlock",
+            ]
+            .contains(&simple);
+        };
+        if c.method_names
+            .iter()
+            .any(|m| m == "getShape" || m == "getCollisionShape" || m == "getBlockSupportShape")
+        {
+            return true;
+        }
+        name = c.superclass.clone();
+    }
+    false
 }
 
 /// A block's `shapes` (and `collision_shapes` when some states have none), from

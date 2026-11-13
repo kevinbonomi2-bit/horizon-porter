@@ -537,6 +537,7 @@ fn assemble(
         custom_screens: Vec::new(),
         standalone_models: Vec::new(),
         block_models: block_models(&parsed),
+        stress: stress_values(&parsed),
         property_enums: Vec::new(),
         render_shapes: Vec::new(),
         creative_tabs: Vec::new(),
@@ -865,6 +866,40 @@ fn block_models(parsed: &[(String, ParsedFile)]) -> Vec<(String, String)> {
                 .collect();
             if !class.is_empty() && !out.iter().any(|(i, _): &(String, String)| i == id) {
                 out.push((id.clone(), class));
+            }
+        }
+    }
+    out
+}
+
+/// The stress values block registrations declare (Create's `CStress.setImpact(4.0)`,
+/// `setCapacity(256.0)`, `setNoImpact()` in a Registrate chain): (id, `impact` or
+/// `capacity`, value).
+fn stress_values(parsed: &[(String, ParsedFile)]) -> Vec<(String, String, f32)> {
+    let mut out = Vec::new();
+    for (_, file) in parsed {
+        for call in &file.calls {
+            if call.method != "block" {
+                continue;
+            }
+            let Some(Some(id)) = call.literal_args.first() else {
+                continue;
+            };
+            let number = |name: &str| -> Option<f32> {
+                let at = call.chain.find(&format!("{name}("))? + name.len() + 1;
+                let arg: String = call.chain[at..].chars().take_while(|c| *c != ')').collect();
+                arg.trim()
+                    .trim_end_matches(['f', 'F', 'd', 'D'])
+                    .parse()
+                    .ok()
+            };
+            if call.chain.contains("setNoImpact()") {
+                out.push((id.clone(), "impact".to_string(), 0.0));
+            } else if let Some(v) = number("setImpact") {
+                out.push((id.clone(), "impact".to_string(), v));
+            }
+            if let Some(v) = number("setCapacity") {
+                out.push((id.clone(), "capacity".to_string(), v));
             }
         }
     }
