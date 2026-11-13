@@ -157,6 +157,10 @@ pub struct Behaviour {
     /// How each of its blocks is registered, where they differ by what they pass
     /// the class (a feast's serving item): (block, the registration's arguments).
     pub registered: Vec<(String, String)>,
+    /// The nearest superclass of the mod's own with a function of this kind too:
+    /// (its simple name, that function). Where the Java calls `super.getStateForPlacement`
+    /// (`EncasedCogwheelBlock` on `RotatedPillarKineticBlock`), the port calls it.
+    pub parent: Option<(String, String)>,
 }
 
 /// The classes of `blocks` and `items` (the content mod's) whose Java, or a
@@ -240,7 +244,8 @@ pub fn find(
         }
     }
     let mut used = BTreeSet::new();
-    by.into_iter()
+    let mut out = by
+        .into_iter()
         .map(|((kind, class), mut blocks)| {
             // Sorted, for the hooks to find a block by binary search.
             blocks.sort();
@@ -292,9 +297,40 @@ pub fn find(
                 blocks,
                 function,
                 registered,
+                parent: None,
             }
         })
-        .collect()
+        .collect::<Vec<_>>();
+    // Each one's nearest parent of the mod's own with a function of the same kind.
+    let functions: Vec<(Kind, String, String)> = out
+        .iter()
+        .map(|b| (b.kind, b.class.clone(), b.function.clone()))
+        .collect();
+    for b in &mut out {
+        let mut name = scan
+            .classes
+            .iter()
+            .find(|c| c.name == b.class)
+            .and_then(|c| c.superclass.clone());
+        for _ in 0..16 {
+            let Some(n) = name.take() else {
+                break;
+            };
+            if let Some((_, class, function)) =
+                functions.iter().find(|(k, c, _)| *k == b.kind && *c == n)
+            {
+                let simple = class.rsplit(['.', '$']).next().unwrap_or(class).to_string();
+                b.parent = Some((simple, function.clone()));
+                break;
+            }
+            name = scan
+                .classes
+                .iter()
+                .find(|c| c.name == n)
+                .and_then(|c| c.superclass.clone());
+        }
+    }
+    out
 }
 
 /// The nearest of `class` and its superclasses (the mod's own) that defines a
@@ -653,9 +689,16 @@ pub fn runtime(
                 }
                 t
             };
+            // Its parent of the mod's own, ported too: what its `super.` calls are.
+            let parent = match &b.parent {
+                Some((class, function)) => format!(
+                    "\n///\n/// It extends `{class}`, whose {methods} is ported as `{function}`: where it calls\n/// `super.` for it, call `{function}` with the same arguments and go on from its\n/// answer (`SUPER` is for a parent of the game's own, which this is not)."
+                ),
+                None => String::new(),
+            };
             let _ = write!(
                 r,
-                "\n/// `{simple}`'s {methods}: {what}.{registered}\n///\n/// TODO: port from {class} ({methods}).\nfn {f}({sig}) -> {ret} {{\n    let _ = {discard};\n    {none}\n}}\n",
+                "\n/// `{simple}`'s {methods}: {what}.{registered}{parent}\n///\n/// TODO: port from {class} ({methods}).\nfn {f}({sig}) -> {ret} {{\n    let _ = {discard};\n    {none}\n}}\n",
                 class = b.class,
                 f = b.function,
                 discard = if call.contains(',') {

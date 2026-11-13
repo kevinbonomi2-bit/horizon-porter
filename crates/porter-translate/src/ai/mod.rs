@@ -978,6 +978,19 @@ fn translate_one(
             );
             continue;
         }
+        if !asked_format
+            && original.contains("pub fn text_state(text: &str)")
+            && own_state_text(&function)
+        {
+            asked_format = true;
+            feedback = format!(
+                "Your last answer reads or writes a block state kept as text its own way. Every function of this                  module keeps one as `block[key=value,..]`: write it with `state_text(block, &properties)` and read                  it with `text_state(&text)`, or a bracket one function saves is read as nothing by another. If that                  text is not a block state kept in a block entity, leave it. Your answer was:
+```rust
+{function}
+```"
+            );
+            continue;
+        }
         if !asked_field && let Some(field) = leaves_out_for_a_field(&function, &original) {
             asked_field = true;
             feedback = format!(
@@ -3328,6 +3341,19 @@ fn returns_early(function: &str) -> bool {
 
 /// A format an answer gives three numbers that isn't `pos_text`'s: `{},{},{}`. A
 /// position saved that way is read by no other function.
+/// Whether an answer reads or writes a block state kept as text its own way (splits it at
+/// `[`, or builds `block key=value`) instead of with `text_state`/`state_text`.
+fn own_state_text(function: &str) -> bool {
+    if function.contains("text_state(") || function.contains("state_text(") {
+        return false;
+    }
+    let reads = function.contains("split_once('[')") || function.contains("split_once(\"[\")");
+    let writes = [" type={", " facing={", "[{}]\"", "{block}[", " axis={"]
+        .iter()
+        .any(|f| function.contains(f));
+    (reads || writes) && function.contains("Saved::Text")
+}
+
 fn own_position_text(function: &str) -> Option<&'static str> {
     [
         "{},{},{}",
@@ -3624,6 +3650,21 @@ fn drawn_models(function: &str) -> Vec<String> {
     out
 }
 
+/// Whether `path` is made of `pattern`'s pieces in order: a literal as written, a computed
+/// part (None) one or more characters of one path segment (no `/`).
+fn matches_pattern(path: &str, pattern: &[Option<String>]) -> bool {
+    match pattern.split_first() {
+        None => path.is_empty(),
+        Some((Some(lit), rest)) => path
+            .strip_prefix(lit.as_str())
+            .is_some_and(|after| matches_pattern(after, rest)),
+        Some((None, rest)) => {
+            let segment = path.find('/').unwrap_or(path.len());
+            (1..=segment).any(|n| matches_pattern(&path[n..], rest))
+        }
+    }
+}
+
 /// The model constants of the mod `java` names (`AllPartialModels.HAND_CRANK_HANDLE`),
 /// each with the id of `models` its declaration's path ends (`block("hand_crank/handle")`
 /// is `create:block/hand_crank/handle`): what a renderer's `draw.model` takes.
@@ -3648,7 +3689,9 @@ fn model_constants(scan: &ModScan, java: &str, models: &[String]) -> Vec<(String
                 .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_');
         if !shouting
             || !class.starts_with(|c: char| c.is_ascii_uppercase())
-            || out.iter().any(|(c, _)| c == constant)
+            || out.iter().any(|(c, _)| {
+                c == constant || c.strip_prefix(constant).is_some_and(|r| r.starts_with(' '))
+            })
         {
             continue;
         }
@@ -3666,6 +3709,61 @@ fn model_constants(scan: &ModScan, java: &str, models: &[String]) -> Vec<(String
         let decl = &source[at..];
         let decl = &decl[..decl.find(';').unwrap_or(decl.len())];
         let Some(path) = decl.split('"').nth(1) else {
+            // A map filled in a loop (`PIPE_ATTACHMENTS.put(type, map)` after
+            // `map.put(d, block("fluid_pipe/" + asId + "/" + d))`): every model under the
+            // prefix the loop builds from, by its keys.
+            let Some(put) = source.find(&format!("{constant}.put(")) else {
+                continue;
+            };
+            let before = &source[put.saturating_sub(600)..put];
+            let in_loop = &before[before.rfind("for (").unwrap_or(0)..];
+            // The name expression: the first literal joined to more, up to the call's end.
+            let Some(start) = in_loop.match_indices('"').map(|(i, _)| i).find(|&i| {
+                in_loop[i + 1..]
+                    .find('"')
+                    .is_some_and(|e| in_loop[i + 1 + e + 1..].trim_start().starts_with('+'))
+            }) else {
+                continue;
+            };
+            let mut depth = 0i32;
+            let end = in_loop[start..]
+                .char_indices()
+                .find(|&(_, c)| {
+                    match c {
+                        '(' => depth += 1,
+                        ')' => depth -= 1,
+                        _ => {}
+                    }
+                    depth < 0 || c == ';'
+                })
+                .map_or(in_loop.len(), |(i, _)| start + i);
+            // Literals kept, each computed part one path segment.
+            let pattern: Vec<Option<String>> = in_loop[start..end]
+                .split('+')
+                .map(|piece| {
+                    let piece = piece.trim();
+                    (piece.len() >= 2 && piece.starts_with('"') && piece.ends_with('"'))
+                        .then(|| piece[1..piece.len() - 1].to_string())
+                })
+                .collect();
+            let held: Vec<&String> = models
+                .iter()
+                .filter(|m| {
+                    m.split_once(':').is_some_and(|(_, path)| {
+                        matches_pattern(path.strip_prefix("block/").unwrap_or(path), &pattern)
+                    })
+                })
+                .take(64)
+                .collect();
+            if !held.is_empty() {
+                out.push((
+                    format!("{constant} (a map, by its keys)"),
+                    held.iter()
+                        .map(|m| m.as_str())
+                        .collect::<Vec<_>>()
+                        .join("\"`, `\""),
+                ));
+            }
             continue;
         };
         let mut matching = models.iter().filter(|m| {
@@ -4387,6 +4485,23 @@ pub struct Gearbox {
     }
 
     #[test]
+    fn a_model_name_built_in_a_loop_matches_its_models() {
+        // `block("fluid_pipe/" + asId + "/" + Lang.asId(d.getSerializedName()))`.
+        let pattern = vec![
+            Some("fluid_pipe/".to_string()),
+            None,
+            Some("/".to_string()),
+            None,
+        ];
+        assert!(matches_pattern("fluid_pipe/rim/north", &pattern));
+        assert!(matches_pattern("fluid_pipe/rim_connector/up", &pattern));
+        // The pipe's own models are not among them.
+        assert!(!matches_pattern("fluid_pipe/casing", &pattern));
+        assert!(!matches_pattern("fluid_pipe/rim/north/extra", &pattern));
+        assert!(!matches_pattern("glass_fluid_pipe/rim/north", &pattern));
+    }
+
+    #[test]
     fn classes_reached_through_a_registered_entry_or_a_cast_are_found() {
         let class = |name: &str| porter_model::ClassInfo {
             name: format!("net.demo.{name}"),
@@ -4539,6 +4654,16 @@ pub struct Basin {
             Some("{},{},{}")
         );
         assert_eq!(own_position_text("let source = pos_text(from);"), None);
+        // A block state kept as text: its own way, and the module's.
+        assert!(own_state_text(
+            "if let Some(Saved::Text(t)) = me.get(\"Bracket\") { t.split_once('['); }"
+        ));
+        assert!(own_state_text(
+            "Saved::Text(format!(\"{block} type={ty} facing={facing}\"))"
+        ));
+        assert!(!own_state_text(
+            "if let Some(Saved::Text(t)) = me.get(\"Bracket\") { text_state(&t); }"
+        ));
         assert_eq!(own_position_text("format!(\"{} {} {}\", a, b, c)"), None);
     }
 

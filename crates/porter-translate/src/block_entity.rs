@@ -426,11 +426,15 @@ fn shared_runtime(shared: &[SharedTick]) -> String {
                 format!("kept as `{}`", one_line(&f.key))
             };
             // What its text holds, as each block entity's own state says it.
-            let how = if f.java.starts_with("BlockPos ") {
+            let how = if own_type(&f.java).starts_with("BlockPos ") {
                 format!(
                     "{how}; the position as `x y z` (`4 64 -2`: written with `pos_text(pos)`, read with `text_pos(&text)`), empty for none (null)"
                 )
-            } else if f.java.starts_with("Recipe") {
+            } else if own_type(&f.java).starts_with("BlockState ") {
+                format!(
+                    "{how}; the block state as `block[key=value,..]` (`create:metal_bracket[facing=south,type=pipe]`: written with `state_text(block, &properties)`, read with `text_state(&text)`), empty for none (null)"
+                )
+            } else if own_type(&f.java).starts_with("Recipe") {
                 format!(
                     "{how}; the recipe's id (`recipe.id`, as `grind:crush_cobblestone`), empty for none (null): the recipe itself is found again among `machine.recipes(kind)` by that id"
                 )
@@ -591,6 +595,9 @@ impl Kind {
             "String" => Kind::Text,
             // A position (a source, a controller, a link): kept as text, `x y z`.
             "BlockPos" => Kind::Text,
+            // A block state (a bracket on a shaft, what a copycat copies): kept as text,
+            // `block[key=value,..]` (`state_text`).
+            "BlockState" => Kind::Text,
             // A recipe it found (a basin operator's `currentRecipe`): kept by its id, and
             // found again among its type's recipes. Without a place for it, the tick
             // that finds the recipe can't hand it to the one that applies it.
@@ -1286,14 +1293,27 @@ fn state_of(scan: &ModScan, class: &ClassInfo, be: &mut BlockEntity) {
     let mut names = BTreeSet::new();
     // What saveAdditional writes, in its order.
     for saved in &class.saved {
-        let Some(kind) = Kind::from_put(&saved.method) else {
+        // A block state (`put("Bracket", NbtUtils.writeBlockState(bracket))`): kept as its
+        // text, `state_text`'s.
+        let state_value = saved
+            .value
+            .trim()
+            .strip_prefix("NbtUtils.writeBlockState(")
+            .and_then(|v| v.strip_suffix(')'))
+            .map(|v| v.trim().trim_start_matches("this."));
+        let kind = if saved.method == "put" && state_value.is_some() {
+            Some(Kind::Text)
+        } else {
+            Kind::from_put(&saved.method)
+        };
+        let Some(kind) = kind else {
             be.left_out.push(format!(
                 "`{}` (saved with `{}`): not a plain value",
                 saved.key, saved.method
             ));
             continue;
         };
-        let value = saved.value.trim().trim_start_matches("this.");
+        let value = state_value.unwrap_or_else(|| saved.value.trim().trim_start_matches("this."));
         let field = class
             .fields
             .iter()
@@ -1533,7 +1553,29 @@ fn hold(scan: &ModScan, owners: &[&ClassInfo], be: &mut BlockEntity) {
     let own_slots = be.items;
     let mut slots: Vec<(String, usize)> = Vec::new();
     for owner in owners {
-        for f in owner.fields.iter().filter(|f| !f.is_static) {
+        // And the parts its `addBehaviours` makes without keeping them in a field
+        // (`behaviours.add(new BracketedBlockEntityBehaviour(this, ..))`): theirs too, named
+        // after their class (`bracketed`).
+        let inline: Vec<porter_model::FieldInfo> =
+            std::fs::read_to_string(std::path::Path::new(&scan.input).join(&owner.path))
+                .map(|text| inline_behaviours(&text))
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|(_, ty)| !owner.fields.iter().any(|f| f.ty == *ty))
+                .map(|(name, ty)| porter_model::FieldInfo {
+                    name,
+                    ty,
+                    is_static: false,
+                    is_final: true,
+                    init: None,
+                })
+                .collect();
+        for f in owner
+            .fields
+            .iter()
+            .filter(|f| !f.is_static)
+            .chain(inline.iter())
+        {
             if be.held.len() >= 6 {
                 break;
             }
@@ -1680,6 +1722,45 @@ fn hold(scan: &ModScan, owners: &[&ClassInfo], be: &mut BlockEntity) {
     }
 }
 
+/// A field's own type and name, without the part it is kept in: `BlockState bracket` of
+/// `BracketedBlockEntityBehaviour bracketed: BlockState bracket`.
+fn own_type(java: &str) -> &str {
+    java.rsplit_once(": ").map_or(java, |(_, own)| own)
+}
+
+/// The parts a block entity's code makes and hands its behaviour list without a field of
+/// its own: `behaviours.add(new BracketedBlockEntityBehaviour(this, ..))` is
+/// (`bracketed`, `BracketedBlockEntityBehaviour`): the name its class has, less
+/// `BlockEntityBehaviour`/`Behaviour`, in lower camel case.
+fn inline_behaviours(text: &str) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    for (at, m) in text.match_indices("behaviours.add(") {
+        let rest = text[at + m.len()..].trim_start();
+        let Some(rest) = rest.strip_prefix("new ") else {
+            continue;
+        };
+        let class: String = rest
+            .trim_start()
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect();
+        if !class.starts_with(|c: char| c.is_ascii_uppercase())
+            || out.iter().any(|(_, t)| *t == class)
+        {
+            continue;
+        }
+        let short = class
+            .strip_suffix("BlockEntityBehaviour")
+            .or_else(|| class.strip_suffix("Behaviour"))
+            .filter(|s| !s.is_empty())
+            .unwrap_or(&class);
+        let mut name = short[..1].to_ascii_lowercase();
+        name.push_str(&short[1..]);
+        out.push((name, class));
+    }
+    out
+}
+
 /// Text for a comment: on one line, whitespace collapsed.
 fn one_line(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
@@ -1698,6 +1779,7 @@ pub fn runtime(
     machines: &[crate::machine::Machine],
     recipe_types: &[String],
     shared: &[SharedTick],
+    models: bool,
 ) -> String {
     let machine_of = |be: &BlockEntity| machines.iter().find(|m| m.entity == be.id);
     let mut r = String::from(
@@ -1719,6 +1801,34 @@ pub enum Saved {
 /// and reads it with `text_pos`, so what one saves another can read.
 pub fn pos_text(pos: [i32; 3]) -> String {
     format!("{} {} {}", pos[0], pos[1], pos[2])
+}
+
+/// A block state as a block entity keeps one in its saved values (a `BlockState` field:
+/// a bracket on a shaft, the block a copycat copies): `block[key=value,..]`, as
+/// `create:metal_bracket[facing=south,type=pipe]`. Every function writes one with this and
+/// reads it with `text_state`, so what one saves another can read.
+pub fn state_text(block: &str, properties: &[(&str, &str)]) -> String {
+    if properties.is_empty() {
+        return block.to_string();
+    }
+    let list: Vec<String> = properties.iter().map(|(k, v)| format!("{k}={v}")).collect();
+    format!("{block}[{}]", list.join(","))
+}
+
+/// The block and properties `text` holds (`state_text`); none where it is empty (null).
+pub fn text_state(text: &str) -> Option<(String, Vec<(String, String)>)> {
+    let text = text.trim();
+    if text.is_empty() {
+        return None;
+    }
+    let (block, rest) = text.split_once('[').unwrap_or((text, ""));
+    let properties = rest
+        .trim_end_matches(']')
+        .split(',')
+        .filter_map(|p| p.split_once('='))
+        .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
+        .collect();
+    Some((block.trim().to_string(), properties))
 }
 
 /// The position `text` holds (`pos_text`); none where it is empty (null) or isn't one.
@@ -1954,11 +2064,15 @@ pub const BLOCK_ENTITIES: &[(&str, &str, bool)] = &[
             };
             let how = if f.java.contains("enum ") {
                 format!("{how}; the constant's name (`BELT`), empty before it is set")
-            } else if f.java.starts_with("BlockPos ") {
+            } else if own_type(&f.java).starts_with("BlockPos ") {
                 format!(
                     "{how}; the position as `x y z` (`4 64 -2`: written with `pos_text(pos)`, read with `text_pos(&text)`), empty for none (null)"
                 )
-            } else if f.java.starts_with("Recipe") {
+            } else if own_type(&f.java).starts_with("BlockState ") {
+                format!(
+                    "{how}; the block state as `block[key=value,..]` (`create:metal_bracket[facing=south,type=pipe]`: written with `state_text(block, &properties)`, read with `text_state(&text)`), empty for none (null)"
+                )
+            } else if own_type(&f.java).starts_with("Recipe") {
                 format!(
                     "{how}; the recipe's id (`recipe.id`, as `grind:crush_cobblestone`), empty for none (null): the recipe itself is found again among `machine.recipes(kind)` by that id"
                 )
@@ -2311,7 +2425,8 @@ pub const BLOCK_ENTITIES: &[(&str, &str, bool)] = &[
     );
     r.push_str("];\n");
     let drawn: Vec<&BlockEntity> = entities.iter().filter(|b| b.renderer.is_some()).collect();
-    if !drawn.is_empty() {
+    // (Drawn too where a block's model class adds parts with its block entity: `models`.)
+    if !drawn.is_empty() || models {
         r.push_str(DRAW_TYPES);
         for be in &drawn {
             let _ = write!(
@@ -2345,7 +2460,7 @@ pub const BLOCK_ENTITIES: &[(&str, &str, bool)] = &[
                 ty = be.rust
             );
         }
-        r.push_str("\n/// Draws block entity `id`: `get` reads what the server sent of its state.\npub fn render_block_entity(\n    id: &str,\n    get: impl Fn(&str) -> Option<Saved>,\n    frame: &Frame,\n    draw: &mut Draw,\n) {\n    RENDER_TIME.with(|t| t.set(frame.time()));\n    match id {\n");
+        r.push_str("\n/// Draws block entity `id`: `get` reads what the server sent of its state.\npub fn render_block_entity(\n    id: &str,\n    get: impl Fn(&str) -> Option<Saved>,\n    frame: &Frame,\n    draw: &mut Draw,\n) {\n    RENDER_TIME.with(|t| t.set(frame.time()));\n    let _ = &get;\n    match id {\n");
         for be in &drawn {
             let _ = writeln!(
                 r,

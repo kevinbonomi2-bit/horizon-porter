@@ -192,6 +192,37 @@ fn network_and_config(root: &Path, scan: &mut ModScan) {
             .find(|v| !v.is_empty())
             .unwrap_or_default()
     };
+    // The enums block classes make state properties of (`EnumProperty.create("blaze",
+    // HeatLevel.class)`, nested in the block's class as often as not), with their values
+    // as the game names them: lower case, as `StringRepresentable` enums give them.
+    let mut property_enums: Vec<(String, Vec<String>)> = Vec::new();
+    for field in scan.classes.iter().flat_map(|c| &c.fields) {
+        let Some(init) = field.init.as_deref() else {
+            continue;
+        };
+        let Some(args) = init.strip_prefix("EnumProperty.create(") else {
+            continue;
+        };
+        let Some(class) = args
+            .split(',')
+            .nth(1)
+            .and_then(|a| a.trim().trim_end_matches(')').trim().strip_suffix(".class"))
+            .map(|a| a.rsplit('.').next().unwrap_or(a).to_string())
+        else {
+            continue;
+        };
+        if property_enums.iter().any(|(n, _)| *n == class) {
+            continue;
+        }
+        let values: Vec<String> = enums(&class)
+            .iter()
+            .map(|c| c.to_ascii_lowercase())
+            .collect();
+        if !values.is_empty() {
+            property_enums.push((class, values));
+        }
+    }
+    scan.property_enums = property_enums;
     for class in &scan.classes {
         let is_payload = class
             .interfaces
@@ -278,6 +309,38 @@ fn network_and_config(root: &Path, scan: &mut ModScan) {
         for model in netconf::standalone_models(text, mod_id.as_deref()) {
             if !scan.standalone_models.contains(&model) {
                 scan.standalone_models.push(model);
+            }
+        }
+    }
+    // Those built in a loop end in `*` (`create:block/fluid_pipe/*`): every model of the
+    // mod's under that prefix.
+    let looped: Vec<String> = scan
+        .standalone_models
+        .iter()
+        .filter(|m| m.ends_with('*'))
+        .cloned()
+        .collect();
+    scan.standalone_models.retain(|m| !m.ends_with('*'));
+    for marker in looped {
+        let Some((ns, prefix)) = marker.trim_end_matches('*').split_once(':') else {
+            continue;
+        };
+        for root in &scan.resources.roots {
+            let dir = Path::new(&scan.input)
+                .join(root)
+                .join("assets")
+                .join(ns)
+                .join("models");
+            let mut found = Vec::new();
+            walk_json(&dir, &dir, &mut found);
+            found.sort();
+            for rel in found {
+                if rel.starts_with(prefix) {
+                    let id = format!("{ns}:{rel}");
+                    if !scan.standalone_models.contains(&id) {
+                        scan.standalone_models.push(id);
+                    }
+                }
             }
         }
     }
@@ -473,6 +536,8 @@ fn assemble(
         renderers: Vec::new(),
         custom_screens: Vec::new(),
         standalone_models: Vec::new(),
+        block_models: block_models(&parsed),
+        property_enums: Vec::new(),
         render_shapes: Vec::new(),
         creative_tabs: Vec::new(),
         placements: Vec::new(),
@@ -773,6 +838,62 @@ fn second_type_argument(ty: &str) -> Option<&str> {
     None
 }
 
+/// Blocks Java gives a baked model class of its own (Create's Registrate
+/// `.onRegister(CreateRegistrate.blockModel(() -> PipeAttachmentModel::withAO))`): (id,
+/// the model class's simple name).
+fn block_models(parsed: &[(String, ParsedFile)]) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for (_, file) in parsed {
+        for call in &file.calls {
+            if call.method != "block" {
+                continue;
+            }
+            let Some(Some(id)) = call.literal_args.first() else {
+                continue;
+            };
+            let Some(at) = call.chain.find("blockModel(") else {
+                continue;
+            };
+            let rest = &call.chain[at + "blockModel(".len()..];
+            let Some(arrow) = rest.find("->") else {
+                continue;
+            };
+            let class: String = rest[arrow + 2..]
+                .trim_start()
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            if !class.is_empty() && !out.iter().any(|(i, _): &(String, String)| i == id) {
+                out.push((id.clone(), class));
+            }
+        }
+    }
+    out
+}
+
+/// The `.json` files under `dir`, as paths from `base` without the extension and with
+/// `/` between folders (`block/fluid_pipe/rim/north`).
+fn walk_json(base: &Path, dir: &Path, out: &mut Vec<String>) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            walk_json(base, &path, out);
+        } else if path.extension().is_some_and(|e| e == "json")
+            && let Ok(rel) = path.with_extension("").strip_prefix(base)
+        {
+            out.push(
+                rel.components()
+                    .map(|c| c.as_os_str().to_string_lossy())
+                    .collect::<Vec<_>>()
+                    .join("/"),
+            );
+        }
+    }
+}
+
 /// A helper method that registers under an id it receives as a parameter, such as
 /// Create's `ingredient(String name)` calling `REGISTRATE.item(name, ...)`.
 #[derive(Clone)]
@@ -784,6 +905,89 @@ struct Helper {
     /// a call of the helper names neither.
     creates: Option<String>,
     args: String,
+    /// How the id is built from the parameter, where it is joined to literals
+    /// (`name + "_bars"` in Create's `MetalBarsGen.createBars`); None where it is built
+    /// some other way (`prefix(name)`), and the literal passed is the id.
+    template: Option<Vec<IdPart>>,
+}
+
+/// A piece of a helper's id: the parameter, or a literal joined to it.
+#[derive(Clone, Debug, PartialEq)]
+enum IdPart {
+    Param,
+    Literal(String),
+}
+
+/// The id `arg` builds from the parameter `param` when it only joins it to string
+/// literals with `+`: `name + "_bars"` is `[Param, Literal("_bars")]`, `name` is
+/// `[Param]`. None for anything else.
+fn id_template(arg: &str, param: &str) -> Option<Vec<IdPart>> {
+    let mut pieces = Vec::new();
+    let (mut depth, mut in_string, mut escaped, mut start) = (0, false, false, 0);
+    for (i, c) in arg.char_indices() {
+        if in_string {
+            match (escaped, c) {
+                (false, '\\') => escaped = true,
+                (false, '"') => in_string = false,
+                _ => escaped = false,
+            }
+            continue;
+        }
+        match c {
+            '"' => in_string = true,
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth -= 1,
+            '+' if depth == 0 => {
+                pieces.push(&arg[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    pieces.push(&arg[start..]);
+    pieces
+        .into_iter()
+        .map(|p| {
+            let p = p.trim();
+            if p == param {
+                Some(IdPart::Param)
+            } else if p.len() >= 2
+                && p.starts_with('"')
+                && p.ends_with('"')
+                && !p[1..p.len() - 1].contains('"')
+            {
+                Some(IdPart::Literal(p[1..p.len() - 1].to_string()))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// `outer` with each `Param` of `inner` replaced by it: a helper that passes
+/// `name + "_x"` on to one that registers `name + "_bars"` registers `name + "_x_bars"`.
+fn compose(inner: &[IdPart], outer: &[IdPart]) -> Vec<IdPart> {
+    inner
+        .iter()
+        .flat_map(|p| match p {
+            IdPart::Param => outer.to_vec(),
+            lit => vec![lit.clone()],
+        })
+        .collect()
+}
+
+/// The id a helper registers when it is passed `literal`.
+fn render_id(template: Option<&[IdPart]>, literal: &str) -> String {
+    match template {
+        Some(parts) => parts
+            .iter()
+            .map(|p| match p {
+                IdPart::Param => literal,
+                IdPart::Literal(s) => s.as_str(),
+            })
+            .collect(),
+        None => literal.to_string(),
+    }
 }
 
 /// Which parameter of the enclosing method an id argument is built from, if any:
@@ -872,6 +1076,10 @@ fn registrations(parsed: &[(String, ParsedFile)]) -> Vec<Registration> {
                                 param,
                                 creates: created_class(&call.args),
                                 args: call.args.join(", "),
+                                template: method
+                                    .params
+                                    .get(param)
+                                    .and_then(|p| id_template(arg, p)),
                             })
                         })
                 } else {
@@ -881,11 +1089,17 @@ fn registrations(parsed: &[(String, ParsedFile)]) -> Vec<Registration> {
                         .and_then(|h| {
                             let arg = call.args.get(h.param)?;
                             let param = id_param(arg, &method.params)?;
+                            let outer = method.params.get(param).and_then(|p| id_template(arg, p));
                             Some(Helper {
                                 registry: h.registry.clone(),
                                 param,
                                 creates: created_class(&call.args).or_else(|| h.creates.clone()),
                                 args: format!("{}, {}", call.args.join(", "), h.args),
+                                template: h
+                                    .template
+                                    .as_ref()
+                                    .zip(outer)
+                                    .map(|(inner, outer)| compose(inner, &outer)),
                             })
                         })
                 };
@@ -941,7 +1155,12 @@ fn registrations(parsed: &[(String, ParsedFile)]) -> Vec<Registration> {
                 continue;
             };
             helper_used.insert(key.clone());
-            let id = call.literal_args.get(helper.param).cloned().flatten();
+            let id = call
+                .literal_args
+                .get(helper.param)
+                .cloned()
+                .flatten()
+                .map(|literal| render_id(helper.template.as_deref(), &literal));
             if id.is_none() && passes_param(call.args.get(helper.param)) {
                 continue;
             }
@@ -1377,5 +1596,24 @@ mod tests {
         assert_eq!(id_param("prefix(id)", &params), Some(1));
         assert_eq!(id_param("\"id\"", &params), None);
         assert_eq!(id_param("\"a \\\" id\" + other", &params), None);
+    }
+
+    #[test]
+    fn a_helper_id_joined_to_literals_is_kept() {
+        // Create's `MetalBarsGen.createBars("andesite", ..)` registers `name + "_bars"`.
+        let bars = id_template("name + \"_bars\"", "name");
+        assert_eq!(
+            bars,
+            Some(vec![IdPart::Param, IdPart::Literal("_bars".into())])
+        );
+        assert_eq!(render_id(bars.as_deref(), "andesite"), "andesite_bars");
+        assert_eq!(render_id(None, "andesite"), "andesite");
+        // Built some other way: the literal passed is the id, as before.
+        assert_eq!(id_template("prefix(name)", "name"), None);
+        assert_eq!(id_template("name", "name"), Some(vec![IdPart::Param]));
+        // A helper of a helper: `"tinted_" + name` passed on.
+        let outer = id_template("\"tinted_\" + kind", "kind").unwrap();
+        let both = compose(bars.as_deref().unwrap(), &outer);
+        assert_eq!(render_id(Some(&both), "glass"), "tinted_glass_bars");
     }
 }

@@ -11,6 +11,7 @@
 pub mod ai;
 pub mod api;
 pub mod block_entity;
+pub mod block_models;
 pub mod blocks;
 pub mod bundle;
 pub mod events;

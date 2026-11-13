@@ -509,6 +509,16 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
     // Create's value settings (a motor's speed, set in a box on it): the hooks their
     // board and box use, beside those the mod's own code uses.
     let value_boxes = crate::value_settings::find(scan, &block_entities);
+    // Blocks whose model a class of the mod's adds parts to (a pipe's rims and bracket):
+    // drawn with their block entity.
+    let (block_models, models_left_out) = crate::block_models::find(scan, &ns, &block_entities);
+    if !block_models.is_empty() {
+        stubbed.remove("block_entity_submit");
+        let classes: BTreeSet<String> = block_models.iter().map(|m| m.class.clone()).collect();
+        wired
+            .entry("block_entity_submit")
+            .or_insert_with(|| classes.clone());
+    }
     let own: BTreeSet<&'static str> = wired.keys().copied().collect();
     if !value_boxes.is_empty() {
         let classes: BTreeSet<String> = value_boxes.iter().map(|b| b.owner.clone()).collect();
@@ -558,6 +568,8 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
         screens: &mod_screens,
         overlays: &overlays,
         value_boxes: &value_boxes,
+        block_models: &block_models,
+        models_left_out: &models_left_out,
         own: &own,
         behaviours: &behaviours,
         behaviour_blocks: &behaviour_blocks,
@@ -1120,6 +1132,52 @@ const DRAWN_BEFORE: &str = r#"        // Java ticks a block entity on the client
         let drawn_before = draws(&entity.nbt);
 "#;
 
+/// In the block entity drawing helper, for a block whose model a class of the mod's adds
+/// parts to (a pipe's rims and bracket): the block, its saved values and the six blocks
+/// beside it, read on this client, and what that class's port draws.
+const BLOCK_MODEL_DRAW: &str = r#"    if m::BLOCK_MODELS.contains(&block) {
+        let read = |tag: &Tag| -> Option<m::Saved> { @@FROM_TAG@@ };
+        let values = |nbt: &horizon_world::nbt::Compound| -> Vec<(String, m::Saved)> {
+            nbt.iter()
+                .filter_map(|(k, tag)| read(tag).map(|v| (k.to_string_lossy(), v)))
+                .collect()
+        };
+        let me = m::Neighbour {
+            block: block.to_string(),
+            pos,
+            properties: m::STATE_KEYS
+                .iter()
+                .filter_map(|key| Some((key.to_string(), game.native_block_state_property(state, key)?.to_string())))
+                .collect(),
+            entity: Some(entity.id.clone()),
+            values: values(&entity.nbt),
+            items: Vec::new(),
+        };
+        let around = m::Around {
+            sides: m::Side::ALL
+                .iter()
+                .map(|side| {
+                    let [dx, dy, dz] = side.offset();
+                    let at = [pos[0] + dx, pos[1] + dy, pos[2] + dz];
+                    let there = game.native_mod_block_entity(at);
+                    Some(m::Neighbour {
+                        block: game.native_block(at),
+                        pos: at,
+                        properties: m::STATE_KEYS
+                            .iter()
+                            .filter_map(|key| Some((key.to_string(), game.native_block_property(at, key)?)))
+                            .collect(),
+                        entity: there.as_ref().map(|e| e.id.clone()),
+                        values: there.as_ref().map(|e| values(&e.nbt)).unwrap_or_default(),
+                        items: Vec::new(),
+                    })
+                })
+                .collect(),
+        };
+        m::draw_block_model(block, &me, &around, &mut ops);
+    }
+"#;
+
 /// After they are written: sent when the picture differs.
 const DRAWN_AFTER: &str = r#"        if !done.sync && draws(&entity.nbt) != drawn_before {
             game.native_block_entity_sync(pos);
@@ -1203,6 +1261,11 @@ struct Ctx<'a> {
     overlays: &'a BTreeSet<String>,
     /// Its block entities' values in boxes (Create's value settings).
     value_boxes: &'a [crate::value_settings::ValueBox],
+    /// Its blocks whose model a class of its own adds parts to, drawn with their block
+    /// entity.
+    block_models: &'a [crate::block_models::BlockModel],
+    /// Blocks with a model class of their own and no block entity to draw it with.
+    models_left_out: &'a [String],
     /// The hooks its own code uses (the value settings use others too).
     own: &'a BTreeSet<&'static str>,
     /// Its blocks that act in code, and every block (with its id).
@@ -1605,6 +1668,7 @@ pub const DESCRIPTION: &str = "{description}";
                 self.machines,
                 self.recipe_types,
                 self.shared_ticks,
+                !self.block_models.is_empty(),
             ));
             // The mod's own questions to a block, ported once for all who ask.
             r.push_str(&crate::questions::runtime(self.questions));
@@ -1685,6 +1749,9 @@ pub const STATE_KEYS: &[&str] = &[{}];",
             !self.value_boxes.is_empty(),
         ));
         r.push_str(&crate::value_settings::runtime(self.value_boxes, self.id));
+        if !self.block_models.is_empty() {
+            r.push_str(&crate::block_models::runtime(self.block_models));
+        }
         r.push_str(&blocks::runtime(
             self.behaviours,
             self.behaviour_blocks,
@@ -2998,7 +3065,7 @@ fn {id}_block_entity_submit(
             &mut ops,
         );
     }}
-    for op in ops.ops {{
+{models}    for op in ops.ops {{
         match op {{
             m::DrawOp::Push => draw.push(),
             m::DrawOp::Pop => draw.pop(),
@@ -3036,6 +3103,11 @@ fn {id}_block_entity_submit(
 }}
 "##,
                     from_tag = block_entity::FROM_TAG,
+                    models = if self.block_models.is_empty() {
+                        String::new()
+                    } else {
+                        BLOCK_MODEL_DRAW.replace("@@FROM_TAG@@", block_entity::FROM_TAG)
+                    },
                     model_arm = if self.uses("standalone_models") {
                         "m::DrawOp::Model { model, tint } => {\n                game.native_draw_model(draw, &model, tint);\n            }"
                     } else {
@@ -3177,6 +3249,30 @@ fn {id}_menu_quick_move(
     /// PORTING.md's sections on the content mod and the block entities.
     fn content_md(&self, bundle: &Bundle) -> String {
         let mut p = String::new();
+        if !self.block_models.is_empty() || !self.models_left_out.is_empty() {
+            let _ = write!(
+                p,
+                "
+## Block models drawn by code
+
+The Java mod wraps some blocks' models in a class of its own                  that adds parts from the world (a pipe's rims, a bracket). Horizon draws a block's model from its                  blockstate, so those parts are drawn with the block entity, by a function translated from the class                  (`model_<block>` in runtime.rs): {}.
+",
+                self.block_models
+                    .iter()
+                    .map(|m| format!("`{}`", m.block))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            if !self.models_left_out.is_empty() {
+                let _ = write!(
+                    p,
+                    "
+Left out, having no block entity to draw them with (they show their plain model): {}.
+",
+                    self.models_left_out.join(", ")
+                );
+            }
+        }
         let c = &bundle.content;
         if !c.is_empty() {
             let _ = write!(

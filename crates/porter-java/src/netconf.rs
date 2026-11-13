@@ -262,10 +262,26 @@ pub fn standalone_models(source: &str, mod_id: Option<&str>) -> Vec<String> {
         for args in calls(source, &helper) {
             if let Some(path) = string_literal(&args) {
                 keep(mod_id.unwrap_or("minecraft"), &format!("{prefix}{path}"));
+            } else if let Some(start) = literal_prefix(&args) {
+                // Built in a loop (`block("fluid_pipe/" + type + "/" + direction)`): every
+                // model under that prefix, which the scan expands from the mod's files.
+                keep(mod_id.unwrap_or("minecraft"), &format!("{prefix}{start}*"));
             }
         }
     }
     out
+}
+
+/// The string literal an argument starts with when it is joined to more with `+`
+/// (`"fluid_pipe/" + asId`): `fluid_pipe/`. None for a plain literal or anything else.
+fn literal_prefix(arg: &str) -> Option<String> {
+    let arg = arg.trim();
+    let rest = arg.strip_prefix('"')?;
+    let end = rest.find('"')?;
+    let literal = &rest[..end];
+    let after = rest[end + 1..].trim_start();
+    (after.starts_with('+') && !literal.is_empty() && !literal.contains('\\'))
+        .then(|| literal.to_string())
 }
 
 /// A class's one-string functions that put a folder before their argument

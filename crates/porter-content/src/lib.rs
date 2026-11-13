@@ -1997,15 +1997,40 @@ fn java_states(
             None
         }
     };
-    // A property field's name and values: `PART = EnumProperty.create("part", ..)`,
-    // `POWERED = BlockStateProperties.POWERED`, `FACING` inherited from vanilla.
-    let property = |field: &str| -> (String, Option<BTreeSet<String>>) {
-        let init = chain
+    // The values of a property the mod makes of an enum, in its order
+    // (`EnumProperty.create("blaze", HeatLevel.class)`: `none`, `smouldering`, ..), or of
+    // the constants it is given after the class.
+    let enum_values = |init: &str| -> Option<Vec<String>> {
+        let args = init.strip_prefix("EnumProperty.create(")?;
+        let args = args.strip_suffix(')').unwrap_or(args);
+        let parts: Vec<&str> = args.split(',').map(str::trim).collect();
+        let class = parts.get(1)?.strip_suffix(".class")?;
+        let class = class.rsplit('.').next().unwrap_or(class);
+        if parts.len() > 2 {
+            return Some(
+                parts[2..]
+                    .iter()
+                    .map(|c| c.rsplit('.').next().unwrap_or(c).to_ascii_lowercase())
+                    .collect(),
+            );
+        }
+        scan.property_enums
+            .iter()
+            .find(|(n, _)| n == class)
+            .map(|(_, v)| v.clone())
+    };
+    let init_of = |field: &str| {
+        chain
             .iter()
             .flat_map(|c| c.fields.iter())
             .find(|f| f.name == field)
             .and_then(|f| f.init.clone())
-            .unwrap_or_default();
+            .unwrap_or_default()
+    };
+    // A property field's name and values: `PART = EnumProperty.create("part", ..)`,
+    // `POWERED = BlockStateProperties.POWERED`, `FACING` inherited from vanilla.
+    let property = |field: &str| -> (String, Option<BTreeSet<String>>) {
+        let init = init_of(field);
         let literal = init
             .split('"')
             .nth(1)
@@ -2041,7 +2066,7 @@ fn java_states(
             // Vanilla's directions and axes (`FACING` from `DirectionalBlock`).
             Some(order.iter().map(|v| v.to_string()).collect())
         } else {
-            None
+            enum_values(&init).map(|order| order.into_iter().collect())
         };
         (name, values)
     };
@@ -2057,6 +2082,17 @@ fn java_states(
     if let Some((_, _, d)) = definition(false) {
         for (f, v) in d {
             defaults.insert(property(f).0, v.clone());
+        }
+    }
+    // An enum property `registerDefaultState` leaves starts at the enum's first value.
+    if let Some((_, fields, _)) = definition(true) {
+        for f in fields {
+            let name = property(f).0;
+            if !defaults.contains_key(&name)
+                && let Some(first) = enum_values(&init_of(f)).and_then(|v| v.into_iter().next())
+            {
+                defaults.insert(name, first);
+            }
         }
     }
     (values, defaults)
@@ -3542,6 +3578,29 @@ mod tests {
         assert_eq!(java_first_value(&values["facing"]), Some("north"));
         let (values, _) = java_states(&scan, Some("m.Odd"));
         assert!(!values.contains_key("facing"));
+        // An enum the mod makes a property of: its values, starting at the first.
+        let mut burner = class("Burner", "Block", &[]);
+        burner.fields.push(porter_model::FieldInfo {
+            name: "HEAT_LEVEL".into(),
+            ty: "EnumProperty<HeatLevel>".into(),
+            is_static: true,
+            is_final: true,
+            init: Some("EnumProperty.create(\"blaze\", HeatLevel.class)".into()),
+        });
+        let scan = ModScan {
+            classes: vec![burner],
+            state_definitions: vec![definition("Burner", &["HEAT_LEVEL"], &[])],
+            property_enums: vec![(
+                "HeatLevel".into(),
+                ["none", "smouldering", "fading", "kindled", "seething"]
+                    .map(String::from)
+                    .into(),
+            )],
+            ..ModScan::default()
+        };
+        let (values, defaults) = java_states(&scan, Some("m.Burner"));
+        assert_eq!(values["blaze"].len(), 5);
+        assert_eq!(defaults["blaze"], "none");
     }
 
     #[test]

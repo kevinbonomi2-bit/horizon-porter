@@ -13,6 +13,8 @@ public class MotorBlockEntity extends SmartBlockEntity {
 
     public ScrollValueBehaviour generatedSpeed;
     public boolean reActivateSource;
+    /** A bracket put on it with a wrench, drawn by its model (BracketModel). */
+    public BlockState bracket;
 
     public MotorBlockEntity(BlockPos pos, BlockState state) {
         super(Dial.MOTOR_BE.get(), pos, state);

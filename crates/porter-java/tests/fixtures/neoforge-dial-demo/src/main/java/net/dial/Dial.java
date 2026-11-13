@@ -5,6 +5,7 @@ import com.tterrag.registrate.util.entry.BlockEntityEntry;
 import com.tterrag.registrate.util.entry.BlockEntry;
 import net.minecraft.world.level.block.Blocks;
 import net.neoforged.fml.common.Mod;
+import com.simibubi.create.foundation.data.CreateRegistrate;
 
 /** A tiny Create-style mod: a motor whose speed is set in a box on it. */
 @Mod(Dial.ID)
@@ -15,6 +16,7 @@ public class Dial {
     public static final BlockEntry<MotorBlock> MOTOR = REGISTRATE.block("motor", MotorBlock::new)
         .initialProperties(() -> Blocks.IRON_BLOCK)
         .lang("Dial Motor")
+        .onRegister(CreateRegistrate.blockModel(() -> BracketModel::new))
         .simpleItem()
         .register();
 

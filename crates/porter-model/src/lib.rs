@@ -231,6 +231,16 @@ pub struct ModScan {
     /// (`ModelEvent.RegisterStandalone`, `PartialModel`): `grind:block/crusher_wheel`.
     #[serde(default)]
     pub standalone_models: Vec<String>,
+    /// Blocks whose baked model Java wraps in a class of its own, which adds parts to it
+    /// from the world (Create's `.onRegister(CreateRegistrate.blockModel(() ->
+    /// PipeAttachmentModel::withAO))`): (block id, the model class's simple name).
+    #[serde(default)]
+    pub block_models: Vec<(String, String)>,
+    /// The enums block classes make state properties of (`EnumProperty.create("blaze",
+    /// HeatLevel.class)`), by simple name, with their values as the game names them
+    /// (`none`, `smouldering`, ..), in declaration order: the first is a block's start.
+    #[serde(default)]
+    pub property_enums: Vec<(String, Vec<String>)>,
     /// Block classes' state definitions: (class, the property fields its
     /// `createBlockStateDefinition` adds (`FACING`, `PART`), the values its
     /// `registerDefaultState` sets as (field, value): `("PART", "top")`).

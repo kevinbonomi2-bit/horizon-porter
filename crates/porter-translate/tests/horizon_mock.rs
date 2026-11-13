@@ -738,6 +738,7 @@ __LEVEL_HOOKS__
             pub fn native_block_collision(&self, pos: [i32; 3]) -> Vec<[f64; 6]> { Vec::new() }
             pub fn native_level_random(&mut self, dimension: &str) -> Option<&mut crate::horizon_core::random::LegacyRandom> { None }
             pub fn native_block_property(&self, pos: [i32; 3], key: &str) -> Option<String> { None }
+            pub fn native_mod_block_entity(&self, pos: [i32; 3]) -> Option<crate::containers::ModBlockEntity> { None }
             pub fn native_set_block_property_with(&mut self, pos: [i32; 3], key: &str, value: &str, flags: i32) -> bool { false }
             // native_host_bridge.rs: Game's is `native_level_play_sound` (GameLevel has `native_play_sound`).
             pub fn native_level_play_sound(&mut self, level: crate::mod_api::LevelRef, sound: &str, at: [f64; 3], source: usize, volume: f32, pitch: f32) -> bool { false }
@@ -894,6 +895,21 @@ fn value_settings_helpers_compile_against_horizon_api() {
     for hook in porter_translate::value_settings::HOOKS {
         assert!(b.wired.contains_key(hook), "{hook}");
     }
+    // Its model class draws the bracket its block entity keeps (as Create's shafts'): a
+    // function for it, drawn with the block entity, with the six blocks beside it.
+    assert_eq!(
+        scan.block_models,
+        [("motor".to_string(), "BracketModel".to_string())]
+    );
+    let runtime = &b.files["mixins/dial/runtime.rs"];
+    assert!(
+        runtime.contains("pub fn model_motor(me: &Neighbour, around: &Around, draw: &mut Draw)")
+    );
+    assert!(runtime.contains("/// TODO: port the model of `net.dial.BracketModel` for the block of a `net.dial.MotorBlockEntity`"));
+    assert!(
+        b.files["mixins/dial/block_entity_submit.rs"]
+            .contains("m::draw_block_model(block, &me, &around, &mut ops);")
+    );
     compiles_against_the_mock(&b, "dial");
 }
 
