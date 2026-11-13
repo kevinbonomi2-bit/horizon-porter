@@ -355,7 +355,9 @@ pub fn runtime(
     places: &[(String, String, String)],
     tags: &[(String, Vec<String>)],
 ) -> String {
-    if behaviours.is_empty() && places.is_empty() {
+    // (A mod with block entities and no block code of its own still gets the level's
+    // types: its block entities' glue reads and writes blocks through them.)
+    if behaviours.is_empty() && places.is_empty() && !entities {
         return String::new();
     }
     let mut r = if entities {
@@ -372,10 +374,13 @@ pub fn runtime(
         .or_else(|| places.first().map(|(item, _, _)| item))
         .and_then(|id| id.split_once(':'))
         .map_or("", |(ns, _)| ns);
-    let _ = write!(
-        r,
-        "\n/// The mod's blocks' namespace: the world hooks run for every block in the world,\n/// and this turns away all others with one comparison.\nconst NAMESPACE: &str = \"{ns}:\";\n"
-    );
+    // (Only where a block has code of its own: nothing reads it otherwise.)
+    if !behaviours.is_empty() || !places.is_empty() {
+        let _ = write!(
+            r,
+            "\n/// The mod's blocks' namespace: the world hooks run for every block in the world,\n/// and this turns away all others with one comparison.\nconst NAMESPACE: &str = \"{ns}:\";\n"
+        );
+    }
 
     r.push_str(
         "\n/// Quarter turns clockwise from the `facing` each block stores to the one its Java\n/// knows: its blockstate is turned so each draws what Java draws.\nconst FACING_TURNS: &[(&str, u8)] = &[\n",

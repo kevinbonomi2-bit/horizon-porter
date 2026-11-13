@@ -874,7 +874,11 @@ fn signature(
             }
             // Another block: its id and its state properties.
             "BlockState" => {
-                params.push((format!("{name}_block"), "&str".to_string()));
+                // (`state_` for a `state` that is the asked block's own name: one `_`.)
+                params.push((
+                    format!("{}_block", name.trim_end_matches('_')),
+                    "&str".to_string(),
+                ));
                 "&[(String, String)]"
             }
             // The level isn't given.
@@ -1192,7 +1196,7 @@ mod tests {
             signature(&d, Asks::Entity, &entities(), &block_types),
             Some((
                 vec![
-                    ("state__block".to_string(), "&str".to_string()),
+                    ("state_block".to_string(), "&str".to_string()),
                     ("state_".to_string(), "&[(String, String)]".to_string()),
                     ("neighbours".to_string(), "&[[i32; 3]]".to_string()),
                 ],

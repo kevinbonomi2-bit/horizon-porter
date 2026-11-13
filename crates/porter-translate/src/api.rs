@@ -18,8 +18,10 @@ use std::fmt::Write;
 use crate::blocks::{Behaviour, Kind};
 
 /// The prebuilt game the glue was checked against (`prebuilt-<commit>` on
-/// arismoko/horizon): the API changes daily, so a port pins one.
-pub const API_HORIZON: &str = "34724f76860e7c53d0f95c711aff32baac8b49b7";
+/// arismoko/horizon): the API changes daily, so a port pins one. This one is the newest
+/// with a prebuilt game published (2026-11-11), so the launcher compiles the mod alone;
+/// the glue type-checks against the fork's main of 2026-11-12 too.
+pub const API_HORIZON: &str = "514ecf9a966cdf2bc4f81f091827d81767756fd9";
 /// The horizon-mixins commit that prebuilt's launcher pins.
 pub const API_MIXINS: &str = "5a64af938ec86b00d53d16a408aabc0038fb3e57";
 
@@ -1697,19 +1699,28 @@ const PART_USE_ON: &str = r#"        if !runtime::item_acts_on_block(&item) {
 
 "#;
 
-const PART_USE_ITEM: &str = r#"    fn use_item(&self, host: &mut dyn ServerHost, event: &mut mod_api::UseItemEvent<'_>) -> Flow {
+const PART_USE_ITEM: &str = r#"    // (Asked on both sides since the API of 2026-11-11: the port's code is the server's,
+    // as Java's `use` does its work there; the client lets the server answer.)
+    fn use_item(
+        &self,
+        host: mod_api::HostSide<'_>,
+        event: &mut mod_api::UseItemEvent<'_>,
+    ) -> Option<InteractionResult> {
+        let mod_api::HostSide::Server(host) = host else {
+            return None;
+        };
         let item = event.stack.item().id(&*host).to_string();
         if !runtime::item_acts_in_air(&item) {
-            return Flow::Continue;
+            return None;
         }
         let entity = host
             .players()
             .acting_player()
             .map_or(-1, |p| p.entity().id() as i32);
         if item_use(host, event.stack, None, entity, runtime::use_item) {
-            Flow::Cancel
+            Some(InteractionResult::SuccessServer)
         } else {
-            Flow::Continue
+            None
         }
     }
 

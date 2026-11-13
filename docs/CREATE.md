@@ -383,7 +383,7 @@ The press and the mixer took four more, each a fact the tool now states or check
   `applyBasinRecipe`) is shown too.
 
 Where it stands: **29 of 29** on the build with every tick above ported once
-(native-66f3981-94e2313b4bd7), from the tool's own output with nothing edited by hand. Getting
+(native-66f3981-268caca8ada7), from the tool's own output with nothing edited by hand. Getting
 there took about a dollar of Claude Haiku in all, the dead ends included. Twenty-odd functions
 of the port are still marked to be ported again with what the tool says now; none of the
 checks depends on them.

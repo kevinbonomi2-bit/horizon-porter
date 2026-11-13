@@ -272,3 +272,70 @@ Checked in the game on that Nightly, with the twelve trial mods built together:
   there with `genericKill`.
 
 Still to give: trades and menus for a player, a mod's own screens as widgets, mob goals.
+
+## The mod API of 2026-11-12
+
+The fork announced that `[[native.mixin]]` now changes any game function without rebuilding the
+game (the launcher copies the functions a mod targets, applies the mixins to the copies and
+compiles those against the prebuilt game), a `[[native.loop]]` table for the block entity tick,
+and the removal of `access = "internals"` and of mod-to-mod points. Its book says the same at
+`ed38e0d` (docs/modding/src: `native-route.md`, `mixins.md`, `loops.md`).
+
+**None of it can be downloaded yet.** The newest prebuilt game and the newest launcher (0.2.10)
+are from `514ecf9`, published 2026-11-11 at 06:24 UTC. Function replacement was merged at 14:08
+UTC that day and the published loops that evening. So this page says what was checked against
+the fork's source, and what waits for a prebuilt game that has the route.
+
+### What changed in `port --api`
+
+- **It pins `514ecf9`**, the newest commit with a prebuilt game, where it pinned the Nightly of
+  2026-11-10.
+- **`use_item` is asked on both sides now**, with a `HostSide` and an answer
+  (`Option<InteractionResult>`) where it had the server's host and a `Flow`. The glue answers on
+  the server, as Java's `use` does its work there, and lets the client pass.
+- **A mod with block entities and no block code of its own did not compile**: the glue reads and
+  writes blocks through `runtime.rs`'s level types, which were only written for a mod with a
+  block behaviour. Found by compiling the press and kinetic fixtures, which no test did.
+- The glue writes no `[[inject]]` rows, so the removed `access` key is not in what it writes.
+
+Checked by compiling `api/` against the fork's `horizon-mod-api`, at `514ecf9` and at
+`ed38e0d` (its main on 2026-11-12): five fixtures, eight of the trial mods (Farmer's Delight,
+Macaw's Fences, Waystones, Beautify, VillagersPlus, Friends & Foes, Naturalist, Advanced
+Netherite) and Create. All compile at both, without a warning.
+
+Built for real once: Macaw's Fences' `api/`, with the fork's launcher built from `514ecf9`'s own
+source, on Nightly 2026-11-11 (`native-build .. --version nightly-2026-11-11-514ecf9`). It built,
+in 22 minutes: on this computer the launcher compiled the game for it and did not take the
+prebuilt game. The build warns that the glue's private `Here` type is "more private" than
+items the launcher generated from its methods (the mod-to-mod points of that commit, removed
+since). It was not started in the game.
+
+### The bundle and the native route
+
+A horizon-mixins bundle is `HEAD` injections on regular Horizon's hook functions
+(`native_block_entity_tick`, `native_right_click_block`, ..) and one module, which is what
+`[[native.mixin]]` and `[[native.module]]` rows are. So the question was whether a bundle
+could be applied to the fork as it is. `tools/fork_hooks.py` compares the porter's hook table
+with the fork's functions:
+
+| | same function and parameters | parameters changed | no such function |
+| --- | --- | --- | --- |
+| All 432 hooks, fork at `ed38e0d` | 252 | 115 | 65 |
+| The 50 Create's bundle uses | 18 | 18 | 14 |
+
+It cannot, as it is. The fork turned the listeners into `mod_api::Hooks` methods (`native_tick`,
+`native_frame`, `native_hud`, `native_key`, `native_place_block`, `native_destroy_block`, the
+network ones: gone as functions) and gave clicks, shapes and screens the API's own types. What it
+kept unchanged is the block entity family: `native_block_entity_tick`, `_ticks`, `_update_tag`,
+`_container`, `_fluids`, `_submit`, with `native_can_survive`, `native_random_tick`,
+`native_tick_block`, the comparator pair and the tooltip.
+
+That family is where the glue is short of the bundle: a tick that reaches the blocks around it
+and writes to other block entities, and renderers. So the plan, once a prebuilt game has the
+route: the glue stays for blocks and items (hooks and Parts come first, the book says), and the
+block entity family goes over as `[[native.mixin]]` rows with the bundle's helpers, each one
+function in a file under `src/` that calls the mod's own crate for `runtime.rs`. The published
+loop `block_entities.tick` is the other way to the same tick. Neither is written yet: without a
+prebuilt game that has function replacement there is nothing to build it against, and a helper
+that has not been compiled is a guess.
+
