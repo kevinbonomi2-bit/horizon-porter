@@ -463,6 +463,9 @@ pub struct Machine<'a> {
     pub dropped: Option<&'a dyn Fn([f64; 3], [f64; 3]) -> Vec<Dropped>>,
     /// The living things in a box: see `mobs_in`.
     pub mobs: Option<&'a dyn Fn([f64; 3], [f64; 3]) -> Vec<NearMob>>,
+    /// The world's time of day in ticks (`level.getDayTime()`): it keeps counting past
+    /// 24000 (noon is 6000), so take it modulo 24000 for the hour.
+    pub day_time: i64,
 }
 
 /// A particle burst or a sound a tick plays, near its block.
@@ -729,6 +732,7 @@ impl<'a> Machine<'a> {
             powered: false,
             dropped: None,
             mobs: None,
+            day_time: 0,
         }
     }
 

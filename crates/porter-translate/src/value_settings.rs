@@ -79,6 +79,7 @@ pub const HOOKS: &[&str] = &[
     "screen_mouse_button_released_pre",
     "screen_mouse_scrolled_pre",
     "net_from_client",
+    "block_entity_submit",
 ];
 
 /// The values in boxes the mod's block entities hold.
@@ -871,6 +872,21 @@ pub fn tests(boxes: &[ValueBox]) -> String {
         assert!(near(sided_offset(south, Side::North), [0.5, 0.5, 3.5 / 16.0]));
         assert!(near(sided_offset(south, Side::Up), [0.5, 12.5 / 16.0, 0.5]));
         assert!(near(sided_offset(south, Side::Down), [0.5, 3.5 / 16.0, 0.5]));
+        // Drawn on the face it is on: its outline and its value, inside the half block
+        // round its middle, lifted just off the face.
+        let shown = Shown {{
+            field: "f",
+            value: ScrollValue {{ text: "16".into(), ..Default::default() }},
+            at: [0.5, 0.5, 1.0],
+            side: Side::South,
+            highlight: true,
+        }};
+        let cubes = value_box_cubes(&[shown], [0.0, 0.0, -1.0]);
+        assert!(cubes.len() > 4 + 10);
+        for (from, to, _) in &cubes {{
+            assert!(from[2] >= 16.0 && to[2] <= 16.5, "{{from:?}} {{to:?}}");
+            assert!(from[0] >= 3.9 && to[0] <= 12.1 && from[1] >= 3.9 && to[1] <= 12.1);
+        }}
     }}
 "#,
         e = first.entity,
@@ -1079,6 +1095,101 @@ pub fn looked_at(entity: &str, me: &Neighbour, local: [f64; 3], side: Side, wren
         let highlight = on && !found;
         found |= highlight;
         out.push(Shown { field, value, at, side, highlight });
+    }
+    out
+}
+
+/// A 3×5 pixel font for what a value box shows: each glyph's rows, top first, its
+/// three columns as bits (4 the left).
+fn glyph(c: char) -> Option<[u8; 5]> {
+    Some(match c {
+        '0' => [7, 5, 5, 5, 7],
+        '1' => [2, 6, 2, 2, 7],
+        '2' => [7, 1, 7, 4, 7],
+        '3' => [7, 1, 7, 1, 7],
+        '4' => [5, 5, 7, 1, 1],
+        '5' => [7, 4, 7, 1, 7],
+        '6' => [7, 4, 7, 5, 7],
+        '7' => [7, 1, 1, 2, 2],
+        '8' => [7, 5, 7, 5, 7],
+        '9' => [7, 5, 7, 1, 7],
+        '-' => [0, 0, 7, 0, 0],
+        '*' => [5, 2, 5, 0, 0],
+        '°' => [6, 6, 0, 0, 0],
+        '.' => [0, 0, 0, 0, 2],
+        't' => [2, 7, 2, 2, 3],
+        's' => [3, 4, 2, 1, 6],
+        'm' => [0, 6, 7, 5, 5],
+        'x' => [0, 5, 2, 5, 0],
+        _ => return None,
+    })
+}
+
+/// What the value boxes `shown` draw in the world, as `ValueBox.render` draws them on the
+/// block: each box's value, large (a box is half a block across), and an outline round the
+/// one the look (`look`) is on. Cubes in texels of the block (16 a block), from, to and
+/// their 0xRRGGBB colour. An option's box holds an icon in Java: nothing is written in it.
+pub fn value_box_cubes(shown: &[Shown], look: [f64; 3]) -> Vec<([f32; 3], [f32; 3], u32)> {
+    let mut out = Vec::new();
+    for s in shown {
+        let n = s.side.offset().map(|v| v as f32);
+        // Its right and up, as read from in front of the face (on the top, away from the
+        // player is up).
+        let flat = {
+            let (x, z) = (look[0] as f32, look[2] as f32);
+            if x.abs() > z.abs() {
+                [x.signum(), 0.0, 0.0]
+            } else {
+                [0.0, 0.0, if z == 0.0 { 1.0 } else { z.signum() }]
+            }
+        };
+        let (right, up) = match s.side {
+            Side::South => ([1.0, 0.0, 0.0], [0.0, 1.0, 0.0]),
+            Side::North => ([-1.0, 0.0, 0.0], [0.0, 1.0, 0.0]),
+            Side::East => ([0.0, 0.0, -1.0], [0.0, 1.0, 0.0]),
+            Side::West => ([0.0, 0.0, 1.0], [0.0, 1.0, 0.0]),
+            Side::Up => ([-flat[2], 0.0, flat[0]], flat),
+            Side::Down => ([flat[2], 0.0, -flat[0]], flat),
+        };
+        let c = [s.at[0] as f32 * 16.0, s.at[1] as f32 * 16.0, s.at[2] as f32 * 16.0];
+        // A rectangle on the face: `a` to `b` along right, `p` to `q` along up (texels from
+        // the box's middle), lifted off it by `lift`.
+        let mut rect = |a: f32, b: f32, p: f32, q: f32, lift: f32, tint: u32| {
+            let at = |x: f32, y: f32, d: f32| [0, 1, 2].map(|i| c[i] + right[i] * x + up[i] * y + n[i] * d);
+            let (p0, p1) = (at(a, p, lift), at(b, q, lift + 0.12));
+            let from = [0, 1, 2].map(|i| p0[i].min(p1[i]));
+            let to = [0, 1, 2].map(|i| p0[i].max(p1[i]));
+            out.push((from, to, tint));
+        };
+        if s.highlight {
+            let (r, t) = (4.0, 0.45);
+            rect(-r, r, r - t, r, 0.05, 0xFFFFFF);
+            rect(-r, r, -r, -r + t, 0.05, 0xFFFFFF);
+            rect(-r, -r + t, -r, r, 0.05, 0xFFFFFF);
+            rect(r - t, r, -r, r, 0.05, 0xFFFFFF);
+        }
+        if !s.value.options.is_empty() {
+            continue;
+        }
+        let glyphs: Vec<[u8; 5]> = s.value.text.chars().filter_map(glyph).collect();
+        if glyphs.is_empty() {
+            continue;
+        }
+        let wide = glyphs.len() as f32 * 4.0 - 1.0;
+        let px = (6.0 / wide).min(1.1);
+        let (x0, y0) = (-wide * px / 2.0, 2.5 * px);
+        for (g, rows) in glyphs.iter().enumerate() {
+            for (row, bits) in rows.iter().enumerate() {
+                for col in 0..3 {
+                    if bits & (4 >> col) == 0 {
+                        continue;
+                    }
+                    let x = x0 + (g as f32 * 4.0 + col as f32) * px;
+                    let y = y0 - (row as f32 + 1.0) * px;
+                    rect(x, x + px, y, y + px, 0.05, 0xEDEDED);
+                }
+            }
+        }
     }
     out
 }
@@ -1521,6 +1632,7 @@ pub fn part(hook: &str) -> Option<&'static str> {
         "screen_render_post" => RENDER_PART,
         "screen_mouse_scrolled_pre" => SCROLL_PART,
         "net_from_client" => NET_PART,
+        "block_entity_submit" => SUBMIT_PART,
         _ => return None,
     })
 }
@@ -1592,8 +1704,8 @@ const FRAME_PART: &str = r#"    // Create's value settings: the use key held on 
     }
 "#;
 
-const HUD_PART: &str = r#"    // Create's value settings: the boxes on the block looked at, with their values, and
-    // the tip of the one the look is on (`ScrollValueRenderer`, `ValueSettingsClient.render`).
+const HUD_PART: &str = r#"    // Create's value settings: the tip of the box the look is on
+    // (`ValueSettingsClient.render`); the boxes themselves are drawn with their block.
     if game.native_on(m::ID) && game.native_mod_screen().is_none() {
         __TARGET__
         let now = m::value_client(|c| c.clock);
@@ -1603,91 +1715,16 @@ const HUD_PART: &str = r#"    // Create's value settings: the boxes on the block
         };
         let tr = |key: &str| horizon_client::text::Text::translate(key, &[]).plain();
         let [w, h] = [batch.width, batch.height];
-        // Each box's corners on the screen, from the camera.
-        let camera = game.native_camera();
-        let eye = match (&camera, game.native_player()) {
-            (Some(c), _) => Some(c.position),
-            (None, Some(p)) => Some([p.x, p.y + 1.62, p.z]),
-            _ => None,
-        };
-        let (yaw, pitch, fov) = match (&camera, game.native_player()) {
-            (Some(c), _) => (c.yaw, c.pitch, c.fov_degrees),
-            (None, Some(p)) => (p.yaw, p.pitch, 70.0),
-            _ => (0.0, 0.0, 70.0),
-        };
-        let project = |p: [f64; 3]| -> Option<[f32; 2]> {
-            let eye = eye?;
-            let (y, x) = (f64::from(yaw).to_radians(), f64::from(pitch).to_radians());
-            let forward = [-y.sin() * x.cos(), -x.sin(), y.cos() * x.cos()];
-            let right = [-y.cos(), 0.0, -y.sin()];
-            let up = [
-                right[1] * forward[2] - right[2] * forward[1],
-                right[2] * forward[0] - right[0] * forward[2],
-                right[0] * forward[1] - right[1] * forward[0],
-            ];
-            let d = [p[0] - eye[0], p[1] - eye[1], p[2] - eye[2]];
-            let dot = |a: [f64; 3]| a[0] * d[0] + a[1] * d[1] + a[2] * d[2];
-            let z = dot(forward);
-            if z < 0.05 {
-                return None;
+        // (An option's box holds its icon in Java; here its name is in the tip.)
+        let tip = shown.iter().find(|s| s.highlight).map(|s| {
+            let mut lines = vec![tr(&s.value.label)];
+            if !s.value.options.is_empty() {
+                lines.push(tr(&s.value.text));
             }
-            let t = (f64::from(fov).to_radians() / 2.0).tan();
-            let aspect = f64::from(w) / f64::from(h.max(1.0));
-            let nx = dot(right) / (z * t * aspect);
-            let ny = dot(up) / (z * t);
-            Some([((nx + 1.0) / 2.0 * f64::from(w)) as f32, ((1.0 - ny) / 2.0 * f64::from(h)) as f32])
-        };
-        let mut tip = None;
-        if let Some((pos, _, _, _, _)) = &target {
-            for s in &shown {
-                // The box: half a block square on its face, lifted off it a little.
-                let n = s.side.offset();
-                let (u, v) = match n {
-                    [0, _, 0] => ([1.0, 0.0, 0.0], [0.0, 0.0, 1.0]),
-                    [_, 0, 0] => ([0.0, 0.0, 1.0], [0.0, 1.0, 0.0]),
-                    _ => ([1.0, 0.0, 0.0], [0.0, 1.0, 0.0]),
-                };
-                let c = [
-                    f64::from(pos[0]) + s.at[0] + f64::from(n[0]) * 0.01,
-                    f64::from(pos[1]) + s.at[1] + f64::from(n[1]) * 0.01,
-                    f64::from(pos[2]) + s.at[2] + f64::from(n[2]) * 0.01,
-                ];
-                let corner = |a: f64, b: f64| [c[0] + u[0] * a + v[0] * b, c[1] + u[1] * a + v[1] * b, c[2] + u[2] * a + v[2] * b];
-                let corners = [corner(-0.25, -0.25), corner(0.25, -0.25), corner(0.25, 0.25), corner(-0.25, 0.25)];
-                let points: Option<Vec<[f32; 2]>> = corners.iter().map(|p| project(*p)).collect();
-                let Some(points) = points else {
-                    continue;
-                };
-                // Darkened under the value, which Java draws large with a dark outline:
-                // here it is the font's size, and would sit on the block's own texture.
-                game.native_quad(batch, [points[0], points[1], points[2], points[3]], 0x9000_0000);
-                if s.highlight {
-                    // Its outline, white.
-                    for i in 0..4 {
-                        let a = points[i];
-                        let b = points[(i + 1) % 4];
-                        let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
-                        let len = (dx * dx + dy * dy).sqrt().max(0.001);
-                        let (ox, oy) = (-dy / len * 0.75, dx / len * 0.75);
-                        game.native_quad(batch, [[a[0] - ox, a[1] - oy], [b[0] - ox, b[1] - oy], [b[0] + ox, b[1] + oy], [a[0] + ox, a[1] + oy]], 0xFFFF_FFFF);
-                    }
-                }
-                let Some(middle) = project(c) else {
-                    continue;
-                };
-                let text = if s.value.options.is_empty() {
-                    s.value.text.clone()
-                } else {
-                    tr(&s.value.text)
-                };
-                let tw = game.native_text_width(&text);
-                game.native_text(batch, &text, [middle[0] - tw / 2.0, middle[1] - 4.0], if s.highlight { 0xFFFFFF } else { 0xDDDDDD }, true);
-                if s.highlight {
-                    tip = Some(vec![tr(&s.value.label), tr("create.gui.value_settings.hold_to_edit")]);
-                }
-            }
-        }
-        // The tip, fading in after the look has rested on the box a moment.
+            lines.push(tr("create.gui.value_settings.hold_to_edit"));
+            lines
+        });
+        // The tip, after the look has rested on the box a moment (`hoverWarmup`).
         let since = m::value_client(|c| {
             if tip.is_some() {
                 *c.hover_since.get_or_insert(now)
@@ -1696,17 +1733,80 @@ const HUD_PART: &str = r#"    // Create's value settings: the boxes on the block
                 now
             }
         });
-        if let Some(lines) = tip {
-            let alpha = (((now - since - 0.15) / 0.25).clamp(0.0, 1.0) * 255.0) as u32;
-            if alpha > 8 {
-                let mut y = h - 75.0 - lines.len() as f32 * 12.0;
-                for (i, line) in lines.iter().enumerate() {
-                    let tw = game.native_text_width(line);
-                    let rgb = if i == 0 { 0xFBDC7D } else { 0xFFFFFF };
-                    let _ = alpha;
-                    game.native_text(batch, line, [w / 2.0 - (tw / 2.0).floor(), y], rgb, true);
-                    y += 12.0;
-                }
+        if let Some(lines) = tip
+            && now - since >= 0.15
+        {
+            let mut y = h - 75.0 - lines.len() as f32 * 12.0;
+            for (i, line) in lines.iter().enumerate() {
+                let tw = game.native_text_width(line);
+                let rgb = if i == 0 { 0xFBDC7D } else { 0xFFFFFF };
+                game.native_text(batch, line, [w / 2.0 - (tw / 2.0).floor(), y], rgb, true);
+                y += 12.0;
+            }
+        }
+    }
+"#;
+
+/// The renderer helper's part: the value boxes of the block looked at, drawn with it
+/// in the world (`ScrollValueRenderer`, `ValueBox.render`).
+const SUBMIT_PART: &str = r#"    // Create's value settings: the boxes of the block looked at, drawn with it, as
+    // `ScrollValueRenderer` shows them: the value in each, and an outline round the
+    // one the look is on.
+    if m::has_value_boxes(&entity.id)
+        && let Some((_, hit)) = game.native_view_hit()
+        && [hit.block_x, hit.block_y, hit.block_z] == pos
+    {
+        use horizon_world::nbt::Tag;
+        let values: Vec<(String, m::Saved)> = entity
+            .nbt
+            .iter()
+            .filter_map(|(k, tag)| {
+                let v = match tag {
+                    Tag::Byte(v) => m::Saved::Byte(*v),
+                    Tag::Short(v) => m::Saved::Short(*v),
+                    Tag::Int(v) => m::Saved::Int(*v),
+                    Tag::Long(v) => m::Saved::Long(*v),
+                    Tag::Float(v) => m::Saved::Float(f32::from_bits(*v)),
+                    Tag::Double(v) => m::Saved::Double(f64::from_bits(*v)),
+                    Tag::String(v) => m::Saved::Text(v.to_string_lossy()),
+                    _ => return None,
+                };
+                Some((k.to_string_lossy(), v))
+            })
+            .collect();
+        let me = m::Neighbour {
+            block: block.to_string(),
+            pos,
+            properties: m::STATE_KEYS
+                .iter()
+                .filter_map(|key| Some((key.to_string(), game.native_block_state_property(state, key)?.to_string())))
+                .collect(),
+            entity: Some(entity.id.clone()),
+            values,
+            items: Vec::new(),
+        };
+        let look = match game.native_player() {
+            Some(p) => {
+                let (yaw, pitch) = (f64::from(p.yaw).to_radians(), f64::from(p.pitch).to_radians());
+                [-yaw.sin() * pitch.cos(), -pitch.sin(), yaw.cos() * pitch.cos()]
+            }
+            None => [0.0, -1.0, 0.0],
+        };
+        let local = [hit.x - f64::from(pos[0]), hit.y - f64::from(pos[1]), hit.z - f64::from(pos[2])];
+        let side = m::hit_side(local, look, &game.native_block_collision(pos));
+        let wrench = game.native_held().is_some_and(|(item, _, _)| item.ends_with(":wrench"));
+        let crouching = game
+            .player
+            .as_ref()
+            .is_some_and(|p| matches!(p.pose, crate::pose::Pose::Crouching));
+        if !crouching {
+            let shown = m::looked_at(&entity.id, &me, local, side, wrench);
+            for (from, to, tint) in m::value_box_cubes(&shown, look) {
+                let face = Some(crate::game::native_block_entity_draw::CubeFace {
+                    sprite: "block/white_concrete",
+                    uv: None,
+                });
+                game.native_draw_cube(draw, from, to, [face; 6], tint);
             }
         }
     }
@@ -1971,6 +2071,9 @@ pub fn helper(hook: &str, id: &str, m: &str) -> Option<String> {
         )),
         "net_from_client" => fill(&format!(
             "// Create's value settings: a choice made on a value board.\nfn __ID___net_from_client(\n    game: &mut crate::game::Game<'_>,\n    player: u128,\n    channel: &str,\n    data: &[u8],\n) {{\n    use crate::game::__M__ as m;\n{NET_PART}}}\n"
+        )),
+        "block_entity_submit" => fill(&format!(
+            "// Create's value settings: the boxes of the block looked at.\nfn __ID___block_entity_submit(\n    game: &crate::game::Game<'_>,\n    pos: [i32; 3],\n    block: &str,\n    state: horizon_world::registry::BlockStateId,\n    entity: &horizon_client::containers::ModBlockEntity,\n    draw: &mut crate::game::BlockEntityDraw,\n) {{\n    use crate::game::__M__ as m;\n{SUBMIT_PART}}}\n"
         )),
         _ => return None,
     })

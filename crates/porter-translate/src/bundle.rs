@@ -1757,7 +1757,8 @@ mod tests {
                     "screen_render_post" => "screen_render_post.rs",
                     "screen_mouse_button_released_pre" => "screen_mouse_button_released_pre.rs",
                     "screen_mouse_scrolled_pre" => "screen_mouse_scrolled_pre.rs",
-                    _ => "net_from_client.rs",
+                    "net_from_client" => "net_from_client.rs",
+                    _ => "block_entity_submit.rs",
                 };
                 if let Some(source) = crate::value_settings::helper(hook, self.id, &self.module) {
                     return (file, source);
@@ -2289,6 +2290,7 @@ fn {id}_block_entity_tick(
         Some((info.map_or(64, |i| i.max_stack), rest))
     }};
     let mut machine = m::Machine::new(slots.clone(), data.clone(), &recipes);
+    machine.day_time = game.native_day_time();
     machine.tags = Some(&tags);
     machine.items = Some(&items);
     // Its random: a different draw each tick and block.

@@ -719,6 +719,7 @@ __LEVEL_HOOKS__
             pub fn native_give_items(&mut self, item: &str, count: u32) -> u32 { 0 }
             pub fn native_raycast(&self, distance: f32) -> Option<NativeHit> { None }
             pub fn native_view_hit(&self) -> Option<(f32, NativeHit)> { None }
+            pub fn native_day_time(&self) -> i64 { 0 }
             pub fn native_camera(&self) -> Option<crate::mod_api::NativeCamera> { None }
             pub fn native_quad(&self, batch: &mut HudBatch, points: [[f32; 2]; 4], argb: u32) {}
             pub fn native_summon(&mut self, dimension: &str, kind: &str, pos: [f64; 3], nbt: Compound) -> Option<u32> { None }

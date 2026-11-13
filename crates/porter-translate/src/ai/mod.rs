@@ -887,6 +887,7 @@ fn translate_one(
     let mut asked_field = false;
     let mut asked_handed = false;
     let mut asked_pivot = false;
+    let mut asked_parts = false;
     let mut gave_up = false;
     for attempt in 1..=opts.attempts.max(1) {
         outcome.attempts = attempt;
@@ -1000,6 +1001,16 @@ fn translate_one(
                  this block entity or a class above it (its Java is above too). No other function does this: \
                  without it, what `{method}` starts never starts. Port the kept part's tick and `{method}` into \
                  this tick, as nested functions, and call them each tick. Your answer was:\n```rust\n{function}\n```"
+            );
+            continue;
+        }
+        if !asked_parts && shares_turns_between_parts(&function, &prompt.java) {
+            asked_parts = true;
+            feedback = format!(
+                "Your last answer turns the pose and draws several parts without `draw.push()` and                  `draw.pop()`. In the Java each part is its own buffer (`CachedBuffers.partial(..)`,                  `partialFacing(..)`: a `SuperByteBuffer`), and the turns made on one move only that part.                  Here they move the pose, so a part's turns move every part drawn after it. Draw each part as                  `draw.push()`, its own turns, its `draw.model(..)`, `draw.pop()`. Your answer was:
+```rust
+{function}
+```"
             );
             continue;
         }
@@ -3050,6 +3061,33 @@ fn static_receivers(java: &str) -> Vec<String> {
     out
 }
 
+/// Whether a drawing answer draws parts Java keeps in buffers of their own (two or more
+/// `CachedBuffers.` parts, each a `SuperByteBuffer` with its own turns) through one pose,
+/// turning it and never pushing: the first part's turns then move the rest.
+fn shares_turns_between_parts(function: &str, java: &str) -> bool {
+    if java.matches("CachedBuffers.").count() < 2 {
+        return false;
+    }
+    let code: String = function
+        .lines()
+        .map(|l| l.split("//").next().unwrap_or(""))
+        .collect::<Vec<_>>()
+        .join(
+            "
+",
+        );
+    let turns = [
+        "draw.rotate_about(",
+        "draw.rotate(",
+        "draw.translate(",
+        "draw.scale(",
+    ]
+    .iter()
+    .any(|t| code.contains(t));
+    let parts = code.matches("draw.model(").count() + code.matches("draw.block(").count();
+    turns && parts >= 1 && !code.contains("draw.push()")
+}
+
 /// Whether a drawing answer turns about a pivot other than the origin after it moved
 /// the origin, where the Java turns about the moved origin (`mulPose`) and never centred
 /// (`rotateCentered`, `center()`): the pivot is then counted twice.
@@ -3753,6 +3791,29 @@ impl State {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parts_drawn_from_their_own_buffers_keep_their_own_turns() {
+        let java = "SuperByteBuffer a = CachedBuffers.partial(SHAFT, s); SuperByteBuffer b = CachedBuffers.partialFacing(FAN, s, d);";
+        let shared = "fn r(draw: &mut Draw) {
+    draw.rotate_about([0.0, 1.0, 0.0], 30.0, [0.5; 3]);
+    draw.model(\"a\", 0xFFFFFF);
+    draw.rotate_about([0.0, 0.0, 1.0], 60.0, [0.5; 3]);
+    draw.model(\"b\", 0xFFFFFF);
+}";
+        assert!(shares_turns_between_parts(shared, java));
+        let own = shared.replace(
+            "    draw.rotate_about([0.0, 1.0",
+            "    draw.push();
+    draw.rotate_about([0.0, 1.0",
+        );
+        assert!(!shares_turns_between_parts(&own, java));
+        // One buffer only: nothing to keep apart.
+        assert!(!shares_turns_between_parts(
+            shared,
+            "CachedBuffers.partial(SHAFT, s)"
+        ));
+    }
 
     #[test]
     fn answers_naming_lang_keys_the_mod_lacks_go_back() {

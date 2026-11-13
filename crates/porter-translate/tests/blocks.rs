@@ -271,7 +271,7 @@ fn ports_a_block_entity_renderer() {
     assert!(b.wired.contains_key("block_entity_update_tag"));
     let runtime = &b.files["mixins/grind/runtime.rs"];
     assert!(runtime.contains(
-        "/// TODO: port the `submit` (or `render`) of `net.grind.client.CrusherRenderer`.\npub fn render_crusher(state: &Crusher, frame: &Frame, draw: &mut Draw)"
+        "/// TODO: port the `submit` (or `render`) of `net.grind.client.CrusherRenderer` for a `net.grind.machine.CrusherBlockEntity`, whose own methods it calls.\npub fn render_crusher(state: &Crusher, frame: &Frame, draw: &mut Draw)"
     ));
     assert!(
         runtime.contains("\"grind:crusher\" => render_crusher(&Crusher::load(get), frame, draw),")

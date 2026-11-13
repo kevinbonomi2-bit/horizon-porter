@@ -31,6 +31,9 @@ pub struct BlockEntity {
     pub ticks: bool,
     /// Its Java renderer (`BlockEntityRenderer`), fully qualified, when it has one.
     pub renderer: Option<String>,
+    /// The mod's classes its renderer extends, nearest first (`ShaftRenderer`,
+    /// `KineticBlockEntityRenderer`): what its `super.renderSafe(..)` draws is there.
+    pub renderer_above: Vec<String>,
     /// Its fluid tanks' capacities, in millibuckets.
     pub tanks: Vec<i32>,
     /// Its energy buffer: capacity, most one insert moves, most one extract moves.
@@ -569,6 +572,9 @@ pub enum Kind {
     /// An `ItemStack` (a pot's meal container, a shell's flower): the item's id,
     /// empty for `ItemStack.EMPTY`.
     Item,
+    /// Catnip's `LerpedFloat` (a gauge's needle, an arm's joints, a clock's hands): a
+    /// value animated towards a target, kept whole (`LerpedFloat` in runtime.rs).
+    Lerped,
 }
 
 impl Kind {
@@ -590,6 +596,7 @@ impl Kind {
             // that finds the recipe can't hand it to the one that applies it.
             "Recipe" | "Recipe<?>" | "RecipeHolder<?>" => Kind::Text,
             "ItemStack" | "ItemStackTemplate" => Kind::Item,
+            "LerpedFloat" => Kind::Lerped,
             _ => return None,
         })
     }
@@ -621,6 +628,7 @@ impl Kind {
             Kind::Float => "f32",
             Kind::Double => "f64",
             Kind::Text | Kind::Item => "String",
+            Kind::Lerped => "LerpedFloat",
         }
     }
 
@@ -633,7 +641,7 @@ impl Kind {
             Kind::Long => "Long",
             Kind::Float => "Float",
             Kind::Double => "Double",
-            Kind::Text | Kind::Item => "Text",
+            Kind::Text | Kind::Item | Kind::Lerped => "Text",
         }
     }
 }
@@ -773,6 +781,7 @@ pub fn find(scan: &ModScan, ns: &str) -> Vec<BlockEntity> {
             fields: Vec::new(),
             ticks: false,
             renderer: None,
+            renderer_above: Vec::new(),
             tanks: Vec::new(),
             energy: None,
             items: 0,
@@ -855,6 +864,22 @@ pub fn find(scan: &ModScan, ns: &str) -> Vec<BlockEntity> {
                 if let (Some(found), None) = (of_name.next(), of_name.next()) {
                     be.renderer = Some(found.name.clone());
                 }
+            }
+            // The renderer's own classes above it, which its `super` calls draw from.
+            let mut parent = be
+                .renderer
+                .as_deref()
+                .and_then(|r| scan.classes.iter().find(|c| c.name == r))
+                .and_then(|c| c.superclass.clone());
+            while let Some(name) = parent.take() {
+                let Some(c) = scan.classes.iter().find(|c| c.name == name) else {
+                    break;
+                };
+                if be.renderer_above.len() >= 3 {
+                    break;
+                }
+                be.renderer_above.push(c.name.clone());
+                parent = c.superclass.clone();
             }
             be.neighbours |= class
                 .references
@@ -1277,6 +1302,26 @@ fn state_of(scan: &ModScan, class: &ClassInfo, be: &mut BlockEntity) {
             f.name.clone()
         };
         names.insert(name.clone());
+        // A `LerpedFloat` the constructor makes and starts.
+        let lerped_init = (kind == Kind::Lerped)
+            .then(|| {
+                let source =
+                    std::fs::read_to_string(std::path::Path::new(&scan.input).join(&class.path))
+                        .unwrap_or_default();
+                let made = source
+                    .find(&format!("{} = LerpedFloat.", f.name))
+                    .map(|at| source[at..].split(';').next().unwrap_or("").to_string())
+                    .unwrap_or_default();
+                let then = source
+                    .find(&format!("{}.startWithValue(", f.name))
+                    .map(|at| source[at..].split(';').next().unwrap_or("").to_string())
+                    .unwrap_or_default();
+                lerped_start(
+                    &format!("{} {made}", f.init.as_deref().unwrap_or("")),
+                    &then,
+                )
+            })
+            .flatten();
         be.fields.push(StateField {
             name,
             kind,
@@ -1287,11 +1332,12 @@ fn state_of(scan: &ModScan, class: &ClassInfo, be: &mut BlockEntity) {
             } else {
                 format!("{} {}", f.ty, f.name)
             },
-            init: f
-                .init
-                .as_deref()
-                .filter(|_| !is_enum)
-                .and_then(|i| initial(kind, i, class)),
+            init: lerped_init.or_else(|| {
+                f.init
+                    .as_deref()
+                    .filter(|_| !is_enum)
+                    .and_then(|i| initial(kind, i, class))
+            }),
             from: class.name.clone(),
         });
     }
@@ -1364,7 +1410,42 @@ fn initial(kind: Kind, java: &str, class: &ClassInfo) -> Option<String> {
                 .then(|| format!("{inner:?}.to_string()"))
         }
         Kind::Item => None,
+        // `LerpedFloat.angular().startWithValue(135)`.
+        Kind::Lerped => lerped_start(text, ""),
     }
+}
+
+/// A `LerpedFloat`'s first state, as Rust: `LerpedFloat::angular().with_value(135.0)`,
+/// from how it is made (`LerpedFloat.angular()`, `.startWithValue(135)`, in `made`) and
+/// what starts it later (`startWithValue(..)` statements, in `then`). None for a plain
+/// linear one at 0.
+fn lerped_start(made: &str, then: &str) -> Option<String> {
+    let angular = made.contains("angular()");
+    let mut value = None;
+    for text in [made, then] {
+        if let Some(at) = text.find("startWithValue(") {
+            let inner = text[at + "startWithValue(".len()..]
+                .split(')')
+                .next()
+                .unwrap_or("");
+            let digits = inner.trim().trim_end_matches(['f', 'F', 'd', 'D']);
+            if let Ok(v) = digits.parse::<f64>() {
+                value = Some(v);
+            }
+        }
+    }
+    if !angular && value.is_none_or(|v| v == 0.0) {
+        return None;
+    }
+    let base = if angular {
+        "LerpedFloat::angular()"
+    } else {
+        "LerpedFloat::linear()"
+    };
+    Some(match value {
+        Some(v) if v != 0.0 => format!("{base}.with_value({v:?})"),
+        _ => base.to_string(),
+    })
 }
 
 /// Whether `ty` is an enum of the mod's own: one of its classes, or one nested in
@@ -1612,6 +1693,172 @@ pub fn text_pos(text: &str) -> Option<[i32; 3]> {
     }
 }
 
+/// How a `LerpedFloat` chases its target (Catnip's `LerpedFloat.Chaser`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Chaser {
+    /// `Chaser.IDLE`, or none set: it stays where it is.
+    #[default]
+    Idle,
+    /// `Chaser.EXP`: a share (`speed`) of the way left each tick.
+    Exp,
+    /// `Chaser.LINEAR`: at most `speed` each tick.
+    Linear,
+}
+
+/// Catnip's `LerpedFloat`: a value animated towards a target (a gauge's needle, an arm's
+/// joints, a clock's hands), as Create keeps one. Its methods are the Java's:
+/// `LerpedFloat.angular()` is `LerpedFloat::angular()`, `.startWithValue(v)` is
+/// `.start_with_value(v)` (or `.with_value(v)` where it is made), `.chase(t, s, Chaser.EXP)`
+/// is `.chase(t, s, Chaser::Exp)`, `.tickChaser()` is `.tick_chaser()`,
+/// `.getValue(partialTicks)` is `.get_value(frame.partial)`, `.getValue()` is `.value()`.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct LerpedFloat {
+    pub previous: f32,
+    pub value: f32,
+    pub target: f32,
+    pub speed: f32,
+    pub chaser: Chaser,
+    /// `angular()`: it turns the short way round, in degrees.
+    pub angular: bool,
+}
+
+impl LerpedFloat {
+    /// `LerpedFloat.linear()`.
+    pub fn linear() -> Self {
+        Self::default()
+    }
+
+    /// `LerpedFloat.angular()`.
+    pub fn angular() -> Self {
+        Self { angular: true, ..Self::default() }
+    }
+
+    /// `.startWithValue(v)` where it is made.
+    pub fn with_value(mut self, v: f64) -> Self {
+        self.start_with_value(v);
+        self
+    }
+
+    /// `startWithValue(v)`: there now, with nothing to chase.
+    pub fn start_with_value(&mut self, v: f64) {
+        let v = v as f32;
+        self.previous = v;
+        self.value = v;
+        self.target = v;
+    }
+
+    /// `chase(target, speed, chaser)`.
+    pub fn chase(&mut self, target: f64, speed: f64, chaser: Chaser) {
+        self.update_chase_target(target as f32);
+        self.speed = speed as f32;
+        self.chaser = chaser;
+    }
+
+    /// `updateChaseTarget(target)`: an angular one goes the short way round.
+    pub fn update_chase_target(&mut self, target: f32) {
+        self.target = if self.angular { self.value + shortest_angle_diff(self.value, target) } else { target };
+    }
+
+    /// `updateChaseSpeed(speed)`: whether it changed.
+    pub fn update_chase_speed(&mut self, speed: f64) -> bool {
+        let before = self.speed;
+        self.speed = speed as f32;
+        (before - self.speed).abs() >= 1e-5
+    }
+
+    /// `tickChaser()`: one tick nearer its target.
+    pub fn tick_chaser(&mut self) {
+        self.previous = self.value;
+        if self.chaser == Chaser::Idle {
+            return;
+        }
+        if (self.value - self.target).abs() < 1e-5 {
+            self.value = self.target;
+            return;
+        }
+        let (c, s, t) = (self.value, self.speed, self.target);
+        self.value = match self.chaser {
+            Chaser::Exp => c + (t - c) * s,
+            Chaser::Linear => c + (t - c).clamp(-s, s),
+            Chaser::Idle => c,
+        };
+    }
+
+    /// `setValue(v)`: there now, from where it was.
+    pub fn set_value(&mut self, v: f64) {
+        self.previous = self.value;
+        self.value = v as f32;
+    }
+
+    /// `setValueNoUpdate(v)`.
+    pub fn set_value_no_update(&mut self, v: f64) {
+        self.value = v as f32;
+    }
+
+    /// `getValue()`: where it is.
+    pub fn value(&self) -> f32 {
+        self.value
+    }
+
+    /// `getValue(partialTicks)`: between where it was and is, to draw it smoothly.
+    pub fn get_value(&self, partial: f32) -> f32 {
+        if self.angular {
+            self.previous + shortest_angle_diff(self.previous, self.value) * partial
+        } else {
+            self.previous + (self.value - self.previous) * partial
+        }
+    }
+
+    /// `getChaseTarget()`.
+    pub fn chase_target(&self) -> f32 {
+        self.target
+    }
+
+    /// `settled()`: not moving, and at its target.
+    pub fn settled(&self) -> bool {
+        (self.previous - self.value).abs() < 1e-5
+            && (self.chaser == Chaser::Idle || (self.value - self.target).abs() < 1e-5)
+    }
+
+    /// How it is kept in a block entity's saved values.
+    pub fn to_text(&self) -> String {
+        let chaser = match self.chaser {
+            Chaser::Idle => 0,
+            Chaser::Exp => 1,
+            Chaser::Linear => 2,
+        };
+        format!(
+            "{} {} {} {} {chaser} {}",
+            self.previous, self.value, self.target, self.speed, u8::from(self.angular)
+        )
+    }
+
+    /// One `to_text` wrote; the default where it isn't one.
+    pub fn from_text(text: &str) -> Self {
+        let v: Vec<f32> = text.split_whitespace().filter_map(|x| x.parse().ok()).collect();
+        if v.len() < 6 {
+            return Self::default();
+        }
+        Self {
+            previous: v[0],
+            value: v[1],
+            target: v[2],
+            speed: v[3],
+            chaser: match v[4] as i32 {
+                1 => Chaser::Exp,
+                2 => Chaser::Linear,
+                _ => Chaser::Idle,
+            },
+            angular: v[5] != 0.0,
+        }
+    }
+}
+
+/// `AngleHelper.getShortestAngleDiff(current, target)`, in degrees.
+pub fn shortest_angle_diff(current: f32, target: f32) -> f32 {
+    ((((target - current) % 360.0) + 540.0) % 360.0) - 180.0
+}
+
 /// The mod's blocks with a block entity: (block, block entity id, whether it ticks).
 pub const BLOCK_ENTITIES: &[(&str, &str, bool)] = &[
 "#,
@@ -1680,6 +1927,10 @@ pub const BLOCK_ENTITIES: &[(&str, &str, bool)] = &[
                 )
             } else if f.kind == Kind::Item {
                 format!("{how}; the item's id (`minecraft:bowl`), empty for none")
+            } else if f.kind == Kind::Lerped {
+                format!(
+                    "{how}; a `LerpedFloat` as Catnip's: `tick_chaser()` each tick, `chase(..)`, `get_value(frame.partial)` to draw it"
+                )
             } else {
                 how
             };
@@ -1732,6 +1983,7 @@ pub const BLOCK_ENTITIES: &[(&str, &str, bool)] = &[
             for f in &be.fields {
                 let set = match f.kind {
                     Kind::Bool => format!("state.{} = v != 0", f.name),
+                    Kind::Lerped => format!("state.{} = LerpedFloat::from_text(&v)", f.name),
                     _ => format!("state.{} = v", f.name),
                 };
                 let _ = writeln!(
@@ -1748,6 +2000,7 @@ pub const BLOCK_ENTITIES: &[(&str, &str, bool)] = &[
             let value = match f.kind {
                 Kind::Bool => format!("i8::from(self.{})", f.name),
                 Kind::Text | Kind::Item => format!("self.{}.clone()", f.name),
+                Kind::Lerped => format!("self.{}.to_text()", f.name),
                 _ => format!("self.{}", f.name),
             };
             let _ = writeln!(
@@ -1877,7 +2130,7 @@ pub const BLOCK_ENTITIES: &[(&str, &str, bool)] = &[
                 };
                 let _ = write!(
                     r,
-                    "\n/// A server tick of the `{id}` block entity at `pos`, 20 a second. `machine` has\n/// {has}{no_slots}. What the tick changes in them and in `state` is\n/// kept.{above_doc}{extras}\n///\n/// TODO: port the tick of {tick_java}{extras_todo}.\npub fn tick_{snake}(pos: [i32; 3], state: &mut {ty}, machine: &mut Machine<'_>) {{\n    let _ = (pos, state, machine);\n}}\n",
+                    "\n/// A server tick of the `{id}` block entity at `pos`, 20 a second. `machine` has\n/// {has}{no_slots}. What the tick changes in them and in `state` is\n/// kept.{above_doc}{extras}\n///\n/// Java ticks a block entity on the client too; here it ticks once, on the server, and its\n/// state goes to the clients. So what its `level.isClientSide()` side does to its state is\n/// done here as well (a clock's hands chased, an animation counted on): only what is the\n/// client's alone is left (particles and sounds go through `machine`).\n///\n/// TODO: port the tick of {tick_java}{extras_todo}.\npub fn tick_{snake}(pos: [i32; 3], state: &mut {ty}, machine: &mut Machine<'_>) {{\n    let _ = (pos, state, machine);\n}}\n",
                     id = be.id,
                     has = has.join("; "),
                     no_slots = if be.items == 0 {
@@ -2026,9 +2279,31 @@ pub const BLOCK_ENTITIES: &[(&str, &str, bool)] = &[
         for be in &drawn {
             let _ = write!(
                 r,
-                "\n/// Draws block entity `{id}` on the client, once a frame while it is in view, from\n/// what the server sent of its state. `draw` starts at the block's lower north-west\n/// corner, in blocks; `frame` has the partial tick and game time to animate with.\n/// Draw nothing to leave just the block's own model.\n///\n/// TODO: port the `submit` (or `render`) of `{java}`.\npub fn render_{snake}(state: &{ty}, frame: &Frame, draw: &mut Draw) {{\n    let _ = (state, frame, draw);\n}}\n",
+                "\n/// Draws block entity `{id}` on the client, once a frame while it is in view, from\n/// what the server sent of its state. `draw` starts at the block's lower north-west\n/// corner, in blocks; `frame` has the partial tick and game time to animate with.\n/// Draw nothing to leave just the block's own model.\n///\n/// TODO: port the `submit` (or `render`) of `{java}`{above}{drawing}.\npub fn render_{snake}(state: &{ty}, frame: &Frame, draw: &mut Draw) {{\n    let _ = (state, frame, draw);\n}}\n",
                 id = be.id,
                 java = be.renderer.as_deref().unwrap_or_default(),
+                // The classes its `super` calls draw from, and the block entity's own
+                // class, whose methods it calls (`be.getRenderedHandle()`,
+                // `be.shouldRenderShaft()`) and which may override the shared renderer's.
+                above = if be.renderer_above.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        " (with what `{}` above it draw{})",
+                        be.renderer_above.join("`, `"),
+                        if be.renderer_above.len() == 1 {
+                            "s"
+                        } else {
+                            ""
+                        }
+                    )
+                },
+                drawing = match &be.class {
+                    Some(c) if be.renderer.as_deref().is_some_and(|r| r.contains('.')) => {
+                        format!(" for a `{c}`, whose own methods it calls")
+                    }
+                    _ => String::new(),
+                },
                 snake = be.snake,
                 ty = be.rust
             );
@@ -2400,7 +2675,11 @@ pub struct Draw {
 }
 
 impl Draw {
-    /// `pose.pushPose()`.
+    /// `pose.pushPose()`. Also round each part Java draws from its own buffer
+    /// (`CachedBuffers.partial(..)`, `partialFacing`, `block`: a `SuperByteBuffer`, which
+    /// carries its own turns): `push()`, that part's turns, its `model`, `pop()`. Without
+    /// them one part's turns move every part drawn after it (a fan's blades spun off their
+    /// axis by the shaft's turns).
     pub fn push(&mut self) {
         self.ops.push(DrawOp::Push);
     }

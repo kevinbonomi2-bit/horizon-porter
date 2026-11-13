@@ -170,6 +170,9 @@ fn value(kind: Kind, is_final: bool, init: Option<&str>) -> Value {
         Kind::Item => Value::LeftOut {
             why: "an item stack".into(),
         },
+        Kind::Lerped => Value::LeftOut {
+            why: "an animated value (`LerpedFloat`)".into(),
+        },
         Kind::Float => Value::Locked { ty: "f32", literal },
         Kind::Double => Value::Locked { ty: "f64", literal },
         Kind::Text => {
