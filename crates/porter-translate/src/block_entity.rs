@@ -2401,11 +2401,15 @@ impl Draw {
     pub fn translate(&mut self, by: [f32; 3]) {
         self.ops.push(DrawOp::Translate(by));
     }
-    /// `pose.mulPose(Axis.YP.rotationDegrees(d))` is `rotate([0.0, 1.0, 0.0], d)`.
+    /// `pose.mulPose(Axis.YP.rotationDegrees(d))` is `rotate([0.0, 1.0, 0.0], d)`: about
+    /// the pose's origin as it is now (after a `translate`, where that moved it).
     pub fn rotate(&mut self, axis: [f32; 3], degrees: f32) {
         self.rotate_about(axis, degrees, [0.0; 3]);
     }
-    /// A turn through `pivot`: `[0.5; 3]` is the block's centre.
+    /// A turn through `pivot`, counted from the pose's origin as it is now: `[0.5; 3]` is
+    /// the block's centre while nothing has moved the origin. It is TransformStack's
+    /// `rotateCentered` (and `center()`, a turn, `uncenter()`); after `translate([0.5, ..])`
+    /// a turn Java makes with `mulPose` is `rotate`, about the origin it moved to.
     ///
     /// As with a `PoseStack`, the turn made last reaches the model first, and each
     /// later one is about the axes the earlier ones left. So where Java turns a model

@@ -45,6 +45,9 @@ pub struct Options {
     /// In a dry run: ask the model how many tokens each prompt is (the Claude API
     /// counts for free) rather than working it out from its length.
     pub count: bool,
+    /// How many functions are asked at once. Answers are still put in the file and
+    /// tested one at a time; the model's time to answer is what runs side by side.
+    pub jobs: usize,
 }
 
 impl Default for Options {
@@ -56,6 +59,7 @@ impl Default for Options {
             dry_run: false,
             refresh: false,
             count: false,
+            jobs: 1,
         }
     }
 }
@@ -582,8 +586,14 @@ pub fn translate(
     scan: &ModScan,
     model: &dyn Model,
     opts: &Options,
-    mut progress: impl FnMut(&str),
+    progress: impl FnMut(&str) + Send,
 ) -> Result<Vec<Outcome>> {
+    let progress = std::sync::Mutex::new(progress);
+    let say = |line: &str| {
+        if let Ok(mut p) = progress.lock() {
+            p(line);
+        }
+    };
     let mut work = pending(dir)?;
     if opts.refresh {
         work.extend(outdated(dir)?);
@@ -606,7 +616,7 @@ pub fn translate(
     }
     let cargo = dir.join("Cargo.toml").is_file();
     if !opts.dry_run && cargo && work.iter().any(|u| u.kind == Kind::Runtime) {
-        progress("Checking that the mod's tests pass before translating");
+        say("Checking that the mod's tests pass before translating");
         if let Err(errors) = cargo_test(dir) {
             bail!(
                 "`cargo test` fails in {} before anything is translated; fix that first:\n{}",
@@ -616,24 +626,21 @@ pub fn translate(
         }
     }
 
-    let mut state = State::load(dir);
-    let mut out = Vec::new();
-    let mut n = 0;
-    while n < work.len() {
-        let unit = &work[n].clone();
-        n += 1;
-        progress(&format!(
-            "[{}/{}] {} ({})",
-            n,
-            work.len(),
-            unit.function,
-            unit.file
-        ));
-        let prompt = prompt(dir, scan, unit)?;
-        for m in &prompt.notes {
-            progress(&format!("  {m}"));
-        }
-        if opts.dry_run {
+    // A dry run: each prompt, one after the other.
+    if opts.dry_run {
+        let mut out = Vec::new();
+        for (n, unit) in work.iter().enumerate() {
+            say(&format!(
+                "[{}/{}] {} ({})",
+                n + 1,
+                work.len(),
+                unit.function,
+                unit.file
+            ));
+            let prompt = prompt(dir, scan, unit)?;
+            for m in &prompt.notes {
+                say(&format!("  {m}"));
+            }
             let tokens = if opts.count {
                 model.count(SYSTEM, &prompt.shared, &prompt.text)?
             } else {
@@ -655,41 +662,148 @@ pub fn translate(
                 cached_tokens: 0,
                 dollars: None,
             });
-            continue;
         }
-        let outcome = translate_one(dir, unit, &prompt, model, opts, cargo, &mut progress);
-        progress(&format!("  {}", describe(&outcome.status)));
-        if let Some(cost) = spent(&outcome) {
-            progress(&format!("  {cost}"));
-        }
-        let stop = matches!(outcome.status, Status::NoAnswer(_));
-        // A function of the mod it calls that is still to port (a question to a block, a
-        // helper over block entities, a tick it shares with others) does nothing until it
-        // is: ported too, though `--only` didn't name it.
-        if matches!(outcome.status, Status::Ported | Status::Unchecked) && !rest.is_empty() {
-            let file = fs::read_to_string(dir.join(&unit.file)).unwrap_or_default();
-            let body = units::function_source(&file, &unit.function).unwrap_or_default();
-            let (called, left): (Vec<Unit>, Vec<Unit>) = rest
-                .into_iter()
-                .partition(|u| u.file == unit.file && calls(&body, &u.function));
-            rest = left;
-            for u in called {
-                progress(&format!(
-                    "  it calls `{}`, which isn't ported yet: porting that too",
-                    u.function
-                ));
-                work.push(u);
-            }
-        }
-        state.record(&outcome, &model.name());
-        state.save(dir)?;
-        out.push(outcome);
-        // Every other function would get the same non-answer.
-        if stop {
-            break;
-        }
+        return Ok(out);
     }
-    Ok(out)
+
+    // The work, shared by `opts.jobs` workers. Each asks the model for one function at a
+    // time; putting an answer in the file and testing it holds `file`, so the file is
+    // always one that passes its tests between two of them.
+    struct Shared {
+        work: std::collections::VecDeque<Unit>,
+        rest: Vec<Unit>,
+        total: usize,
+        started: usize,
+        busy: usize,
+        state: State,
+        out: Vec<Outcome>,
+        stop: bool,
+        error: Option<anyhow::Error>,
+    }
+    let shared = std::sync::Mutex::new(Shared {
+        total: work.len(),
+        work: work.into(),
+        rest,
+        started: 0,
+        busy: 0,
+        state: State::load(dir),
+        out: Vec::new(),
+        stop: false,
+        error: None,
+    });
+    let file = std::sync::Mutex::new(());
+    let jobs = opts.jobs.max(1);
+    std::thread::scope(|scope| {
+        for _ in 0..jobs {
+            scope.spawn(|| {
+                loop {
+                    let (unit, n, total) = {
+                        let mut sh = shared.lock().unwrap_or_else(|e| e.into_inner());
+                        if sh.stop {
+                            return;
+                        }
+                        match sh.work.pop_front() {
+                            Some(u) => {
+                                sh.started += 1;
+                                sh.busy += 1;
+                                (u, sh.started, sh.total)
+                            }
+                            // Another worker may yet add what its function calls.
+                            None if sh.busy > 0 => {
+                                drop(sh);
+                                std::thread::sleep(std::time::Duration::from_millis(200));
+                                continue;
+                            }
+                            None => return,
+                        }
+                    };
+                    // With several at once, each line says whose it is.
+                    let tag = |line: &str| -> String {
+                        if jobs > 1 {
+                            format!("  {}: {}", unit.function, line.trim_start())
+                        } else {
+                            line.to_string()
+                        }
+                    };
+                    say(&format!("[{n}/{total}] {} ({})", unit.function, unit.file));
+                    let built = {
+                        let _f = file.lock().unwrap_or_else(|e| e.into_inner());
+                        prompt(dir, scan, &unit)
+                    };
+                    let prompt = match built {
+                        Ok(p) => p,
+                        Err(e) => {
+                            let mut sh = shared.lock().unwrap_or_else(|e| e.into_inner());
+                            sh.error.get_or_insert(e);
+                            sh.stop = true;
+                            sh.busy -= 1;
+                            return;
+                        }
+                    };
+                    for m in &prompt.notes {
+                        say(&tag(&format!("  {m}")));
+                    }
+                    let outcome = translate_one(
+                        dir,
+                        &unit,
+                        &prompt,
+                        model,
+                        opts,
+                        cargo,
+                        &file,
+                        &|line: &str| say(&tag(line)),
+                    );
+                    say(&tag(&format!("  {}", describe(&outcome.status))));
+                    if let Some(cost) = spent(&outcome) {
+                        say(&tag(&format!("  {cost}")));
+                    }
+                    let stop = matches!(outcome.status, Status::NoAnswer(_));
+                    // A function of the mod it calls that is still to port (a question to a
+                    // block, a helper over block entities, a tick it shares with others) does
+                    // nothing until it is: ported too, though `--only` didn't name it.
+                    let body = if matches!(outcome.status, Status::Ported | Status::Unchecked) {
+                        let _f = file.lock().unwrap_or_else(|e| e.into_inner());
+                        let text = fs::read_to_string(dir.join(&unit.file)).unwrap_or_default();
+                        units::function_source(&text, &unit.function).unwrap_or_default()
+                    } else {
+                        String::new()
+                    };
+                    let mut sh = shared.lock().unwrap_or_else(|e| e.into_inner());
+                    if !body.is_empty() && !sh.rest.is_empty() {
+                        let rest = std::mem::take(&mut sh.rest);
+                        let (called, left): (Vec<Unit>, Vec<Unit>) = rest
+                            .into_iter()
+                            .partition(|u| u.file == unit.file && calls(&body, &u.function));
+                        sh.rest = left;
+                        for u in called {
+                            say(&tag(&format!(
+                                "  it calls `{}`, which isn't ported yet: porting that too",
+                                u.function
+                            )));
+                            sh.total += 1;
+                            sh.work.push_back(u);
+                        }
+                    }
+                    sh.state.record(&outcome, &model.name());
+                    if let Err(e) = sh.state.save(dir) {
+                        sh.error.get_or_insert(e);
+                        sh.stop = true;
+                    }
+                    sh.out.push(outcome);
+                    sh.busy -= 1;
+                    // Every other function would get the same non-answer.
+                    if stop {
+                        sh.stop = true;
+                    }
+                }
+            });
+        }
+    });
+    let sh = shared.into_inner().unwrap_or_else(|e| e.into_inner());
+    if let Some(e) = sh.error {
+        return Err(e);
+    }
+    Ok(sh.out)
 }
 
 /// What a function's tries took, where the model says: `61,204 tokens in (23,000 of
@@ -732,6 +846,7 @@ pub fn describe(status: &Status) -> String {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn translate_one(
     dir: &Path,
     unit: &Unit,
@@ -739,7 +854,8 @@ fn translate_one(
     model: &dyn Model,
     opts: &Options,
     cargo: bool,
-    progress: &mut impl FnMut(&str),
+    file: &std::sync::Mutex<()>,
+    progress: &dyn Fn(&str),
 ) -> Outcome {
     let path = dir.join(&unit.file);
     let mut outcome = Outcome {
@@ -770,6 +886,7 @@ fn translate_one(
     let mut asked_shared = false;
     let mut asked_field = false;
     let mut asked_handed = false;
+    let mut asked_pivot = false;
     let mut gave_up = false;
     for attempt in 1..=opts.attempts.max(1) {
         outcome.attempts = attempt;
@@ -886,6 +1003,18 @@ fn translate_one(
             );
             continue;
         }
+        if !asked_pivot && pivots_after_moving(&function, &prompt.java) {
+            asked_pivot = true;
+            feedback = format!(
+                "Your last answer turns the model about a pivot (`rotate_about(.., [0.5, ..])`) after it has \
+                 moved the origin with `draw.translate(..)`. The pivot is counted from the origin as it is then, \
+                 so the turn throws the model aside (an item drawn far above a depot). Where the Java turns with \
+                 `ms.mulPose(..)` after its `translate`, that is `draw.rotate(axis, degrees)`, about the moved \
+                 origin; keep `rotate_about` for a turn Java makes centred from the block's corner \
+                 (`rotateCentered`). Your answer was:\n```rust\n{function}\n```"
+            );
+            continue;
+        }
         if !asked_shared && let Some(shared) = skips_its_shared_tick(&unit.comment, &function) {
             asked_shared = true;
             feedback = format!(
@@ -981,7 +1110,17 @@ fn translate_one(
             continue;
         }
         let comment = ported_comment(&unit.comment, &model.name());
-        let Some(updated) = units::replace_function(&original, &unit.function, &comment, &function)
+        // Into the file as it is now (other functions may have been ported meanwhile),
+        // tested, and taken out again if it fails: one answer at a time.
+        let _held = file.lock().unwrap_or_else(|e| e.into_inner());
+        let current = match fs::read_to_string(&path) {
+            Ok(s) => s,
+            Err(e) => {
+                outcome.status = Status::Failed(format!("reading {}: {e}", unit.file));
+                return outcome;
+            }
+        };
+        let Some(updated) = units::replace_function(&current, &unit.function, &comment, &function)
         else {
             outcome.status = Status::Failed("could not place the answer in the file".into());
             return outcome;
@@ -1000,7 +1139,8 @@ fn translate_one(
                 return outcome;
             }
             Err(errors) => {
-                let _ = fs::write(&path, &original);
+                let _ = fs::write(&path, &current);
+                drop(_held);
                 progress(&format!(
                     "  attempt {attempt} did not compile or pass its tests"
                 ));
@@ -1011,7 +1151,6 @@ fn translate_one(
             }
         }
     }
-    let _ = fs::write(&path, &original);
     outcome.status = Status::Failed(format!(
         "no version compiled and passed its tests in {} tries",
         outcome.attempts
@@ -1168,6 +1307,9 @@ pub struct Prompt {
     /// (`context.getClickedPos()`): an answer that only ever reads the block clicked
     /// is asked once whether it meant that.
     pub placed_at: bool,
+    /// The Java the function is ported from, with the classes shown beside it: what an
+    /// answer's checks compare it with.
+    pub java: String,
 }
 
 impl Prompt {
@@ -1728,6 +1870,7 @@ fn prompt_with(dir: &Path, scan: &ModScan, unit: &Unit, used_budget: usize) -> R
         .collect();
     out.models = models;
     out.placed_at = stub.contains("p: &Placement") && java_text.contains("getClickedPos()");
+    out.java = java_text;
     Ok(out)
 }
 
@@ -2422,6 +2565,11 @@ fn equivalents(java: &str, stub: &str) -> String {
         ),
         (
             "&mut Draw",
+            "mulPose(",
+            "`ms.mulPose(Axis.YP.rotationDegrees(a))` turns about the pose's origin as it is then: `draw.rotate([0.0, 1.0, 0.0], a)`. After `ms.translate(.5, .., .5)` that origin is no longer the block's corner, so a pivot of `[0.5; 3]` there would be counted from the moved origin and throw the model aside. `draw.rotate_about(axis, a, [0.5; 3])` is only for TransformStack's `rotateCentered` and `center()`..`uncenter()`, made from the block's corner",
+        ),
+        (
+            "&mut Draw",
             "AngleHelper.horizontalAngle(",
             "`AngleHelper.horizontalAngle(facing)` (Catnip) is south 0, west -90, north 180, east 90, up and down 0, in degrees about Y; `AngleHelper.verticalAngle(facing)` is up -90, down 90, the rest 0, about X",
         ),
@@ -2889,6 +3037,35 @@ fn static_receivers(java: &str) -> Vec<String> {
     out
 }
 
+/// Whether a drawing answer turns about a pivot other than the origin after it moved
+/// the origin, where the Java turns about the moved origin (`mulPose`) and never centred
+/// (`rotateCentered`, `center()`): the pivot is then counted twice.
+fn pivots_after_moving(function: &str, java: &str) -> bool {
+    if !function.contains("draw: &mut Draw")
+        || !java.contains("mulPose(")
+        || java.contains("rotateCentered")
+        || java.contains(".center()")
+    {
+        return false;
+    }
+    let Some(moved) = function.find("draw.translate(") else {
+        return false;
+    };
+    function[moved..]
+        .match_indices("rotate_about(")
+        .any(|(at, _)| {
+            // Its last argument, to the closing parenthesis.
+            let rest = &function[moved + at..];
+            let call = rest.split(';').next().unwrap_or(rest);
+            let pivot = call.rsplit(',').next().unwrap_or("").trim();
+            let pivot = pivot.trim_end_matches(')').trim();
+            !(pivot.is_empty()
+                || pivot == "[0.0; 3]"
+                || pivot == "[0.0, 0.0, 0.0]"
+                || pivot == "ORIGIN")
+        })
+}
+
 /// The shared tick a function's comment tells it to call (`let called =
 /// kinetic_block_entity_tick(pos, &mut base, ..)`, or `let mut called = ..` for the one
 /// above a shared tick) that its answer never calls.
@@ -2904,7 +3081,13 @@ fn skips_its_shared_tick(comment: &str, function: &str) -> Option<String> {
             (name.ends_with("_tick") && after[name.len()..].starts_with("(pos, &mut"))
                 .then_some(name)
         })
-        .find(|name| !function.contains(&format!("{name}(")))
+        .find(|name| {
+            // (In code: a `// Missing: ..` note that names it calls nothing.)
+            !function
+                .lines()
+                .map(|l| l.split("//").next().unwrap_or(l))
+                .any(|code| code.contains(&format!("{name}(")))
+        })
 }
 
 /// Whether a function's own body has a `return` that isn't its last statement: one
@@ -3838,6 +4021,17 @@ pub struct Gearbox {
             ),
             None
         );
+        // Named in a note is not called.
+        assert_eq!(
+            skips_its_shared_tick(
+                comment,
+                "pub fn tick_press() {
+    // Missing: basin_tick(pos, &mut base, &me, machine).
+}
+"
+            ),
+            Some("basin_tick".to_string())
+        );
         // A tick with none above it is asked for none.
         assert_eq!(
             skips_its_shared_tick("/// TODO: port the tick of `a.B`.\n", "pub fn t() {}\n"),
@@ -3910,6 +4104,26 @@ pub struct Basin {
             "fn t() {\n    // updateBasin is the basin tick's.\n}\n",
             "updateBasin"
         ));
+    }
+
+    #[test]
+    fn a_turn_about_a_pivot_after_moving_the_origin_is_noticed() {
+        let java = "ms.translate(.5f, 15 / 16f, .5f); ms.mulPose(Axis.XP.rotationDegrees(90));";
+        let wrong = "pub fn render_depot(state: &Depot, frame: &Frame, draw: &mut Draw) {\n    draw.translate([0.5, 15.0 / 16.0, 0.5]);\n    draw.rotate_about([1.0, 0.0, 0.0], 90.0, PIVOT);\n}\n";
+        assert!(pivots_after_moving(wrong, java));
+        let right = wrong.replace(
+            "rotate_about([1.0, 0.0, 0.0], 90.0, PIVOT)",
+            "rotate([1.0, 0.0, 0.0], 90.0)",
+        );
+        assert!(!pivots_after_moving(&right, java));
+        // Centred in the Java: a pivot is what it means.
+        assert!(!pivots_after_moving(
+            wrong,
+            "buffer.rotateCentered(a, Direction.UP);"
+        ));
+        // A pivot before any move is the block's centre, as it should be.
+        let before = "pub fn render_fan(state: &Fan, frame: &Frame, draw: &mut Draw) {\n    draw.rotate_about([0.0, 1.0, 0.0], 90.0, [0.5; 3]);\n    draw.translate([0.0, 0.1, 0.0]);\n}\n";
+        assert!(!pivots_after_moving(before, java));
     }
 
     #[test]

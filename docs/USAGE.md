@@ -229,7 +229,9 @@ fails keeps its old port. The app does this when you port a mod again.
 each ported function that couldn't do part of what its Java does, and what that part is.
 
 **What it costs.** `--dry-run` prints an estimate before anything is spent, and more
-than five functions need `--yes`; `--dry-run --count` has the Claude API count each
+than five functions need `--yes`. `--jobs 4` (the default) asks for four functions at once
+and still puts each answer in and tests it on its own: fewer on a free tier that allows few
+requests a minute. `--dry-run --count` has the Claude API count each
 prompt's tokens (free, and exact). Claude Haiku 5.5 is the default: an estimated $0.50
 for Farmer's Delight's 127 functions and $4 for Create's 700, one try each. After a
 run, `translate` prints what it spent, every request counted.

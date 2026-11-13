@@ -106,6 +106,10 @@ enum Command {
         /// Tries per function
         #[arg(long, default_value_t = 3)]
         attempts: usize,
+        /// How many functions to ask the model for at once (each answer is still put in and
+        /// tested one at a time). Fewer on a free tier with a low limit a minute
+        #[arg(long, default_value_t = 4)]
+        jobs: usize,
         /// List what would be translated and how big each prompt is; call no model
         #[arg(long)]
         dry_run: bool,
@@ -425,6 +429,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             only,
             limit,
             attempts,
+            jobs,
             dry_run,
             count,
             refresh,
@@ -453,6 +458,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 dry_run: true,
                 refresh,
                 count: count && dry_run,
+                jobs,
             };
             // What it would send, first (counted by the model itself when asked).
             let counter: Box<dyn porter_translate::ai::model::Model> = if opts.count {

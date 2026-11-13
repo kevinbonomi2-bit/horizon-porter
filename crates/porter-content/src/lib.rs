@@ -1570,6 +1570,18 @@ fn model_boxes(content: &Content, id: &str) -> Option<Vec<Box6>> {
         let (ns, path) = id.split_once(':')?;
         let (parent, elements) =
             match resource_json(content, &format!("assets/{ns}/models/{path}.json")) {
+                // A model of another format (NeoForge's `obj` loader: Create's train
+                // tracks): the bounds of its vertices, cut to the block. Without them the
+                // block has no shape at all, and can't be clicked or broken.
+                Some(j) if j["loader"].as_str().is_some_and(|l| l.ends_with("obj")) => {
+                    let file = j["model"].as_str()?;
+                    let (ons, opath) = file.split_once(':')?;
+                    return Some(
+                        obj_bounds(content, &format!("assets/{ons}/{opath}"))
+                            .into_iter()
+                            .collect(),
+                    );
+                }
                 Some(j) => {
                     let elements = j.get("elements").and_then(|e| e.as_array()).map(|a| {
                         a.iter()
@@ -1601,6 +1613,42 @@ fn model_boxes(content: &Content, id: &str) -> Option<Vec<Box6>> {
         id = model_id(&parent);
     }
     None
+}
+
+/// The bounds of an OBJ model's vertices (in blocks, as NeoForge reads them), cut to
+/// the block: None where the file isn't there or has no vertex inside the block.
+fn obj_bounds(content: &Content, path: &str) -> Option<Box6> {
+    let text = match content.files.get(path) {
+        Some(t) => t.clone(),
+        None => std::fs::read_to_string(content.copies.get(path)?).ok()?,
+    };
+    let mut lo = [f64::MAX; 3];
+    let mut hi = [f64::MIN; 3];
+    for line in text.lines() {
+        let Some(rest) = line.strip_prefix("v ") else {
+            continue;
+        };
+        let v: Vec<f64> = rest
+            .split_whitespace()
+            .filter_map(|x| x.parse().ok())
+            .collect();
+        if v.len() < 3 {
+            continue;
+        }
+        for i in 0..3 {
+            lo[i] = lo[i].min(v[i]);
+            hi[i] = hi[i].max(v[i]);
+        }
+    }
+    let b = [
+        lo[0].clamp(0.0, 1.0),
+        lo[1].clamp(0.0, 1.0),
+        lo[2].clamp(0.0, 1.0),
+        hi[0].clamp(0.0, 1.0),
+        hi[1].clamp(0.0, 1.0),
+        hi[2].clamp(0.0, 1.0),
+    ];
+    (b[3] > b[0] && b[4] > b[1] && b[5] > b[2]).then_some(b)
 }
 
 /// `b` turned as a blockstate variant turns its model: `x` degrees about the X
@@ -3615,6 +3663,28 @@ mod tests {
         // A whole block needs no shape.
         let cube = serde_json::json!({ "variants": { "": { "model": "minecraft:block/stone" } } });
         assert!(model_shapes(&content, &cube, &BTreeMap::new()).is_none());
+
+        // A model of NeoForge's `obj` loader (a train track) is shaped by its vertices,
+        // cut to the block, where it had no shape at all.
+        content.files.insert(
+            "assets/m/models/block/track.json".into(),
+            r#"{"loader":"neoforge:obj","model":"m:models/block/track.obj"}"#.into(),
+        );
+        content.files.insert(
+            "assets/m/models/block/track.obj".into(),
+            "o rail
+v -0.2 0.0 0.1
+v 1.4 0.1875 0.9
+vt 0 0
+"
+            .into(),
+        );
+        let track = serde_json::json!({ "variants": { "": { "model": "m:block/track" } } });
+        let (outline, _) = model_shapes(&content, &track, &BTreeMap::new()).unwrap();
+        assert_eq!(
+            outline["default"],
+            serde_json::json!([[0.0, 0.0, 0.1, 1.0, 0.1875, 0.9]])
+        );
     }
 
     #[test]

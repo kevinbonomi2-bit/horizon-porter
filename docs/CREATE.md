@@ -388,6 +388,57 @@ there took about a dollar of Claude Haiku in all, the dead ends included. Twenty
 of the port are still marked to be ported again with what the tool says now; none of the
 checks depends on them.
 
+### Every function translated (2026-11-13)
+
+Played by hand, the port had machines that placed one way only and had none of their moving
+parts: a fan without its blades, a saw without its blade, encased cogwheels without the cog,
+gearboxes and clutches without their shafts, a track that couldn't be broken. Behind it, 680 of
+the port's functions were still stubs: 93 renderers, 80 placements, 55 shapes, 96 ticks, 91
+clicks and the rest. They had been left because translating them one after another took a day
+and, at the old prices, $85.
+
+- **`translate --jobs N`** (4 by default) asks the model for several functions at once. Each
+  answer is still put in the file and tested on its own, so the file passes its tests between
+  any two of them. Six at a time, Create's 710 functions took about two hours.
+- Translated: 710 of them, for $7.30 of Claude Haiku. 27 are left: the model's answers to them
+  did nothing but say the Java isn't reachable (train screens and packets, the goggles' overlay,
+  copycats, a few renderers that only draw value boxes).
+- **Machines face the player** as in Java: a fan, saw, deployer, drill, piston or bearing placed
+  from the west faces west, from the north faces north (placed by hand through `horizon-ctl`).
+  A gearbox goes down upright, as in Java, where the wrench turns it: the wrench's use is ported
+  too, every block's own `onWrenched` and rotation with it.
+- **Moving parts are drawn**: shafts inside gearboxes, clutches and gearshifts, the cogs of the
+  encased cogwheels, fan blades, saws, the deployer's hand, the press and mixer heads, the
+  water wheels, the flywheel, gauges, the arm, bells and the rest of the renderers.
+- **The item on a depot sits on it.** Its renderer turned the item about the block's centre
+  after moving to the depot's top, so the turn threw it a block up. A turn Java makes with
+  `mulPose` after a `translate` is about the moved origin, and an answer that turns about the
+  centre there is sent back.
+- **A track can be clicked and broken.** Its models are NeoForge OBJ models, which have no
+  boxes for the porter to take a shape from, so the track had none. An OBJ model's shape is now
+  the bounds of its vertices, cut to the block.
+- **Answers that compile and do nothing are sent back** in more cases: a tick that names its
+  shared tick only in a `// Missing:` note, a renderer that turns about a pivot after moving.
+  The press's tick had been replaced by one that did the first; the checks caught it, and it
+  was translated again.
+
+All 29 checks pass on this build (native-66f3981-a7ceda70e323). `ai-test/create_gallery.py`
+photographs each of the 135 blocks with a block entity, powered where it turns, and puts the
+pictures in sheets of twelve; `ai-test/create_place.py` places blocks by hand from several sides.
+
+Still not there, by what it needs:
+
+- **The motor's speed, and every value Create sets in a box on a block** (a speed controller,
+  a sequenced gearshift, a funnel's filter count): Java opens a board on right click and you
+  drag to a value. Nothing of that is ported yet: it needs a client screen the porter makes from
+  Create's value settings, and a message back to the server.
+- **Contraptions**: pistons, bearings, pulleys, gantries and the rest move blocks as one
+  structure, an entity Horizon has nothing like. They place, turn and draw their parts, and move
+  nothing.
+- **Trains**: tracks place as straight pieces; curves, stations and trains need the same.
+- Smaller: the blaze in the blaze burner, the peculiar bell's bell, copycat blocks (drawn from
+  the block they copy), the ascending track's collision (a full block here, none in Java).
+
 ## Suggested order
 
 1. Catnip and Registrate shims, kinetic block entities, shafts, cogs and a hand crank:

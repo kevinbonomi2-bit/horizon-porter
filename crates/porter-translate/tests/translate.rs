@@ -1,8 +1,8 @@
 // The AI pass with a scripted model: the compile-and-fix loop, signature checks,
 // hook helpers, dry runs, resuming, and `port --force` keeping what was ported.
 
-use std::cell::RefCell;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex as RefCell;
 
 use anyhow::Result;
 use porter_translate::ai::{
@@ -32,11 +32,13 @@ impl Model for Scripted {
     }
     fn complete(&self, _system: &str, shared: &str, prompt: &str) -> Result<Reply> {
         self.prompts
-            .borrow_mut()
+            .lock()
+            .unwrap()
             .push(format!("{shared}\n{prompt}"));
         let text = self
             .answers
-            .borrow_mut()
+            .lock()
+            .unwrap()
             .pop()
             .unwrap_or_else(|| "no more answers".into());
         Ok(Reply {
@@ -100,7 +102,7 @@ fn ports_a_block_entity_tick_and_fixes_compile_errors() {
     assert_eq!(out[0].input_tokens, 200);
 
     // The first prompt had the Java; the second, the compiler's complaint.
-    let prompts = model.prompts.borrow();
+    let prompts = model.prompts.lock().unwrap();
     assert!(prompts[0].contains("public class CrankBlockEntity extends BlockEntity"));
     assert!(prompts[0].contains("pub struct Crank"));
     assert!(prompts[1].contains("spede"), "{}", prompts[1]);
@@ -145,7 +147,7 @@ fn an_answer_that_does_nothing_is_sent_back_and_never_replaces_a_port() {
     let out = ai::translate(&dir, &scan, &model, &opts, |_| {}).unwrap();
     assert_eq!(out[0].status, Status::Ported);
     assert_eq!(out[0].attempts, 2);
-    assert!(model.prompts.borrow()[1].contains("Your last answer does nothing"));
+    assert!(model.prompts.lock().unwrap()[1].contains("Your last answer does nothing"));
     let ported = std::fs::read_to_string(dir.join("mixins/demo/runtime.rs")).unwrap();
     assert!(ported.contains("state.turns += 1;"));
 
@@ -171,7 +173,7 @@ fn an_answer_that_does_nothing_is_sent_back_and_never_replaces_a_port() {
         "{:?}",
         out[0].status
     );
-    assert_eq!(model.prompts.borrow().len(), 2);
+    assert_eq!(model.prompts.lock().unwrap().len(), 2);
     let kept = std::fs::read_to_string(dir.join("mixins/demo/runtime.rs")).unwrap();
     assert_eq!(kept, marked);
     std::fs::remove_dir_all(&dir).ok();
@@ -224,7 +226,7 @@ pub fn tick_press(pos: [i32; 3], state: &mut Press, machine: &mut Machine<'_>) {
     };
     let out = ai::translate(&dir, &scan, &model, &opts, |_| {}).unwrap();
     assert_eq!(out[0].status, Status::Ported, "{:?}", out[0].status);
-    let prompts = model.prompts.borrow();
+    let prompts = model.prompts.lock().unwrap();
     let prompt = &prompts[0];
     // The class it gave code to, the class that calls it, and how to do that work here.
     assert!(prompt.contains("public class ProcessBehaviour"), "{prompt}");
@@ -271,7 +273,7 @@ fn leaves_a_function_as_it_was_when_no_answer_works() {
         out[0].status
     );
     assert_eq!(out[0].attempts, 3);
-    assert!(model.prompts.borrow()[1].contains("changed the function's signature"));
+    assert!(model.prompts.lock().unwrap()[1].contains("changed the function's signature"));
     let after = std::fs::read_to_string(dir.join("mixins/demo/runtime.rs")).unwrap();
     assert_eq!(before, after);
     std::fs::remove_dir_all(&dir).ok();
@@ -289,7 +291,7 @@ fn ports_a_hook_helper_from_its_mixin() {
     };
     let out = ai::translate(&dir, &scan, &model, &opts, |_| {}).unwrap();
     assert_eq!(out[0].status, Status::Unchecked);
-    let prompt = &model.prompts.borrow()[0];
+    let prompt = &model.prompts.lock().unwrap()[0];
     // The Mixin's source, the mod's module, and the game's functions.
     assert!(prompt.contains("public class ItemEntityMixin"));
     assert!(prompt.contains("Port the Mixin member `steadyview$countPickup`"));
@@ -319,7 +321,74 @@ fn a_dry_run_calls_nothing() {
         out.iter()
             .all(|o| matches!(o.status, Status::Planned { .. }))
     );
-    assert!(model.prompts.borrow().is_empty());
+    assert!(model.prompts.lock().unwrap().is_empty());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// A model that answers any function with its stub as given, marked: what several
+/// workers asking at once must each put in the file without losing another's.
+struct Echo;
+
+impl Model for Echo {
+    fn name(&self) -> String {
+        "echo".into()
+    }
+    fn complete(&self, _system: &str, _shared: &str, prompt: &str) -> Result<Reply> {
+        // The function to port is the first Rust block of the prompt: comment, then code.
+        let block = prompt
+            .split("```rust\n")
+            .nth(1)
+            .and_then(|b| b.split("```").next())
+            .unwrap_or_default();
+        let code: String = block
+            .lines()
+            .skip_while(|l| l.trim_start().starts_with("//"))
+            .map(|l| format!("{l}\n"))
+            .collect();
+        let marked = code.replacen('{', "{\n    // echoed\n", 1);
+        Ok(Reply {
+            text: format!("```rust\n{marked}```"),
+            ..Reply::default()
+        })
+    }
+}
+
+#[test]
+fn several_at_once_each_answer_is_put_in_and_tested() {
+    let (dir, scan) = ported("neoforge-press-demo", "jobs");
+    let before = ai::pending(&dir).unwrap();
+    let runtime = before
+        .iter()
+        .filter(|u| u.file.ends_with("runtime.rs"))
+        .count();
+    assert!(runtime >= 4, "{before:?}");
+    let opts = Options {
+        jobs: 4,
+        // runtime.rs's only: hook helpers are checked by a game build, not here.
+        only: Some(
+            before
+                .iter()
+                .filter(|u| u.file.ends_with("runtime.rs"))
+                .map(|u| u.function.clone())
+                .collect::<Vec<_>>()
+                .join(","),
+        ),
+        ..Default::default()
+    };
+    let out = ai::translate(&dir, &scan, &Echo, &opts, |_| {}).unwrap();
+    assert_eq!(out.len(), runtime);
+    assert!(out.iter().all(|o| o.status == Status::Ported), "{out:?}");
+    // All of them are in the file, which still passes its tests.
+    let text = std::fs::read_to_string(dir.join("mixins/stamp/runtime.rs")).unwrap();
+    assert_eq!(text.matches("// echoed").count(), runtime);
+    assert!(
+        ai::pending(&dir)
+            .unwrap()
+            .iter()
+            .all(|u| !u.file.ends_with("runtime.rs"))
+    );
+    let state = std::fs::read_to_string(dir.join(".porter/translate.json")).unwrap();
+    assert_eq!(state.matches("\"model\": \"echo\"").count(), runtime);
     std::fs::remove_dir_all(&dir).ok();
 }
 

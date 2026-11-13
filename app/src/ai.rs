@@ -353,6 +353,9 @@ pub async fn translate(
     let dir = ported_dir(&ported)?;
     let scan = ported_scan(&dir, &current)?;
     let choice = load_choice(&app);
+    let free_tier = choice.provider == FREE.0;
+    // (A model on this computer answers one at a time anyway.)
+    let free_tier = free_tier || choice.provider == "ollama";
     let model: Box<dyn model::Model + Send> = if choice.provider == "ollama" {
         Box::new(model::Ollama::new(Some(&choice.model)).map_err(|e| format!("{e:#}"))?)
     } else if choice.provider == FREE.0 {
@@ -380,6 +383,8 @@ pub async fn translate(
             model.as_ref(),
             &ai::Options {
                 refresh: true,
+                // Several functions asked at once; Gemini's free tier allows few a minute.
+                jobs: if free_tier { 2 } else { 4 },
                 ..ai::Options::default()
             },
             |line| {

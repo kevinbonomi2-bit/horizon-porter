@@ -93,8 +93,9 @@ impl Reply {
     }
 }
 
-/// Something that answers a prompt.
-pub trait Model {
+/// Something that answers a prompt. (Asked from several threads at once by `translate
+/// --jobs`.)
+pub trait Model: Send + Sync {
     /// How it is named in PORTING.md and the state file: `claude-opus-5-5`.
     fn name(&self) -> String;
     /// Answers `prompt`. `shared` comes first: the part every prompt of its kind
