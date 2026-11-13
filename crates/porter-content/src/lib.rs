@@ -465,7 +465,7 @@ pub fn generate_with(
                 || vanilla_block(&template).is_some_and(|v| {
                     v.properties
                         .iter()
-                        .any(|(k, vals)| *k == name && vals.iter().any(|x| *x == value))
+                        .any(|(k, vals)| *k == name && vals.contains(&value))
                 });
             if valid {
                 default_state.insert(name, value.into());
