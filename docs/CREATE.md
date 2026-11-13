@@ -557,11 +557,73 @@ fixed for every mod rather than for Create:
 Translated for this, with Claude Haiku: the wheel's and the controller's ticks ($0.08), then
 the controller's again once it could eject ($0.06).
 
-Still short: fluid pipes and brackets. Create draws a pipe's arms, rims, brackets and casing
-with a baked model of its own (`PipeAttachmentModel`, wrapping the block's model), which the
-porter doesn't port yet, so a pipe draws as its plain pieces and a bracket is saved but not
-drawn. A stressometer turns and passes on rotation, but reads 0: the network's stress isn't
-modelled yet.
+Still short then: pipes and brackets, and network stress (both done since, below).
+
+### Checked against real Create, every block (2026-11-13)
+
+Rather than fix what a player happens to notice, every block is now checked against real
+Create running beside the port. Real Create (6.0.11 on NeoForge 21.1.219, from its own Gradle
+setup with a JDK 21, all local in `C:/Users/kevin/create-ref`) runs a small harness of ours
+(`horizonref/HorizonRef.java` in a clone of the source): it makes a flat creative world,
+records every block's default state, shapes and block entity, places each block item in nine
+ways a player would (the floor from four sides, looking down, two walls, the ceiling, beside a
+shaft) and records the state it takes, stands every block in a grid with creative motors
+beside the kinetic ones and records its state, saved values and speed, photographs each
+(twice for the turning ones), right-clicks the 36 that open a menu and photographs the
+screen, then quits. The port runs the same through `horizon-ctl` (`ai-test/create_audit_*.py`,
+local): the same grid, motors, camera and placements. Create's own 64 game tests (`runGameTestServer`)
+all pass in real Create; 15 of them read as specs (`ai-test/create_gametests.py`) and are
+run in the port by placing their structures (`ai-test/create_gametests_run.py`).
+
+What the comparison found, and what the porter does now (all general):
+
+- **Default states** were the template's where Java's `StateDefinition.any()` decides: a
+  property no constructor sets starts at its first value (`true`, `x`, `floor`, `north` for
+  `FACING`, an enum's first constant), defaults merge down the class line, and a property
+  declared as another class's constant is that one. 507 of 513 default properties now match
+  Java (371 before); blocks turned by the motors at the wrong speed went from 26 to 1.
+- **Enum and direction properties** Java declares but the blockstate doesn't draw by (the
+  blaze burner's `blaze`, the controller's `facing`) are declared.
+- **Custom baked models** (`PipeAttachmentModel`, `BracketedKineticBlockModel`, belt, tank,
+  track, factory panel, girder, copycats) are drawn by functions translated from the class,
+  with the block entity: pipes draw their rims, connections and brackets. Part models named in
+  loops (`"fluid_pipe/" + type + "/" + d`, `color + "_valve_handle"`) are found as patterns.
+- **105 dyed blocks** (valve handles, sails, postboxes, table cloths, nixie tubes,
+  toolboxes, seats) had no class and no block entity: registrations made per dye colour are
+  expanded, and list constants (`DYED_VALVE_HANDLES.toArray()`) hold them. Dyed valve
+  handles draw.
+- **Kinetic networks** add up: Create's stress values come from the registrations
+  (`CStress.setImpact`), each member reports its part, and stressometers read the network
+  (a fan at 16 RPM: stress 32, as Java).
+- **Placements**: a block whose class extends one of the mod's with its own placement calls it
+  for `super` (encased cogwheels); shapes are the whole block where Java defines none.
+- **Item transport**: a tick reaches the containers beside it (`machine.container`,
+  `take_from`, `give_to`), and kept items keep their counts (chutes).
+
+Translated for this pass with Claude Haiku: about $0.75 in all.
+
+Still short, by what the audit lists:
+
+- **Menus**: none of Create's 12 container menus is ported (toolbox, postbox, frogport,
+  schematicannon, schematic table, redstone requester, filters, blueprint, linked
+  controller, schedule, stock keeper). Their layouts and inventories are Create's own
+  (`MenuBase`, compartments, ghost slots) and need a menu port of their own.
+- **Template properties** Java's block doesn't have (latches' `delay`/`locked` from a
+  repeater, a schematic table's `has_book`): Horizon's content format adds a block's
+  properties to its template's and can't take any away, so a better template is needed.
+- **Connected textures** (casings, pillars' `north`..`west`, tanks, girders), **track tilt**
+  and **copycats** change the block's own quads, which needs Horizon to let a mod change a
+  block's mesh.
+- **Blocks Java removes when alone** (a belt, a cart assembler off a rail) and **belt
+  funnels** that turn into funnels off a belt: their `updateShape`/`canSurvive`.
+- **Game tests**: 1 of 15 pass in the port. Item paths through smart chutes, depots, belts
+  and arms still break (a smart chute in a loaded test structure reads a signal it doesn't
+  have), and fan processing, compacting, deploying and sequenced assembly use recipe types
+  no machine of the port runs yet.
+- **Placing** still differs for some (bells' attachment, table cloths, ladders against
+  shafts), and Horizon shows its template's guess for a tick before the mod's placement.
+- Trains, contraptions and the 22 functions Haiku declines (trains' packets, the potato
+  cannon, goggles) are untouched.
 
 ## Suggested order
 
