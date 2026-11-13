@@ -2164,6 +2164,8 @@ impl mod_api::BlockEntityPart for PortedEntity {
                 // block entity may take it back in.)
                 // (Kinetic networks aren't kept on this route yet: a member sees none.)
                 runtime::Effect::Network { .. } => {}
+                // (Nor a container's slots taken from or given to on this route yet.)
+                runtime::Effect::TakeFrom { .. } | runtime::Effect::GiveTo { .. } => {}
                 runtime::Effect::Drop { item, count, at, motion, .. } => {
                     use mod_api::Tag;
                     let mut stack = mod_api::Compound::new();

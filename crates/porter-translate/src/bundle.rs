@@ -2458,6 +2458,28 @@ fn {id}_block_entity_tick(
         (totals.size > 0).then_some(totals)
     }};
     machine.networks = Some(&network_totals);
+    // The containers beside it, as their slots, read through the face that looks at it.
+    let container_at = |side: m::Side| -> Option<Vec<Option<m::Stack>>> {{
+        use horizon_core::geometry::Direction;
+        let [dx, dy, dz] = side.offset();
+        let next = [pos[0] + dx, pos[1] + dy, pos[2] + dz];
+        let face = match side {{
+            m::Side::Down => Direction::Up,
+            m::Side::Up => Direction::Down,
+            m::Side::North => Direction::South,
+            m::Side::South => Direction::North,
+            m::Side::West => Direction::East,
+            m::Side::East => Direction::West,
+        }};
+        let found = game.native_container_slots(&dimension_here, next, face)?;
+        Some(
+            found
+                .into_iter()
+                .map(|s| s.stack.as_ref().map(|st| m::Stack::new(&st.item, st.count)))
+                .collect(),
+        )
+    }};
+    machine.containers = Some(&container_at);
     // Its tanks and energy, as Horizon keeps them: `fluids` (a list of
     // `{{Fluid, Amount}}`) and the int `energy`.
     let storage = m::STORAGE.iter().find(|(id, _, _)| *id == entity.id);
@@ -2653,6 +2675,35 @@ fn {id}_block_entity_tick(
                         list.drain(..1024);
                     }}
                 }}
+            }}
+            m::Effect::TakeFrom {{ side, slot, count }} => {{
+                use horizon_core::geometry::Direction;
+                let [dx, dy, dz] = side.offset();
+                let next = [pos[0] + dx, pos[1] + dy, pos[2] + dz];
+                let face = match side {{
+                    m::Side::Down => Direction::Up,
+                    m::Side::Up => Direction::Down,
+                    m::Side::North => Direction::South,
+                    m::Side::South => Direction::North,
+                    m::Side::West => Direction::East,
+                    m::Side::East => Direction::West,
+                }};
+                let dimension = game.native_dimension().to_string();
+                let _ = game.native_extract_item(&dimension, next, face, slot, count);
+            }}
+            m::Effect::GiveTo {{ side, stack }} => {{
+                use horizon_core::geometry::Direction;
+                let [dx, dy, dz] = side.offset();
+                let next = [pos[0] + dx, pos[1] + dy, pos[2] + dz];
+                let face = match side {{
+                    m::Side::Down => Direction::Up,
+                    m::Side::Up => Direction::Down,
+                    m::Side::North => Direction::South,
+                    m::Side::South => Direction::North,
+                    m::Side::West => Direction::East,
+                    m::Side::East => Direction::West,
+                }};
+                let _ = game.native_insert_item(next, face, horizon_client::items::ItemStack::new(&stack.item, stack.count));
             }}
             m::Effect::Network {{ id, stress, capacity }} => {{
                 if let Ok(mut list) = NETWORKS.lock() {{

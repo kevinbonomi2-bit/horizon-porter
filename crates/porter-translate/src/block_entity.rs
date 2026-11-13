@@ -1331,6 +1331,35 @@ fn called_by(scan: &ModScan, entities: &mut [BlockEntity]) {
 
 /// Fills in the state fields and whether it ticks, from the Java class.
 fn state_of(scan: &ModScan, class: &ClassInfo, be: &mut BlockEntity) {
+    state_fields(scan, class, be);
+    // Each item it keeps in a field of its own (an arm's `heldItem`, a chute's `item`) is
+    // kept as its id; how many it holds is kept beside it, as the `ItemStack`'s count.
+    let mut i = 0;
+    while i < be.fields.len() {
+        let f = &be.fields[i];
+        if f.kind == Kind::Item {
+            let name = format!("{}_count", f.name.trim_start_matches("r#"));
+            let key = format!("{}.count", f.key);
+            if !be.fields.iter().any(|x| x.name == name || x.key == key) {
+                let count = StateField {
+                    name,
+                    kind: Kind::Int,
+                    key,
+                    saved_by_java: false,
+                    java: format!("{}: its count (`getCount()`), 0 with none", f.java),
+                    init: None,
+                    from: f.from.clone(),
+                };
+                be.fields.insert(i + 1, count);
+                i += 1;
+            }
+        }
+        i += 1;
+    }
+}
+
+/// The state fields of `class`, as `state_of` gives them before an item's count is added.
+fn state_fields(scan: &ModScan, class: &ClassInfo, be: &mut BlockEntity) {
     // A tick method (`tick`, `serverTick`), `updateServer` and the like, or a
     // ticking interface of the mod's own (`TickerUtil.TickableServer`).
     be.ticks = class.method_names.iter().any(|m| {

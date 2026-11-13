@@ -991,6 +991,16 @@ fn translate_one(
             );
             continue;
         }
+        if !asked_format && let Some((wrote, key)) = miscased_key(&function, &original) {
+            asked_format = true;
+            feedback = format!(
+                "Your last answer reads or writes a block entity's saved value under `\"{wrote}\"`, but the module                  keeps it under `\"{key}\"` (the state structs say which key each value is saved under; it is the                  Java's NBT key, not its field's name). Under `\"{wrote}\"` it is never found by the rest. Your answer                  was:
+```rust
+{function}
+```"
+            );
+            continue;
+        }
         if !asked_field && let Some(field) = leaves_out_for_a_field(&function, &original) {
             asked_field = true;
             feedback = format!(
@@ -2623,6 +2633,11 @@ fn equivalents(java: &str, stub: &str) -> String {
         ),
         (
             "Machine",
+            "grabCapability(",
+            "Create's `grabCapability(side)` (the container on a side) is `machine.container(side)`, its slots as they are: take from one with `machine.take_from(side, slot, count)` and keep what is taken in the state (its id, and its count beside it), and give with `machine.give_to(side, stack)` only what `machine.room_in(side, item)` says fits, keeping the rest",
+        ),
+        (
+            "Machine",
             "KineticNetwork",
             "Create's `KineticNetwork` (`getOrCreateNetwork()`, `network.updateStressFor`, `updateFromNetwork(capacity, stress, size)`) is kept by the module: each tick a member of a network (`network != 0`) reports its part with `machine.network_report(network, stress_applied * speed.abs(), capacity_added * generated_speed.abs())`, and `machine.network_totals(network)` gives the network's stress, capacity and size, which it takes as `updateFromNetwork` does (`overStressed` where the capacity is below the stress)",
         ),
@@ -3351,6 +3366,40 @@ fn returns_early(function: &str) -> bool {
 
 /// A format an answer gives three numbers that isn't `pos_text`'s: `{},{},{}`. A
 /// position saved that way is read by no other function.
+/// A saved key an answer reads or writes (`.get("bracket")`, `("bracket", Saved::..)`)
+/// that is a key of the module's in another letter case only (`Bracket`): (as written,
+/// the module's). None where every key it names is one of the module's, or none.
+fn miscased_key(function: &str, module: &str) -> Option<(String, String)> {
+    let keys: Vec<String> = entity_keys(module)
+        .into_iter()
+        .flat_map(|(_, _, _, keys)| keys)
+        .filter_map(|k| k.strip_prefix('`')?.split('`').next().map(str::to_string))
+        .collect();
+    let named = function
+        .match_indices(".get(\"")
+        .map(|(i, m)| i + m.len())
+        .chain(
+            function
+                .match_indices("(\"")
+                .map(|(i, m)| i + m.len())
+                .filter(|&i| {
+                    function[i..].find('"').is_some_and(|e| {
+                        function[i + e + 1..].trim_start().starts_with(", Saved::")
+                    })
+                }),
+        )
+        .filter_map(|start| function[start..].split('"').next());
+    for name in named {
+        if name.is_empty() || keys.iter().any(|k| k == name) {
+            continue;
+        }
+        if let Some(k) = keys.iter().find(|k| k.eq_ignore_ascii_case(name)) {
+            return Some((name.to_string(), k.clone()));
+        }
+    }
+    None
+}
+
 /// Whether an answer reads or writes a block state kept as text its own way (splits it at
 /// `[`, or builds `block key=value`) instead of with `text_state`/`state_text`.
 fn own_state_text(function: &str) -> bool {
@@ -4664,6 +4713,22 @@ pub struct Basin {
             Some("{},{},{}")
         );
         assert_eq!(own_position_text("let source = pos_text(from);"), None);
+        // A saved key in another letter case than the module keeps it under.
+        let module = "/// The state of a `create:fluid_pipe` block entity: `a.FluidPipeBlockEntity`'s fields, saved with the block.
+pub struct FluidPipe {
+    /// `BlockState bracket`, saved as `Bracket`.
+    pub bracket: String,
+}
+";
+        assert_eq!(
+            miscased_key(
+                "let _ = world.save_entity(pos, &[(\"bracket\", Saved::Text(t))]);",
+                module
+            ),
+            Some(("bracket".to_string(), "Bracket".to_string()))
+        );
+        assert_eq!(miscased_key("me.get(\"Bracket\")", module), None);
+        assert_eq!(miscased_key("me.get(\"other\")", module), None);
         // A block state kept as text: its own way, and the module's.
         assert!(own_state_text(
             "if let Some(Saved::Text(t)) = me.get(\"Bracket\") { t.split_once('['); }"

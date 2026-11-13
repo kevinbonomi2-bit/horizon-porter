@@ -466,6 +466,8 @@ pub struct Machine<'a> {
     /// The world's time of day in ticks (`level.getDayTime()`): it keeps counting past
     /// 24000 (noon is 6000), so take it modulo 24000 for the hour.
     pub day_time: i64,
+    /// The container on a side, as its slots: see `container`.
+    pub containers: Option<&'a dyn Fn(Side) -> Option<Vec<Option<Stack>>>>,
     /// A kinetic network's totals: see `network_totals`.
     pub networks: Option<&'a dyn Fn(i64) -> Option<NetworkTotals>>,
 }
@@ -494,6 +496,10 @@ pub enum Effect {
     },
     /// Its part in a kinetic network this tick: see `Machine::network_report`.
     Network { id: i64, stress: f32, capacity: f32 },
+    /// `count` taken from slot `slot` of the container on `side`: see `take_from`.
+    TakeFrom { side: Side, slot: usize, count: u32 },
+    /// `stack` put into the container on `side`: see `give_to`.
+    GiveTo { side: Side, stack: Stack },
     /// An item dropped into the world (`level.addFreshEntity(new ItemEntity(..))`,
     /// `Containers.dropItemStack`): a skillet's cooked food, a stove's.
     Drop {
@@ -758,6 +764,7 @@ impl<'a> Machine<'a> {
             mobs: None,
             day_time: 0,
             networks: None,
+            containers: None,
         }
     }
 
@@ -1012,6 +1019,47 @@ impl<'a> Machine<'a> {
     /// renderer (`level.sendBlockUpdated`, `sendData`).
     pub fn sync(&mut self) {
         self.sync = true;
+    }
+
+    /// The container on `side` (a chest, a barrel, a hopper, another mod's machine), as
+    /// the slots a neighbour may take from through the face that looks at this block, as
+    /// they are before the tick: `level.getCapability(Capabilities.ItemHandler.BLOCK,
+    /// pos.relative(side), side.getOpposite())`, what Create's `grabCapability(side)` finds.
+    /// None where there is no container. For a block entity whose items are fields of its
+    /// own, not slots (a chute's `item`): take with `take_from`, give with `give_to`.
+    pub fn container(&self, side: Side) -> Option<Vec<Option<Stack>>> {
+        self.containers.and_then(|f| f(side))
+    }
+
+    /// Takes `count` from slot `slot` of the container on `side` (the one `container`
+    /// lists), after the tick: `handler.extractItem(slot, count, false)`. The tick keeps
+    /// what it takes in its own state, as the Java does with what `extractItem` returns.
+    pub fn take_from(&mut self, side: Side, slot: usize, count: u32) {
+        self.effects.push(Effect::TakeFrom { side, slot, count });
+    }
+
+    /// How many of `item` the container on `side` has room for (`insertItem(.., true)`,
+    /// a simulated insert): in its empty slots and those holding the same item, each up to
+    /// the item's stack size. 0 where there is no container.
+    pub fn room_in(&self, side: Side, item: &str) -> u32 {
+        let max = self.max_stack(item);
+        self.container(side).map_or(0, |slots| {
+            slots
+                .iter()
+                .map(|s| match s {
+                    None => max,
+                    Some(s) if s.item == item => max.saturating_sub(s.count),
+                    Some(_) => 0,
+                })
+                .sum()
+        })
+    }
+
+    /// Puts `stack` into the container on `side` after the tick, as a hopper would
+    /// (`ItemHandlerHelper.insertItem`): give only what `room_in` says fits, and keep the
+    /// rest, as the Java keeps what `insertItem` returns.
+    pub fn give_to(&mut self, side: Side, stack: Stack) {
+        self.effects.push(Effect::GiveTo { side, stack });
     }
 
     /// Sends up to `max` of what is in `slot` to the container on `side` (a chest,
