@@ -927,7 +927,8 @@ fn registrations(parsed: &[(String, ParsedFile)]) -> Vec<Registration> {
                     id: d.id,
                     via: d.via.into(),
                     class,
-                    creates: created_class(&call.args),
+                    // Else the class the field it initializes holds (`BlockEntry<TrackBlock>`).
+                    creates: created_class(&call.args).or_else(|| call.declared.clone()),
                     args,
                 });
                 continue;

@@ -129,6 +129,10 @@ pub(crate) struct Call {
     /// The builder calls chained after it, as written: Registrate's
     /// `.initialProperties(() -> Blocks.GOLD_ORE).properties(p -> p.strength(3f))`.
     pub chain: String,
+    /// The class the field it initializes holds, as its type's last type argument:
+    /// `TrackBlock` for `BlockEntry<TrackBlock> TRACK = REGISTRATE.block(..)`, where the
+    /// call names no class it makes (`TrackMaterial.ANDESITE::createBlock`).
+    pub declared: Option<String>,
 }
 
 /// A method's name, parameter names and parameter types (as written).
@@ -644,11 +648,33 @@ fn call_at(
             .unwrap_or("")
             .to_string()
     };
+    // The field the chain initializes: `BlockEntry<TrackBlock> TRACK = ..`.
+    let declared = outer
+        .parent()
+        .filter(|p| p.kind() == "variable_declarator")
+        .and_then(|d| d.parent())
+        .and_then(|f| f.child_by_field_name("type"))
+        .map(text)
+        .and_then(|ty| {
+            let inner = ty.split_once('<')?.1.rsplit_once('>')?.0;
+            let last = inner.rsplit(',').next()?.trim();
+            let simple = last
+                .split('<')
+                .next()?
+                .rsplit('.')
+                .next()?
+                .trim()
+                .to_string();
+            simple
+                .starts_with(|c: char| c.is_ascii_uppercase())
+                .then_some(simple)
+        });
     Some(Call {
         object,
         object_is_chain,
         method,
         chain,
+        declared,
         args: args.iter().map(|a| text(*a)).collect(),
         literal_args,
         first_string,

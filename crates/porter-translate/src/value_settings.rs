@@ -884,7 +884,7 @@ pub fn tests(boxes: &[ValueBox]) -> String {
         let cubes = value_box_cubes(&[shown], [0.0, 0.0, -1.0]);
         assert!(cubes.len() > 4 + 10);
         for (from, to, _) in &cubes {{
-            assert!(from[2] >= 16.0 && to[2] <= 16.5, "{{from:?}} {{to:?}}");
+            assert!(from[2] >= 16.5 && to[2] <= 17.0, "{{from:?}} {{to:?}}");
             assert!(from[0] >= 3.9 && to[0] <= 12.1 && from[1] >= 3.9 && to[1] <= 12.1);
         }}
     }}
@@ -1153,7 +1153,9 @@ pub fn value_box_cubes(shown: &[Shown], look: [f64; 3]) -> Vec<([f32; 3], [f32; 
         };
         let c = [s.at[0] as f32 * 16.0, s.at[1] as f32 * 16.0, s.at[2] as f32 * 16.0];
         // A rectangle on the face: `a` to `b` along right, `p` to `q` along up (texels from
-        // the box's middle), lifted off it by `lift`.
+        // the box's middle), lifted off it by `lift`: a box's anchor is where Java puts it
+        // (a motor's at 12.5/16, inside its side plate), and Java draws it a little in front
+        // of that (`ValueBox.render`), so it stands clear of the block's own model.
         let mut rect = |a: f32, b: f32, p: f32, q: f32, lift: f32, tint: u32| {
             let at = |x: f32, y: f32, d: f32| [0, 1, 2].map(|i| c[i] + right[i] * x + up[i] * y + n[i] * d);
             let (p0, p1) = (at(a, p, lift), at(b, q, lift + 0.12));
@@ -1163,10 +1165,10 @@ pub fn value_box_cubes(shown: &[Shown], look: [f64; 3]) -> Vec<([f32; 3], [f32; 
         };
         if s.highlight {
             let (r, t) = (4.0, 0.45);
-            rect(-r, r, r - t, r, 0.05, 0xFFFFFF);
-            rect(-r, r, -r, -r + t, 0.05, 0xFFFFFF);
-            rect(-r, -r + t, -r, r, 0.05, 0xFFFFFF);
-            rect(r - t, r, -r, r, 0.05, 0xFFFFFF);
+            rect(-r, r, r - t, r, 0.6, 0xFFFFFF);
+            rect(-r, r, -r, -r + t, 0.6, 0xFFFFFF);
+            rect(-r, -r + t, -r, r, 0.6, 0xFFFFFF);
+            rect(r - t, r, -r, r, 0.6, 0xFFFFFF);
         }
         if !s.value.options.is_empty() {
             continue;
@@ -1186,7 +1188,7 @@ pub fn value_box_cubes(shown: &[Shown], look: [f64; 3]) -> Vec<([f32; 3], [f32; 
                     }
                     let x = x0 + (g as f32 * 4.0 + col as f32) * px;
                     let y = y0 - (row as f32 + 1.0) * px;
-                    rect(x, x + px, y, y + px, 0.05, 0xEDEDED);
+                    rect(x, x + px, y, y + px, 0.65, 0xEDEDED);
                 }
             }
         }

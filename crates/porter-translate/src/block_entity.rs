@@ -913,10 +913,47 @@ pub fn find(scan: &ModScan, ns: &str) -> Vec<BlockEntity> {
                         ]
                         .iter()
                         .any(|far| text.contains(far))
+                            // `pos.relative(side, 2)`: two steps along a side.
+                            || text.match_indices(".relative(").any(|(at, _)| {
+                                let args = &text[at + ".relative(".len()..];
+                                args.split(')').next().is_some_and(|a| {
+                                    a.trim_end().ends_with(", 2") || a.trim_end().ends_with(",2")
+                                })
+                            })
                     },
                 )
             };
+            // The block classes its code calls into (`((CrushingWheelBlock)
+            // getBlockState().getBlock()).updateControllers(..)`), whose reach is its own.
+            let its_blocks: Vec<&ClassInfo> = owners
+                .iter()
+                .filter_map(|c| {
+                    std::fs::read_to_string(std::path::Path::new(&scan.input).join(&c.path)).ok()
+                })
+                .flat_map(|text| {
+                    text.match_indices("((")
+                        .filter_map(|(at, _)| {
+                            let name: String = text[at + 2..]
+                                .chars()
+                                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                                .collect();
+                            name.ends_with("Block").then_some(name)
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .filter_map(|name| {
+                    let mut found = scan
+                        .classes
+                        .iter()
+                        .filter(|c| c.name.rsplit(['.', '$']).next() == Some(name.as_str()));
+                    match (found.next(), found.next()) {
+                        (Some(c), None) => Some(c),
+                        _ => None,
+                    }
+                })
+                .collect();
             be.far = owners.iter().any(|c| reaches(c))
+                || its_blocks.iter().any(|c| reaches(c))
                 || be.held.iter().any(|(_, name)| {
                     scan.classes
                         .iter()

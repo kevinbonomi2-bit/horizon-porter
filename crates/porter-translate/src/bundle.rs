@@ -2516,6 +2516,25 @@ fn {id}_block_entity_tick(
             m::Effect::SetState {{ key, value }} => {{
                 let _ = game.native_set_block_property_with(pos, &key, &value, 2);
             }}
+            m::Effect::SetBlock {{ at, block, properties }} => {{
+                // The block's default state, with the properties given (`facing` as
+                // the block stores it).
+                let registry = &game.pack.assets.registry;
+                if let Some(mut state) = registry.default_state(&block) {{
+                    for (key, value) in &properties {{
+                        let value = if key == "facing" {{
+                            m::stored_facing(&block, value)
+                        }} else {{
+                            value.clone()
+                        }};
+                        if let Some(next) = with_property(registry, state, key, &value) {{
+                            state = next;
+                        }}
+                    }}
+                    let dimension = game.native_dimension();
+                    let _ = game.native_set_block(dimension, at, state, 3);
+                }}
+            }}
             m::Effect::TakeDropped {{ id, count }} => {{
                 let found = seen.borrow().get(id as usize).cloned();
                 if let Some((entity_id, mut stack)) = found {{

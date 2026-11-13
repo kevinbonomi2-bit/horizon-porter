@@ -2217,6 +2217,19 @@ impl mod_api::BlockEntityPart for PortedEntity {
                     };
                     let _ = level.set_block(host, pos, state, flags(2));
                 }
+                runtime::Effect::SetBlock { at, block, properties } => {
+                    let named: Vec<(String, String)> = properties
+                        .iter()
+                        .map(|(k, v)| {
+                            let v = if k == "facing" { runtime::stored_facing(&block, v) } else { v.clone() };
+                            (k.clone(), v)
+                        })
+                        .collect();
+                    let (Some(level), Some(state)) = (level, host.block_state_id(&state_text(&block, &named))) else {
+                        continue;
+                    };
+                    let _ = level.set_block(host, at, state, flags(3));
+                }
             }
         }
         // What changed is written back: each write marks it for saving and sending.

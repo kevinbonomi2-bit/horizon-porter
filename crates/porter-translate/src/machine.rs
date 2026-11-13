@@ -501,6 +501,13 @@ pub enum Effect {
     /// Its block's state property `key` set to `value` (`level.setBlock(pos,
     /// state.setValue(..), 3)`).
     SetState { key: String, value: String },
+    /// The block at `at` set to `block` in the state with `properties` (`facing` as Java
+    /// names it): `level.setBlockAndUpdate(at, state)`; `minecraft:air` removes it.
+    SetBlock {
+        at: [i32; 3],
+        block: String,
+        properties: Vec<(String, String)>,
+    },
     /// `ExperienceOrb.award(level, pos, amount)`.
     Xp { at: [f64; 3], amount: u32 },
     /// An entity spawned (`type.create(level, ..)`, `addFreshEntity`), a baby when `baby`.
@@ -750,6 +757,25 @@ impl<'a> Machine<'a> {
             p.1 = value.to_string();
         }
         self.effects.push(Effect::SetState { key: key.to_string(), value: value.to_string() });
+    }
+
+    /// Sets the block at `at` (world coordinates, not its own) to `block` in the state
+    /// with `properties` after the tick, the rest of them the block's defaults:
+    /// `level.setBlockAndUpdate(at, AllBlocks.X.getDefaultState().setValue(FACING, d))`,
+    /// `level.setBlock(at, .., 3)`; `minecraft:air` removes it (`removeBlock`). Name
+    /// `facing` as Java does. A block a machine puts beside itself and keeps in step
+    /// (two crushing wheels' controller between them) is set this way, from the tick that
+    /// sees the change (`onSpeedChanged`). What is at `at` now: `machine.neighbour(side)`
+    /// beside it, `machine.at(pos)` for a block entity further off.
+    pub fn set_block_at(&mut self, at: [i32; 3], block: &str, properties: &[(&str, &str)]) {
+        self.effects.push(Effect::SetBlock {
+            at,
+            block: block.to_string(),
+            properties: properties
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+        });
     }
 
     /// The living things, players aside, in the box from `min` to `max` (world
