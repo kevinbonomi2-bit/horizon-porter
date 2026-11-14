@@ -1378,6 +1378,23 @@ fn called_by(scan: &ModScan, entities: &mut [BlockEntity]) {
 /// Fills in the state fields and whether it ticks, from the Java class.
 fn state_of(scan: &ModScan, class: &ClassInfo, be: &mut BlockEntity) {
     state_fields(scan, class, be);
+    // What its constructor starts a field at, where the field itself has no initializer
+    // (`count = 64;` in `FilteringBehaviour(..)`): Java's value until something sets it.
+    if let Ok(source) = std::fs::read_to_string(std::path::Path::new(&scan.input).join(&class.path))
+    {
+        let simple = class.name.rsplit(['.', '$']).next().unwrap_or(&class.name);
+        let bodies = constructor_bodies(&source, simple);
+        for f in be
+            .fields
+            .iter_mut()
+            .filter(|f| f.init.is_none() && f.from == class.name)
+        {
+            let member = own_type(&f.java).rsplit(' ').next().unwrap_or_default();
+            if let Some(value) = assigned_in(&bodies, member) {
+                f.init = initial(f.kind, &value, class);
+            }
+        }
+    }
     // Each item it keeps in a field of its own (an arm's `heldItem`, a chute's `item`) is
     // kept as its id; how many it holds is kept beside it, as the `ItemStack`'s count.
     let mut i = 0;
@@ -2035,6 +2052,68 @@ fn list_doc(java: &str) -> Option<String> {
             .trim()
             .to_string(),
     )
+}
+
+/// The bodies of class `simple`'s constructors in `source`, one after another.
+fn constructor_bodies(source: &str, simple: &str) -> String {
+    let mut out = String::new();
+    let name = format!("{simple}(");
+    for (at, _) in source.match_indices(&name) {
+        // A declaration: after a modifier or at a line's start, not `new X(`.
+        let before = source[..at].trim_end_matches([' ', '\t']);
+        if !(before.ends_with("public")
+            || before.ends_with("protected")
+            || before.ends_with("private")
+            || before.ends_with('\n'))
+        {
+            continue;
+        }
+        let rest = &source[at..];
+        let Some(open) = rest.find('{') else {
+            continue;
+        };
+        if rest[..open].contains(';') {
+            continue;
+        }
+        let mut depth = 0usize;
+        for (i, c) in rest[open..].char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        out.push_str(&rest[open + 1..open + i]);
+                        out.push('\n');
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
+/// The value `member` is set to in `body` (`count = 64;`, `this.upTo = true;`), as written.
+fn assigned_in(body: &str, member: &str) -> Option<String> {
+    for pattern in [format!("this.{member} = "), format!("{member} = ")] {
+        for (at, _) in body.match_indices(&pattern) {
+            // At a statement's start.
+            let before = body[..at].trim_end();
+            if !(before.is_empty()
+                || before.ends_with(';')
+                || before.ends_with('{')
+                || before.ends_with('}'))
+            {
+                continue;
+            }
+            let value = body[at + pattern.len()..].split(';').next()?.trim();
+            if !value.is_empty() {
+                return Some(value.to_string());
+            }
+        }
+    }
+    None
 }
 
 /// A field's own type and name, without the part it is kept in: `BlockState bracket` of
@@ -2895,7 +2974,10 @@ fn redstone_todo(be: &BlockEntity) -> String {
 fn lands_doc(be: &BlockEntity) -> String {
     match &be.lands {
         Some((class, method)) => format!(
-            "\n/// Its block's `{method}` ({}) acts on what lands on it in Java, which Horizon gives\n/// ported code no hook for. Where that is taking in dropped items (`ItemEntity`), do it\n/// here each tick: `machine.dropped_in(min, max)` over the block and the one above it,\n/// the items put in its slots as the Java's insert would, and `machine.take_dropped(id,\n/// count)` for what went in. An item resting on top of the block has landed on it: take\n/// what the box holds, without asking which block an item's own position falls in (a\n/// hollow Java lets items drop into may be solid here). What it puts out and Java tags\n/// so it isn't taken back in (`BypassCrushingWheel`) is dropped with `machine.eject(..)`,\n/// which `dropped_in` leaves out from then on.",
+            "\n/// Its block's `{method}` ({}) acts on what lands on it in Java, which Horizon gives\n/// ported code no hook for. Where that is taking in dropped items (`ItemEntity`), do it\n/// here each tick: `machine.dropped_in(min, max)` over the block and the one above it,\n/// the items put in its slots as the Java's insert would, and `machine.take_dropped(id,\n/// count)` for what went in. An item resting on top of the block has landed on it: take\n/// what the box holds, without asking which block an item's own position falls in (a\n/// hollow Java lets items drop into may be solid here). What it puts out and Java tags\n/// so it isn't taken back in (`BypassCrushingWheel`) is dropped with `machine.eject(..)`,\n/// which `dropped_in` leaves out from then on. Where the Java hands what
+/// lands to another block entity (a belt segment's to its controller: `getControllerBE()`),
+/// this one takes it in for that one: read it with `machine.entity_at(pos)` and write its
+/// changed state back with `machine.set_at`, as its own code would have.",
             class.rsplit('.').next().unwrap_or(class)
         ),
         None => String::new(),
@@ -3421,6 +3503,16 @@ mod tests {
         assert_eq!(initial(Kind::Int, "0", &class), None);
         assert_eq!(initial(Kind::Int, "new Random().nextInt()", &class), None);
         assert_eq!(initial(Kind::Int, "OTHER", &class), None);
+    }
+
+    #[test]
+    fn a_constructor_starts_a_field_without_an_initializer() {
+        let java = "public class FilteringBehaviour extends BlockEntityBehaviour {\n\tpublic int count;\n\tpublic boolean upTo;\n\tpublic FilteringBehaviour(SmartBlockEntity be, ValueBoxTransform slot) {\n\t\tsuper(be);\n\t\tcount = 64;\n\t\tthis.upTo = true;\n\t}\n\tvoid read() { count = nbt.getInt(\"FilterAmount\"); }\n\tFilteringBehaviour copy() { return new FilteringBehaviour(null, null); }\n}";
+        let bodies = constructor_bodies(java, "FilteringBehaviour");
+        assert_eq!(assigned_in(&bodies, "count").as_deref(), Some("64"));
+        assert_eq!(assigned_in(&bodies, "upTo").as_deref(), Some("true"));
+        // What another method sets is not where it starts.
+        assert!(!bodies.contains("getInt"));
     }
 
     #[test]

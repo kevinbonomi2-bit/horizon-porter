@@ -31,6 +31,8 @@ const OWN_LIMIT: usize = 24;
 const HELPER_LIMIT: usize = 12;
 /// At most this many helpers that work on the level.
 const WORLD_LIMIT: usize = 32;
+/// At most this many methods asked of the behaviours of other block entities.
+const BEHAVIOUR_LIMIT: usize = 20;
 
 /// A body longer than this isn't quoted: the class is read instead.
 const BODY_LIMIT: usize = 600;
@@ -47,6 +49,10 @@ pub enum Asks {
     /// No one: a static helper that works on the level at a place (`BeltBlock.initBelt(level,
     /// pos)`), called from a block entity's code: given `machine`.
     World,
+    /// The behaviour of another block entity, the one the code finds at a place
+    /// (`BlockEntityBehaviour.get(level, pos, DirectBeltInputBehaviour.TYPE)`): `(target,
+    /// .., machine)`.
+    Behaviour,
 }
 
 /// One question, with what each class answers.
@@ -91,6 +97,9 @@ pub struct Answer {
     /// The mod's methods that body calls on another class (`BeltBlockEntity::hasPulley`),
     /// each with its own body where that is short: what the answer is worked out from.
     pub refs: Vec<(String, String)>,
+    /// The state structs of its block entities (`Belt`), where a behaviour's answer reads
+    /// and writes them.
+    pub states: Vec<String>,
 }
 
 /// The mod's questions: to a block, to a block entity, and the helpers that take block
@@ -492,14 +501,47 @@ pub fn find(
 
     // Helpers: static functions that take block entities, of classes the block
     // entities' own classes call into.
+    // The parts block entities keep (a belt's `BeltInventory`): the static helpers they
+    // call (`BeltFunnelInteractionHandler.checkForFunnels(beltInventory, item, offset)`)
+    // work on the block entity too, given its state. And the elements of the lists they
+    // keep (`TransportedItemStack`), each a struct of the port's.
+    let mut part_texts: Vec<&String> = Vec::new();
+    let mut part_called: BTreeSet<String> = BTreeSet::new();
+    let mut holders: HashMap<String, BTreeSet<String>> = HashMap::new();
+    let mut parts: HashMap<String, (String, bool)> = HashMap::new();
+    for e in entities {
+        for (_, held) in &e.held {
+            holders
+                .entry(simple(held))
+                .or_default()
+                .insert(e.rust.clone());
+            if let Some(text) = class(held).and_then(source) {
+                part_texts.push(text);
+                part_called.extend(static_receivers(text));
+            }
+        }
+        for l in &e.lists {
+            parts.insert(simple(l), (format!("&mut {}", simple(l)), false));
+        }
+    }
+    // (An element of a list is that struct, though a block entity keeps one of its own: an
+    // item drain's `TransportedItemStack`.)
+    for (part, of) in holders {
+        if let (1, Some(rust)) = (of.len(), of.iter().next())
+            && !parts.contains_key(&part)
+        {
+            parts.insert(part, (format!("&mut {rust}"), true));
+        }
+    }
     let mut helpers: Vec<Question> = Vec::new();
     let mut worlds: Vec<Question> = Vec::new();
     for c in scan.classes.iter().filter(|c| {
         !c.is_mixin
             && c.kind != ClassKind::Interface
-            && called_into.contains(&simple(&c.name))
+            && (called_into.contains(&simple(&c.name)) || part_called.contains(&simple(&c.name)))
             && !entity_classes.contains(&simple(&c.name))
     }) {
+        let by_entities = called_into.contains(&simple(&c.name));
         let Some(text) = source(c) else {
             continue;
         };
@@ -512,16 +554,21 @@ pub fn find(
             let called = format!("{}.{method}(", simple(&c.name));
             let found = declarations(text, method)
                 .into_iter()
+                .filter(|_| by_entities)
                 .find_map(|d| {
                     signature(&d, Asks::Helper, &entity_classes, &block_types)
                         .map(|(p, r)| (Asks::Helper, d, p, r))
                 })
                 .or_else(|| {
-                    if !entity_texts.iter().any(|t| t.contains(&called)) {
+                    if !entity_texts
+                        .iter()
+                        .chain(&part_texts)
+                        .any(|t| t.contains(&called))
+                    {
                         return None;
                     }
                     declarations(text, method).into_iter().find_map(|d| {
-                        signature(&d, Asks::World, &entity_classes, &block_types)
+                        signature_with(&d, Asks::World, &entity_classes, &block_types, &parts)
                             .map(|(p, r)| (Asks::World, d, p, r))
                     })
                 });
@@ -555,7 +602,222 @@ pub fn find(
     worlds.sort_by(|a, b| b.asked.cmp(&a.asked).then(a.rust.cmp(&b.rust)));
     worlds.truncate(WORLD_LIMIT);
     out.extend(worlds);
+
+    // To the behaviour of another block entity: a method called on the behaviour the
+    // code finds at a place (`BlockEntityBehaviour.get(level, next, DirectBeltInputBehaviour
+    // .TYPE).handleInsertion(..)`, `funnelBE.getBehaviour(InvManipulationBehaviour.TYPE)`).
+    // Each block entity that makes one sets it up in its own way: answered once for all.
+    let mut behaviours: Vec<Question> = Vec::new();
+    for b in scan
+        .classes
+        .iter()
+        .filter(|c| !c.is_mixin && c.kind == ClassKind::Class)
+    {
+        let owner = simple(&b.name);
+        let Some(text) = source(b) else {
+            continue;
+        };
+        if !text.contains("BehaviourType<") {
+            continue;
+        }
+        let reaching: Vec<&String> = sources
+            .iter()
+            .filter(|(n, t)| **n != b.name.as_str() && reaches_elsewhere(t, &owner))
+            .map(|(_, t)| t)
+            .collect();
+        if reaching.is_empty() {
+            continue;
+        }
+        // Who makes one: a block entity's class, or a part it keeps (a depot's
+        // `DepotBehaviour`), with how it sets it up.
+        let made = format!("new {owner}(");
+        let mut by_class: Vec<(&ClassInfo, Vec<String>)> = Vec::new();
+        for (e, classes) in &chains {
+            let held: Vec<&ClassInfo> = e.held.iter().filter_map(|(_, held)| class(held)).collect();
+            let maker = classes
+                .iter()
+                .copied()
+                .chain(held)
+                .find(|c| source(c).is_some_and(|t| t.contains(&made)));
+            if let Some(c) = maker {
+                match by_class.iter_mut().find(|(k, _)| k.name == c.name) {
+                    Some((_, ids)) => ids.push(e.id.clone()),
+                    None => by_class.push((c, vec![e.id.clone()])),
+                }
+            }
+        }
+        if by_class.is_empty() {
+            continue;
+        }
+        let mut names: Vec<&String> = b.method_names.iter().collect();
+        names.sort();
+        names.dedup();
+        for method in names {
+            let call = format!(".{method}(");
+            let asked = reaching.iter().filter(|t| t.contains(&call)).count();
+            if asked == 0 {
+                continue;
+            }
+            let Some((decl, params, returns)) =
+                declarations(text, method).into_iter().find_map(|d| {
+                    signature(&d, Asks::Behaviour, &entity_classes, &block_types)
+                        .map(|(p, r)| (d, p, r))
+                })
+            else {
+                continue;
+            };
+            behaviours.push(Question {
+                asks: Asks::Behaviour,
+                owner: b.name.clone(),
+                method: method.clone(),
+                java_params: decl.params_text.clone(),
+                rust: format!("{}_{}", snake(&owner), snake(method)),
+                params,
+                returns,
+                default: decl.body.filter(|b| b.len() <= BODY_LIMIT),
+                answers: makers(&by_class, &made, &source)
+                    .into_iter()
+                    .map(|mut a| {
+                        a.states =
+                            a.of.iter()
+                                .filter_map(|id| entities.iter().find(|e| e.id == *id))
+                                .map(|e| e.rust.clone())
+                                .collect();
+                        a
+                    })
+                    .collect(),
+                asked,
+                others: Vec::new(),
+            });
+        }
+    }
+    behaviours.sort_by(|a, b| b.asked.cmp(&a.asked).then(a.rust.cmp(&b.rust)));
+    behaviours.truncate(BEHAVIOUR_LIMIT);
+    out.extend(behaviours);
     out
+}
+
+/// Whether `text` finds behaviour `owner` of another block entity, at a place:
+/// `BlockEntityBehaviour.get(level, pos, Owner.TYPE)` or `other.getBehaviour(Owner.TYPE)`
+/// (a block entity's own `getBehaviour(Owner.TYPE)` is not).
+fn reaches_elsewhere(text: &str, owner: &str) -> bool {
+    let ty = format!("{owner}.TYPE");
+    text.match_indices(&ty).any(|(at, _)| {
+        let before = &text[at.saturating_sub(160)..at];
+        // The call nearest before it.
+        let Some(call) = before.rfind("getBehaviour(").max(before.rfind(".get(")) else {
+            return false;
+        };
+        // (Still in the same call.)
+        if before[call..].contains(';') {
+            return false;
+        }
+        if before[..call].ends_with("BlockEntityBehaviour") {
+            return true;
+        }
+        let receiver: String = before[..call]
+            .trim_end_matches('.')
+            .chars()
+            .rev()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect();
+        before[..call].ends_with('.') && !receiver.is_empty() && receiver != "siht"
+    })
+}
+
+/// How each block entity class in `by_class` makes the behaviour (`made` is `new Owner(`):
+/// its statement on one line, with the methods of that class it hands the behaviour
+/// (`this::tryInsertingFromSide`, `d -> canDirectlyInsertCached()`).
+fn makers<'a>(
+    by_class: &[(&ClassInfo, Vec<String>)],
+    made: &str,
+    source: &impl Fn(&ClassInfo) -> Option<&'a String>,
+) -> Vec<Answer> {
+    let ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    by_class
+        .iter()
+        .map(|(c, of)| {
+            let text = source(c).map(String::as_str).unwrap_or_default();
+            let statement = text
+                .find(made)
+                .map(|at| {
+                    let rest = &text[at..];
+                    one_line(&rest[..rest.find(';').unwrap_or(rest.len())])
+                })
+                .filter(|s| s.len() <= BODY_LIMIT);
+            let mut refs: Vec<(String, String)> = Vec::new();
+            if let Some(st) = &statement {
+                let mut handed: Vec<String> = Vec::new();
+                for (at, _) in st.match_indices("::") {
+                    let name: String = st[at + 2..].chars().take_while(|c| ident(*c)).collect();
+                    handed.push(name);
+                }
+                // Called bare in a lambda it hands over (`d -> canDirectlyInsertCached()`).
+                for (at, _) in st.match_indices('(') {
+                    let name: String = st[..at]
+                        .chars()
+                        .rev()
+                        .take_while(|c| ident(*c))
+                        .collect::<Vec<_>>()
+                        .into_iter()
+                        .rev()
+                        .collect();
+                    if !st[..at].trim_end_matches(&name).ends_with('.') {
+                        handed.push(name);
+                    }
+                }
+                for name in handed {
+                    if name.is_empty()
+                        || !c.method_names.contains(&name)
+                        || refs
+                            .iter()
+                            .any(|(n, _)| *n == format!("{}.{name}()", simple(&c.name)))
+                    {
+                        continue;
+                    }
+                    let body = method_body(text, &name)
+                        .filter(|b| b.len() <= BODY_LIMIT)
+                        .unwrap_or_default();
+                    refs.push((format!("{}.{name}()", simple(&c.name)), body));
+                }
+                // And the methods of that class those call bare (`insert(stack, ..)` from
+                // a depot's `tryInsertingFromSide`): one step further.
+                let quoted: Vec<String> = refs.iter().map(|(_, b)| b.clone()).collect();
+                for body in quoted {
+                    for (at, _) in body.match_indices('(') {
+                        let name: String = body[..at]
+                            .chars()
+                            .rev()
+                            .take_while(|c| ident(*c))
+                            .collect::<Vec<_>>()
+                            .into_iter()
+                            .rev()
+                            .collect();
+                        let label = format!("{}.{name}()", simple(&c.name));
+                        if name.is_empty()
+                            || refs.len() >= 6
+                            || body[..at].trim_end_matches(&name).ends_with('.')
+                            || !c.method_names.contains(&name)
+                            || refs.iter().any(|(n, _)| *n == label)
+                        {
+                            continue;
+                        }
+                        let called = method_body(text, &name)
+                            .filter(|b| b.len() <= BODY_LIMIT)
+                            .unwrap_or_default();
+                        refs.push((label, called));
+                    }
+                }
+            }
+            Answer {
+                class: c.name.clone(),
+                of: of.clone(),
+                body: statement,
+                refs,
+                states: Vec::new(),
+            }
+        })
+        .collect()
 }
 
 /// The answers of `by_class`, each with its body where that is short enough to quote, and
@@ -581,6 +843,7 @@ fn answers<'a>(
                 of,
                 body,
                 refs,
+                states: Vec::new(),
             }
         })
         .collect()
@@ -651,7 +914,7 @@ pub fn runtime(questions: &[Question]) -> String {
             Asks::Block => {
                 let _ = write!(
                     r,
-                    "\n/// `{owner}.{method}({java})`: a question the mod's code asks a block it meets,\n/// answered here once for every block of the mod. `block` is the block asked\n/// (`{example}`) and `state` its state properties: `state.getValue(FACING)` is the value\n/// under `facing` (a `Direction` as `north`: `Side::from_name` makes it a `Side`),\n/// `getValue(AXIS)` the one under `axis` (`x`, `y` or `z`, as an `Axis` is here). The level\n/// isn't given.\n///\n/// What each block class answers, with its blocks and those of classes that inherit it:\n",
+                    "\n/// `{owner}.{method}({java})`: a question the mod's code asks a block it meets,\n/// answered here once for every block of the mod.\n///\n/// `block` is the block asked\n/// (`{example}`) and `state` its state properties: `state.getValue(FACING)` is the value\n/// under `facing` (a `Direction` as `north`: `Side::from_name` makes it a `Side`),\n/// `getValue(AXIS)` the one under `axis` (`x`, `y` or `z`, as an `Axis` is here). The level\n/// isn't given.\n///\n/// What each block class answers, with its blocks and those of classes that inherit it:\n",
                     method = q.method,
                     java = q.java_params,
                     example = example(q),
@@ -660,16 +923,24 @@ pub fn runtime(questions: &[Question]) -> String {
             Asks::Entity => {
                 let _ = write!(
                     r,
-                    "\n/// `{owner}.{method}({java})`: a question the mod's code asks a block entity it meets,\n/// answered here once for every block entity of the mod. `be` is a view of the one asked\n/// (`{example}`): {VIEW}. A neighbour is such a view already\n/// (`machine.neighbour(side)`), and `machine.me(pos, &state.save())` makes one of the block\n/// entity a tick is for. Its fields are those saved values; a method of its own that the\n/// Java calls (`hasSource()`, `getSpeed()`) is worked out from them as its class does.\n///\n/// What each block entity class answers, with its block entities and those that inherit it:\n",
+                    "\n/// `{owner}.{method}({java})`: a question the mod's code asks a block entity it meets,\n/// answered here once for every block entity of the mod.\n///\n/// `be` is a view of the one asked\n/// (`{example}`): {VIEW}. A neighbour is such a view already\n/// (`machine.neighbour(side)`), and `machine.me(pos, &state.save())` makes one of the block\n/// entity a tick is for. Its fields are those saved values; a method of its own that the\n/// Java calls (`hasSource()`, `getSpeed()`) is worked out from them as its class does.\n///\n/// What each block entity class answers, with its block entities and those that inherit it:\n",
                     method = q.method,
                     java = q.java_params,
                     example = example(q),
                 );
             }
+            Asks::Behaviour => {
+                let _ = write!(
+                    r,
+                    "\n/// `{owner}.{method}({java})`: asked of the `{owner}` of another block entity, the one\n/// the code finds at a place (`BlockEntityBehaviour.get(level, pos, {owner}.TYPE)`,\n/// `be.getBehaviour({owner}.TYPE)`), ported here once for every block entity that makes\n/// one.\n///\n/// `target` is a view of that block entity: {VIEW}. Each block entity sets the\n/// behaviour up in its own way, below with the methods it hands it: answer for `target` as\n/// its own does. What that changes goes through `machine.set_at(pos, key, value)` and\n/// `machine.set_item_at(..)` (the Java may change another block entity than `target`: a\n/// belt segment's items are its controller's, `machine.entity_at` finds it), and a\n/// container through `machine.give_at` and `machine.take_at`, all after the tick. A block\n/// entity none of these is has no `{owner}`: the Java's `get` gives null there, so the\n/// caller asks nothing; answer as the behaviour's own defaults do.\n///\n/// The block entities that make one, and how:\n",
+                    method = q.method,
+                    java = q.java_params,
+                );
+            }
             Asks::World => {
                 let _ = write!(
                     r,
-                    "\n/// `{owner}.{method}({java})`: a helper of the mod's code that works on the level,\n/// ported here once for every function that calls it. The level is `machine`, the one of\n/// the tick that calls it: a block entity at a place it works out is `machine.entity_at(pos)`\n/// (a copy as it was before the tick: its block, state properties, saved values and item\n/// slots), and what it changes goes through `machine.set_at(pos, key, value)`,\n/// `machine.set_item_at(..)` and `machine.set_block_at(..)`, which land after that tick.\n/// A block entity it takes is a view: {VIEW}.\n",
+                    "\n/// `{owner}.{method}({java})`: a helper of the mod's code that works on the level,\n/// ported here once for every function that calls it.\n///\n/// The level is `machine`, the one of\n/// the tick that calls it: a block entity at a place it works out is `machine.entity_at(pos)`\n/// (a copy as it was before the tick: its block, state properties, saved values and item\n/// slots), and what it changes goes through `machine.set_at(pos, key, value)`,\n/// `machine.set_item_at(..)` and `machine.set_block_at(..)`, which land after that tick.\n/// A block entity it takes is a view: {VIEW}. A part a block entity keeps that it takes\n/// (a belt's `BeltInventory`) is that block entity's state, changed in place, and `pos`\n/// its place; an element of a list it keeps (`TransportedItemStack`) is that struct.\n",
                     method = q.method,
                     java = q.java_params,
                 );
@@ -677,7 +948,7 @@ pub fn runtime(questions: &[Question]) -> String {
             Asks::Helper => {
                 let _ = write!(
                     r,
-                    "\n/// `{owner}.{method}({java})`: a helper of the mod's code that takes block entities,\n/// ported here once for every function that calls it. A block entity it takes is a view:\n/// {VIEW}. A neighbour is such a view already (`machine.neighbour(side)`), and\n/// `machine.me(pos, &state.save())` makes one of the block entity a tick is for. What the\n/// Java reads of them from the level (`getBlockState()`, `getBlockPos()`) is in the views;\n/// the level isn't given. `instanceof` a class is told by the view's block.\n",
+                    "\n/// `{owner}.{method}({java})`: a helper of the mod's code that takes block entities,\n/// ported here once for every function that calls it.\n///\n/// A block entity it takes is a view: {VIEW}. A neighbour is such a view already (`machine.neighbour(side)`), and\n/// `machine.me(pos, &state.save())` makes one of the block entity a tick is for. What the\n/// Java reads of them from the level (`getBlockState()`, `getBlockPos()`) is in the views;\n/// the level isn't given. `instanceof` a class is told by the view's block.\n",
                     method = q.method,
                     java = q.java_params,
                 );
@@ -702,8 +973,29 @@ pub fn runtime(questions: &[Question]) -> String {
                         simple(&a.class),
                         one_line(body)
                     );
+                    if !a.states.is_empty() {
+                        let states: Vec<String> =
+                            a.states.iter().map(|t| format!("`{t}`")).collect();
+                        let _ = writeln!(
+                            r,
+                            "///   (its state: {}, read with `{}::load(|k| target.get(k))`, written back key by key with `machine.set_at`)",
+                            states.join(", "),
+                            a.states[0]
+                        );
+                    }
                     for (name, called) in &a.refs {
-                        let _ = writeln!(r, "///   (`{name}` is `{}`)", one_line(called));
+                        if called.is_empty() {
+                            let _ = writeln!(
+                                r,
+                                "///   (`{name}`: too long to quote, read it in `{}`)",
+                                simple(&a.class)
+                            );
+                            if !long.contains(&a.class.as_str()) {
+                                long.push(&a.class);
+                            }
+                        } else {
+                            let _ = writeln!(r, "///   (`{name}` is `{}`)", one_line(called));
+                        }
                     }
                 }
                 None => {
@@ -750,7 +1042,7 @@ pub fn runtime(questions: &[Question]) -> String {
                     "/// A block entity none of them covers gives the plainest answer."
                 );
             }
-            Asks::Helper | Asks::World => {
+            Asks::Helper | Asks::World | Asks::Behaviour => {
                 if let Some(body) = &q.default {
                     let _ = writeln!(r, "///\n/// In Java: `{}`", one_line(body));
                 }
@@ -758,13 +1050,15 @@ pub fn runtime(questions: &[Question]) -> String {
         }
         // The classes whose answer wasn't quoted are read with the owner.
         let mut from = format!("`{}`", q.owner);
-        for class in long.iter().take(4) {
+        let read = if q.asks == Asks::Behaviour { 8 } else { 4 };
+        for class in long.iter().take(read) {
             let _ = write!(from, ", `{class}`");
         }
         let (given, names) = match q.asks {
             Asks::Block => ("block: &str, state: &[(String, String)]", "block, state"),
             Asks::Entity => ("be: &Neighbour", "be"),
             Asks::Helper | Asks::World => ("", ""),
+            Asks::Behaviour => ("target: &Neighbour", "target"),
         };
         let mut params: Vec<String> = Vec::new();
         let mut used: Vec<String> = Vec::new();
@@ -776,12 +1070,14 @@ pub fn runtime(questions: &[Question]) -> String {
             params.push(format!("{n}: {t}"));
             used.push(n.clone());
         }
-        if q.asks == Asks::World {
+        if matches!(q.asks, Asks::World | Asks::Behaviour) {
             params.push("machine: &mut Machine<'_>".to_string());
             used.push("machine".to_string());
         }
         let todo = match q.asks {
-            Asks::Helper | Asks::World => format!("TODO: port `{}` of {from}.", q.method),
+            Asks::Helper | Asks::World | Asks::Behaviour => {
+                format!("TODO: port `{}` of {from}.", q.method)
+            }
             _ => format!("TODO: port from {from}."),
         };
         let _ = write!(
@@ -845,6 +1141,14 @@ pub fn ported(module: &str, java: &str, function: &str) -> String {
                     "- `x.{method}(..)` asked of a block entity is `{rust}`, already ported for every block entity of the mod: `{signature}`. Pass a view of the one asked: a neighbour is one (`machine.neighbour(side)`), and `machine.me(pos, &state.save())` is this one."
                 );
             }
+            Asks::Behaviour
+                if java.contains(&format!(".{method}(")) && java.contains(owner.as_str()) =>
+            {
+                let _ = writeln!(
+                    out,
+                    "- `x.{method}(..)` asked of the `{owner}` of a block entity at another place (`BlockEntityBehaviour.get(level, pos, {owner}.TYPE)`) is `{rust}`, ported once for every block entity that makes one: `{signature}`. Pass a view of that block entity (`machine.entity_at(pos)`; none there is the Java's null: ask nothing) and this tick's `machine`."
+                );
+            }
             Asks::World
                 if java.contains(&format!("{method}(")) && java.contains(owner.as_str()) =>
             {
@@ -903,6 +1207,8 @@ fn in_module(module: &str) -> Vec<Ported> {
                 Some(Asks::Helper)
             } else if line.contains("a helper of the mod's code that works on the level") {
                 Some(Asks::World)
+            } else if line.contains("of another block entity, the one") {
+                Some(Asks::Behaviour)
             } else {
                 None
             };
@@ -1031,12 +1337,30 @@ fn signature(
     entity_classes: &BTreeSet<String>,
     block_types: &BTreeSet<String>,
 ) -> Option<(Vec<(String, String)>, &'static str)> {
+    signature_with(decl, asks, entity_classes, block_types, &HashMap::new())
+}
+
+/// `signature`, where a helper that works on the level may take a part a block entity
+/// keeps (`parts`: its simple name, the Rust it is here and whether it is a block
+/// entity's part rather than a list's element): a belt's `BeltInventory` is the belt's
+/// state (`&mut Belt`, with its place `pos` before it), a `TransportedItemStack` that
+/// struct.
+fn signature_with(
+    decl: &Declaration,
+    asks: Asks,
+    entity_classes: &BTreeSet<String>,
+    block_types: &BTreeSet<String>,
+    parts: &HashMap<String, (String, bool)>,
+) -> Option<(Vec<(String, String)>, &'static str)> {
     if decl.is_static != matches!(asks, Asks::Helper | Asks::World) {
         return None;
     }
+    let acts = matches!(asks, Asks::World | Asks::Behaviour);
     let returns = match plain(&decl.returns) {
         // A helper that works on the level may be a command.
-        "void" if asks == Asks::World => "()",
+        "void" if acts => "()",
+        // What is left of a stack (`handleInsertion` gives back what didn't go in).
+        "ItemStack" if acts => "Option<Stack>",
         "boolean" => "bool",
         "int" => "i32",
         "long" => "i64",
@@ -1055,6 +1379,7 @@ fn signature(
     let mut asked_block = false;
     let mut views = 0;
     let mut level = false;
+    let mut part = false;
     for (ty, name) in &decl.params {
         let name = snake(name);
         let name = if matches!(
@@ -1089,6 +1414,7 @@ fn signature(
                 continue;
             }
             "BlockPos" => "[i32; 3]",
+            "ItemStack" if acts => "&Stack",
             "Direction" => "Side",
             "Axis" | "Direction.Axis" => "&str",
             "boolean" => "bool",
@@ -1104,6 +1430,12 @@ fn signature(
                 views += 1;
                 "&Neighbour"
             }
+            // A part a block entity keeps, or an element of a list it keeps.
+            _ if asks == Asks::World && parts.contains_key(ty) => {
+                let (rust, holder) = &parts[ty];
+                part |= *holder;
+                rust.as_str()
+            }
             _ => return None,
         };
         params.push((name, rust.to_string()));
@@ -1112,9 +1444,14 @@ fn signature(
     if asks == Asks::Helper && views == 0 {
         return None;
     }
-    // One that works on the level, for a place in it.
-    if asks == Asks::World && !(level && params.iter().any(|(_, t)| t == "[i32; 3]")) {
+    // One that works on the level, for a place in it, or on a block entity's part.
+    let place = params.iter().any(|(_, t)| t == "[i32; 3]");
+    if asks == Asks::World && !(level && place) && !part {
         return None;
+    }
+    // (The part's block entity's place, which the Java reads from the part.)
+    if part && !place {
+        params.insert(0, ("pos".to_string(), "[i32; 3]".to_string()));
     }
     Some((params, returns))
 }
@@ -1159,6 +1496,7 @@ fn default_value(returns: &str) -> &'static str {
         "f32" | "f64" => "0.0",
         "Side" => "Side::Up",
         "Vec<[i32; 3]>" => "Vec::new()",
+        "Option<Stack>" => "None",
         _ => "\"y\"",
     }
 }
@@ -1476,6 +1814,37 @@ mod tests {
                 "()"
             ))
         );
+        // A belt's kept part is the belt's state, its place before it.
+        let funnels = "public class BeltFunnelInteractionHandler {\n\tpublic static boolean checkForFunnels(BeltInventory beltInventory, TransportedItemStack currentItem, float nextOffset) {\n\t\treturn false;\n\t}\n}";
+        let parts: HashMap<String, (String, bool)> = [
+            ("BeltInventory".to_string(), ("&mut Belt".to_string(), true)),
+            (
+                "TransportedItemStack".to_string(),
+                ("&mut TransportedItemStack".to_string(), false),
+            ),
+        ]
+        .into();
+        assert_eq!(
+            signature_with(
+                &first(funnels, "checkForFunnels"),
+                Asks::World,
+                &entities(),
+                &BTreeSet::new(),
+                &parts
+            ),
+            Some((
+                vec![
+                    ("pos".to_string(), "[i32; 3]".to_string()),
+                    ("belt_inventory".to_string(), "&mut Belt".to_string()),
+                    (
+                        "current_item".to_string(),
+                        "&mut TransportedItemStack".to_string()
+                    ),
+                    ("next_offset".to_string(), "f32".to_string())
+                ],
+                "bool"
+            ))
+        );
         // Not without the level, nor without a place.
         assert_eq!(
             signature(
@@ -1494,6 +1863,21 @@ mod tests {
             calls.contains("RotationPropagator") && calls.len() == 1,
             "{calls:?}"
         );
+    }
+
+    #[test]
+    fn a_behaviour_found_at_another_place_is_asked_of_another_block_entity() {
+        let belt = "DirectBeltInputBehaviour inputBehaviour =
+		BlockEntityBehaviour.get(world, nextPosition, DirectBeltInputBehaviour.TYPE);";
+        assert!(reaches_elsewhere(belt, "DirectBeltInputBehaviour"));
+        let funnel = "InvManipulationBehaviour inserting = funnelBE.getBehaviour(InvManipulationBehaviour.TYPE);";
+        assert!(reaches_elsewhere(funnel, "InvManipulationBehaviour"));
+        // The call nearest it counts, not one of an earlier statement.
+        let both = "x = getBehaviour(FilteringBehaviour.TYPE); y = BlockEntityBehaviour.get(level, below, DirectBeltInputBehaviour.TYPE);";
+        assert!(reaches_elsewhere(both, "DirectBeltInputBehaviour"));
+        // Its own is not another's.
+        let own = "FilteringBehaviour f = getBehaviour(FilteringBehaviour.TYPE); this.getBehaviour(FilteringBehaviour.TYPE);";
+        assert!(!reaches_elsewhere(own, "FilteringBehaviour"));
     }
 
     #[test]
@@ -1550,6 +1934,7 @@ mod tests {
                 of: vec!["spin:motor".into()],
                 body: Some("return face == state.getValue(FACING);".into()),
                 refs: Vec::new(),
+                states: Vec::new(),
             }],
             asked: 3,
             others: vec!["spin:crank".into()],

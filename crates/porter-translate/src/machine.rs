@@ -470,6 +470,8 @@ pub struct Machine<'a> {
     pub lookup: Option<&'a dyn Fn([i32; 3]) -> Option<Neighbour>>,
     /// The container on a side, as its slots: see `container`.
     pub containers: Option<&'a dyn Fn(Side) -> Option<Vec<Option<Stack>>>>,
+    /// The container at a place, through one of its faces: see `container_at`.
+    pub containers_at: Option<&'a dyn Fn([i32; 3], Side) -> Option<Vec<Option<Stack>>>>,
     /// A kinetic network's totals: see `network_totals`.
     pub networks: Option<&'a dyn Fn(i64) -> Option<NetworkTotals>>,
 }
@@ -502,6 +504,20 @@ pub enum Effect {
     TakeFrom { side: Side, slot: usize, count: u32 },
     /// `stack` put into the container on `side`: see `give_to`.
     GiveTo { side: Side, stack: Stack },
+    /// `count` taken from slot `slot` of the container at `pos` through `face`: see
+    /// `take_at`.
+    TakeAt {
+        pos: [i32; 3],
+        face: Side,
+        slot: usize,
+        count: u32,
+    },
+    /// `stack` put into the container at `pos` through `face`: see `give_at`.
+    GiveAt {
+        pos: [i32; 3],
+        face: Side,
+        stack: Stack,
+    },
     /// An item dropped into the world (`level.addFreshEntity(new ItemEntity(..))`,
     /// `Containers.dropItemStack`): a skillet's cooked food, a stove's.
     Drop {
@@ -767,6 +783,7 @@ impl<'a> Machine<'a> {
             day_time: 0,
             networks: None,
             containers: None,
+            containers_at: None,
             lookup: None,
         }
     }
@@ -1010,14 +1027,36 @@ impl<'a> Machine<'a> {
     /// the segment a funnel stands on, a linked block). One beside it or two steps away
     /// comes from what the tick was given; any other is read from the world, as it was
     /// before the tick, the block entity ticking now included (a walk along a chain that
-    /// starts at `pos` finds it; its state as the tick changes it is `state`). None for a
-    /// place not loaded and a block that isn't a mod's block entity. Change one with
-    /// `set_at` and `set_item_at`.
+    /// starts at `pos` finds it; its state as the tick changes it is `state`), with what
+    /// this tick has already written to it (`set_at`, `set_item_at`). None for a place
+    /// not loaded and a block that isn't a mod's block entity. Change one with `set_at`
+    /// and `set_item_at`.
     pub fn entity_at(&self, pos: [i32; 3]) -> Option<Neighbour> {
-        if let Some(n) = self.at(pos) {
-            return Some(n.clone());
+        let mut found = match self.at(pos) {
+            Some(n) => n.clone(),
+            None => self.lookup.and_then(|f| f(pos)).filter(|n| n.entity.is_some())?,
+        };
+        // As this tick has changed it so far: two inserts into one belt in a tick both
+        // land.
+        for (at, key, value) in &self.far_writes {
+            if *at != pos {
+                continue;
+            }
+            match found.values.iter_mut().find(|(k, _)| k == key) {
+                Some(v) => v.1 = value.clone(),
+                None => found.values.push((key.clone(), value.clone())),
+            }
         }
-        self.lookup.and_then(|f| f(pos)).filter(|n| n.entity.is_some())
+        for (at, slot, stack) in &self.item_writes {
+            if *at != pos {
+                continue;
+            }
+            if found.items.len() <= *slot {
+                found.items.resize(*slot + 1, None);
+            }
+            found.items[*slot] = stack.clone();
+        }
+        Some(found)
     }
 
     /// Changes saved value `key` of the mod block entity at `pos` (one `at` gives),
@@ -1078,6 +1117,49 @@ impl<'a> Machine<'a> {
     /// rest, as the Java keeps what `insertItem` returns.
     pub fn give_to(&mut self, side: Side, stack: Stack) {
         self.effects.push(Effect::GiveTo { side, stack });
+    }
+
+    /// The container at `pos`, however far (the one a funnel stands against, behind it:
+    /// `pos` is that block, `face` the face of it the funnel touches), as the slots
+    /// that face reaches, as they are before the tick: `level.getCapability(
+    /// Capabilities.ItemHandler.BLOCK, pos, face)`, what an `InvManipulationBehaviour`'s
+    /// target finds. None where there is no container.
+    pub fn container_at(&self, pos: [i32; 3], face: Side) -> Option<Vec<Option<Stack>>> {
+        self.containers_at.and_then(|f| f(pos, face))
+    }
+
+    /// How many of `item` the container at `pos` has room for through `face` (a
+    /// simulated `insertItem`): 0 where there is none.
+    pub fn room_at(&self, pos: [i32; 3], face: Side, item: &str) -> u32 {
+        let max = self.max_stack(item);
+        self.container_at(pos, face).map_or(0, |slots| {
+            slots
+                .iter()
+                .map(|s| match s {
+                    None => max,
+                    Some(s) if s.item == item => max.saturating_sub(s.count),
+                    Some(_) => 0,
+                })
+                .sum()
+        })
+    }
+
+    /// Takes `count` from slot `slot` of the container at `pos` through `face` (the one
+    /// `container_at` lists), after the tick: `extractItem(slot, count, false)` on it.
+    pub fn take_at(&mut self, pos: [i32; 3], face: Side, slot: usize, count: u32) {
+        self.effects.push(Effect::TakeAt {
+            pos,
+            face,
+            slot,
+            count,
+        });
+    }
+
+    /// Puts `stack` into the container at `pos` through `face`, after the tick
+    /// (`ItemHandlerHelper.insertItemStacked`): give only what `room_at` says fits, and
+    /// keep the rest, as the Java keeps what the insert returns.
+    pub fn give_at(&mut self, pos: [i32; 3], face: Side, stack: Stack) {
+        self.effects.push(Effect::GiveAt { pos, face, stack });
     }
 
     /// Sends up to `max` of what is in `slot` to the container on `side` (a chest,

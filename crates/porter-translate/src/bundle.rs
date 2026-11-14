@@ -2515,6 +2515,26 @@ fn {id}_block_entity_tick(
         )
     }};
     machine.containers = Some(&container_at);
+    // A container at any place, through one of its faces (a funnel's, behind it).
+    let container_at_place = |at: [i32; 3], side: m::Side| -> Option<Vec<Option<m::Stack>>> {{
+        use horizon_core::geometry::Direction;
+        let face = match side {{
+            m::Side::Down => Direction::Down,
+            m::Side::Up => Direction::Up,
+            m::Side::North => Direction::North,
+            m::Side::South => Direction::South,
+            m::Side::West => Direction::West,
+            m::Side::East => Direction::East,
+        }};
+        let found = game.native_container_slots(&dimension_here, at, face)?;
+        Some(
+            found
+                .into_iter()
+                .map(|s| s.stack.as_ref().map(|st| m::Stack::new(&st.item, st.count)))
+                .collect(),
+        )
+    }};
+    machine.containers_at = Some(&container_at_place);
     // Any loaded mod block entity, by its position, read as it is before the tick; this
     // one too (it is out of the world while it ticks), so a walk over a chain of them that
     // starts here (a belt's) finds it.
@@ -2791,6 +2811,31 @@ fn {id}_block_entity_tick(
                     m::Side::East => Direction::West,
                 }};
                 let _ = game.native_insert_item(next, face, horizon_client::items::ItemStack::new(&stack.item, stack.count));
+            }}
+            m::Effect::TakeAt {{ pos: at, face, slot, count }} => {{
+                use horizon_core::geometry::Direction;
+                let face = match face {{
+                    m::Side::Down => Direction::Down,
+                    m::Side::Up => Direction::Up,
+                    m::Side::North => Direction::North,
+                    m::Side::South => Direction::South,
+                    m::Side::West => Direction::West,
+                    m::Side::East => Direction::East,
+                }};
+                let dimension = game.native_dimension().to_string();
+                let _ = game.native_extract_item(&dimension, at, face, slot, count);
+            }}
+            m::Effect::GiveAt {{ pos: at, face, stack }} => {{
+                use horizon_core::geometry::Direction;
+                let face = match face {{
+                    m::Side::Down => Direction::Down,
+                    m::Side::Up => Direction::Up,
+                    m::Side::North => Direction::North,
+                    m::Side::South => Direction::South,
+                    m::Side::West => Direction::West,
+                    m::Side::East => Direction::East,
+                }};
+                let _ = game.native_insert_item(at, face, horizon_client::items::ItemStack::new(&stack.item, stack.count));
             }}
             m::Effect::Network {{ id, stress, capacity }} => {{
                 if let Ok(mut list) = NETWORKS.lock() {{

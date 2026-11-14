@@ -1339,7 +1339,7 @@ const JAVA_BUDGET: usize = 400_000;
 const USED_BUDGET: usize = 60_000;
 /// Of the classes past that budget, at most this much of the short methods the code calls
 /// on them by name (`BeltHelper.getVectorForOffset(..)`).
-const CALLED_BUDGET: usize = 6_000;
+const CALLED_BUDGET: usize = 10_000;
 
 /// A prompt: a part shared by every prompt of its kind, which the API caches, and
 /// the part for this function.
@@ -1393,8 +1393,14 @@ const PROMPT_ROOM: u64 = 90_000;
 /// under the length where a token starts to cost five times as much.
 fn prompt(dir: &Path, scan: &ModScan, unit: &Unit) -> Result<Prompt> {
     let mut budget = USED_BUDGET;
+    // Once the classes are gone, the methods quoted from them go too, half at a time.
+    let mut called = CALLED_BUDGET;
     loop {
-        let mut out = prompt_with(dir, scan, unit, budget)?;
+        let mut out = prompt_with(dir, scan, unit, budget, called)?;
+        if budget == 0 && called > 0 && tokens_of(out.len()) > PROMPT_ROOM {
+            called = if called > 2_000 { called / 2 } else { 0 };
+            continue;
+        }
         if tokens_of(out.len()) <= PROMPT_ROOM || budget == 0 {
             if budget < USED_BUDGET {
                 out.notes.push(format!(
@@ -1406,6 +1412,32 @@ fn prompt(dir: &Path, scan: &ModScan, unit: &Unit) -> Result<Prompt> {
         }
         budget = if budget > 8_000 { budget / 2 } else { 0 };
     }
+}
+
+/// A class too long to show, by how near it is to the function's own (its package's
+/// shared parts), with the methods of it the code calls: (name, body).
+type QuotedClass = (usize, String, Vec<(String, String)>);
+
+/// The methods a function's comment names `class` for, where it names it only that way
+/// ("`com.x.BeltBlock`'s `updateEntityAfterFallOn`"): none where it names the class itself.
+fn methods_named_of(comment: &str, class: &str) -> Option<Vec<String>> {
+    let named = format!("`{class}`");
+    let mut methods: Vec<String> = Vec::new();
+    for (at, _) in comment.match_indices(&named) {
+        let rest = comment[at + named.len()..].strip_prefix("'s `")?;
+        let method = rest.split('`').next()?.trim_end_matches("()");
+        if method.is_empty()
+            || !method
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_')
+        {
+            return None;
+        }
+        if !methods.iter().any(|m| m == method) {
+            methods.push(method.to_string());
+        }
+    }
+    (!methods.is_empty()).then_some(methods)
 }
 
 /// The methods of class `simple` that `calling` calls by name (`Simple.method(`), with
@@ -1427,7 +1459,8 @@ fn called_bodies(simple: &str, source: &str, calling: &str) -> Vec<(String, Stri
         {
             continue;
         }
-        let Some(body) = crate::questions::method_body(source, &method).filter(|b| b.len() <= 800)
+        let Some(body) =
+            crate::questions::method_body(source, &method).filter(|b| b.len() <= 4_000)
         else {
             continue;
         };
@@ -1458,7 +1491,13 @@ fn called_bodies(simple: &str, source: &str, calling: &str) -> Vec<(String, Stri
 
 /// The prompt for one function, with up to `used_budget` characters of the mod's
 /// classes its Java uses.
-fn prompt_with(dir: &Path, scan: &ModScan, unit: &Unit, used_budget: usize) -> Result<Prompt> {
+fn prompt_with(
+    dir: &Path,
+    scan: &ModScan,
+    unit: &Unit,
+    used_budget: usize,
+    called_budget: usize,
+) -> Result<Prompt> {
     let mut out = Prompt::default();
     let file = fs::read_to_string(dir.join(&unit.file))
         .with_context(|| format!("reading {}", unit.file))?;
@@ -1512,6 +1551,19 @@ fn prompt_with(dir: &Path, scan: &ModScan, unit: &Unit, used_budget: usize) -> R
         };
         // (Shown without its imports: nothing a port reads.)
         let shown = java::trimmed(&source);
+        // A class the comment names only for some of its methods ("`BeltBlock`'s
+        // `updateEntityAfterFallOn`"): those and what they reach, the rest by signature.
+        let shown = match methods_named_of(&unit.comment, &class.name) {
+            Some(methods) => java::sliced(
+                &shown,
+                &methods
+                    .iter()
+                    .map(|m| format!("{m}("))
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            ),
+            None => shown,
+        };
         if java_chars + shown.len() > JAVA_BUDGET {
             out.notes.push(format!(
                 "{} left out: the Java for this function is past {JAVA_BUDGET} characters",
@@ -1636,7 +1688,13 @@ fn prompt_with(dir: &Path, scan: &ModScan, unit: &Unit, used_budget: usize) -> R
         calling.push_str(&how);
     }
     let mut used: std::collections::VecDeque<(&porter_model::ClassInfo, String)> = used.into();
-    let mut called_chars = 0;
+    // The methods quoted from classes too long to show, gathered first and then shown
+    // nearest first: the classes of the function's own package before the rest.
+    let mut called: Vec<QuotedClass> = Vec::new();
+    let home: Vec<&str> = sent
+        .first()
+        .map(|n| n.split('.').collect())
+        .unwrap_or_default();
     // (Classes a shown class hands work to, found as they are shown.)
     let mut followed: Vec<String> = Vec::new();
     while let Some((class, source)) = used.pop_front() {
@@ -1650,37 +1708,20 @@ fn prompt_with(dir: &Path, scan: &ModScan, unit: &Unit, used_budget: usize) -> R
             unseen_java.push_str(&source);
             // Still, the short methods of it the code calls by name: what a call does,
             // not a guess (`BeltHelper.getVectorForOffset(belt, offset)`).
-            let mut bodies = String::new();
-            for (method, body) in called_bodies(simple, &source, &calling) {
-                let _ = &method;
-                let line = format!(
-                    "{body}
-"
-                );
-                if called_chars + line.len() > CALLED_BUDGET {
-                    break;
-                }
-                called_chars += line.len();
-                bodies.push_str(&line);
-            }
-            if !bodies.is_empty() {
-                let _ = writeln!(
-                    p,
-                    "`{}` is a class of the mod too long to show whole. The methods of it the code above calls, each on one line:
-
-```java
-{bodies}```
-",
-                    class.name
-                );
-                out.notes.push(format!(
-                    "{} (a class it uses): only the methods the code calls are shown",
-                    class.name
-                ));
+            let found = called_bodies(simple, &source, &calling);
+            let near = class
+                .name
+                .split('.')
+                .zip(&home)
+                .take_while(|(a, b)| a == *b)
+                .count();
+            let quoted = !found.is_empty();
+            if quoted {
+                called.push((near, class.name.clone(), found));
             }
             let named = named_constants(simple, &source, &java_text);
             if named.is_empty() {
-                if bodies.is_empty() {
+                if !quoted {
                     out.notes.push(format!(
                         "{} (a class it uses) left out: past the budget for them",
                         class.name
@@ -1753,6 +1794,32 @@ fn prompt_with(dir: &Path, scan: &ModScan, unit: &Unit, used_budget: usize) -> R
         }
         calling.push_str(&cut);
         java_text.push_str(&cut);
+    }
+    called.sort_by_key(|c| std::cmp::Reverse(c.0));
+    let mut called_chars = 0;
+    for (_, name, found) in called {
+        let mut bodies = String::new();
+        for (_, body) in found {
+            if called_chars + body.len() + 1 > called_budget {
+                continue;
+            }
+            called_chars += body.len() + 1;
+            bodies.push_str(&body);
+            bodies.push('\n');
+        }
+        if bodies.is_empty() {
+            out.notes.push(format!(
+                "{name} (a class it uses) left out: past the budget for them"
+            ));
+            continue;
+        }
+        let _ = writeln!(
+            p,
+            "`{name}` is a class of the mod too long to show whole. The methods of it the code above calls, each on one line:\n\n```java\n{bodies}```\n"
+        );
+        out.notes.push(format!(
+            "{name} (a class it uses): only the methods the code calls are shown"
+        ));
     }
     // What the mod's blocks answer for its own interfaces (`IRotate.hasShaftTowards`),
     // where the code asks a block it meets: they are in classes this function isn't from.
@@ -1877,7 +1944,14 @@ fn prompt_with(dir: &Path, scan: &ModScan, unit: &Unit, used_budget: usize) -> R
     // The Rust around it: the parts of the mod's module it can use.
     match unit.kind {
         Kind::Runtime => {
-            let (common, own) = module_context(&file, &stub, &unit.function, &java_text);
+            // A behaviour asked of other block entities reads and writes their state: the
+            // state structs its comment names are what it works on.
+            let context_stub = if unit.comment.contains("of another block entity, the one") {
+                format!("{}{stub}", unit.comment)
+            } else {
+                stub.clone()
+            };
+            let (common, own) = module_context(&file, &context_stub, &unit.function, &java_text);
             if !common.is_empty() {
                 // The same text for every function with this one's parameters: sent
                 // first, and read from the cache after the first of them.
@@ -2753,6 +2827,16 @@ fn equivalents(java: &str, stub: &str) -> String {
             "Machine",
             "hasNeighborSignal(",
             "`level.hasNeighborSignal(pos)` is `machine.powered`",
+        ),
+        (
+            "Machine",
+            "FACING",
+            "a block's `facing` as its state gives it (`machine.state(\"facing\")`, `n.state(\"facing\")` of a view) is what the block stores; Java's is `java_facing(block, stored)`: some blocks store it turned so they draw as in Java (a belt funnel's is half a turn round)",
+        ),
+        (
+            "&Neighbour",
+            "FACING",
+            "a block's `facing` as a view's state gives it (`target.state(\"facing\")`) is what the block stores; Java's is `java_facing(&target.block, stored)`: some blocks store it turned so they draw as in Java (a belt funnel's is half a turn round)",
         ),
         (
             "Machine",
@@ -4190,6 +4274,17 @@ impl State {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_class_named_for_one_method_is_shown_for_that_method() {
+        let comment = "/// the tick of `com.x.BeltBlockEntity` and what `com.x.BeltBlock`'s `updateEntityAfterFallOn` does";
+        assert_eq!(
+            methods_named_of(comment, "com.x.BeltBlock"),
+            Some(vec!["updateEntityAfterFallOn".to_string()])
+        );
+        // Named for itself too: shown whole.
+        assert_eq!(methods_named_of(comment, "com.x.BeltBlockEntity"), None);
+    }
 
     #[test]
     fn a_class_too_long_to_show_still_gives_the_methods_called_on_it() {
