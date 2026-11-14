@@ -616,14 +616,49 @@ Still short, by what the audit lists:
   block's mesh.
 - **Blocks Java removes when alone** (a belt, a cart assembler off a rail) and **belt
   funnels** that turn into funnels off a belt: their `updateShape`/`canSurvive`.
-- **Game tests**: 1 of 15 pass in the port. Item paths through smart chutes, depots, belts
-  and arms still break (a smart chute in a loaded test structure reads a signal it doesn't
-  have), and fan processing, compacting, deploying and sequenced assembly use recipe types
-  no machine of the port runs yet.
+- **Game tests**: 1 of 15 pass in the port (wheat milling; see "Item transport" below).
+  The smart observer tests still fail (the observer's item and fluid detection), and fan
+  processing, compacting, deploying (the deployer test passed by accident before: its
+  piston fired at placement) and sequenced assembly use recipe types no machine of the
+  port runs yet.
 - **Placing** still differs for some (bells' attachment, table cloths, ladders against
   shafts), and Horizon shows its template's guess for a tick before the mod's placement.
 - Trains, contraptions and the 22 functions Haiku declines (trains' packets, the potato
   cannon, goggles) are untouched.
+
+### Item transport (2026-11-13, night)
+
+Checked in game on build `native-66f3981-b8a34721ba9c` ("porter trials"), 29 of 29 checks:
+
+- **Hoppers and machines**: a hopper takes flour out of a millstone and the wheat milling
+  game test passes (6 s). The port's container hook asked its chest-like table first, and
+  60 Create blocks there (millstone, basin, depot, chutes) had no menu, so Horizon saw a
+  container no side could reach; the item handler rules come first now.
+- **Belts**: built with the belt connector as a player does, a belt walks its chain on its
+  first tick (the ported `BeltBlock.initBelt`: controller, length and index on every
+  segment), turns with the motor (16 RPM on all six segments), takes an item dropped on
+  its controller segment, carries it at Java's speed and throws it off the end it runs to.
+  `ai-test/create_belt.py` does this through horizon-ctl.
+- **Smart chutes** are full blocks again (they were templated as a pressure plate, too
+  thin to hold their lever).
+
+Porter gains behind these: lists of the mod's own objects kept in a block entity's state
+(`transported_item_stack_list`), `machine.entity_at` for any loaded block entity, static
+helpers that work on the level as functions of their own (`belt_block_init_belt(pos,
+machine)`), answers quoting the methods they call (`BeltBlockEntity::hasPulley`), and
+prompts quoting the short methods they call on classes too long to show.
+
+Still short on belts: only the controller segment takes dropped items (Java takes them
+on every segment, through the controller), the ends don't insert into funnels, tunnels,
+depots or containers, and processing on the belt (fans, presses, deployers) and
+entities riding it are left out. A belt placed from a game test structure keeps Java's
+`Controller` position, which the port doesn't read. Haiku for this pass: about $0.74
+(the night's total about $1.69 of the $5 approved).
+
+One thing to watch: re-translating the item ticks also re-translated the shared kinetic
+step they call, and the new one squared speeds (`getConveyedSpeed` already includes the
+speed). The 29 checks caught it; the working one was put back, and `translate --refresh`
+no longer re-ports an already ported function just because one it ports calls it.
 
 ## Suggested order
 
