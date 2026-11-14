@@ -1178,6 +1178,33 @@ const BLOCK_MODEL_DRAW: &str = r#"    if m::BLOCK_MODELS.contains(&block) {
     }
 "#;
 
+/// In the container helper: a block whose block entity opens its items to the blocks
+/// around (Java's item handler capability), every slot reached from every side, its input
+/// slots taking items and its output slots giving them. Asked before the chest-like
+/// blocks: a machine that only holds its items there (a millstone) is reached here.
+const ITEM_HANDLER_CONTAINER: &str = r#"    // A block entity whose items are open to the blocks around (an item handler
+    // capability): a hopper, a chute or a funnel takes from its outputs and gives to
+    // its inputs.
+    if let Some((_, entity, _)) = m::BLOCK_ENTITIES.iter().find(|(b, _, _)| *b == block)
+        && let Some((_, slots, inputs, outputs)) = m::ITEM_HANDLERS.iter().find(|(e, ..)| e == entity)
+    {
+        let all: Vec<usize> = (0..*slots).collect();
+        // The menu it opens, where its block opens a chest's of as many slots.
+        let menu = m::VANILLA_CONTAINERS
+            .iter()
+            .find(|(b, menu, n)| *b == block && !menu.is_empty() && n == slots)
+            .map(|(_, menu, _)| (*menu).into());
+        *container = Some(horizon_client::containers::ModContainer {
+            slots: *slots,
+            faces: std::array::from_fn(|_| all.clone()),
+            inputs: inputs.to_vec(),
+            outputs: outputs.to_vec(),
+            menu,
+        });
+        return;
+    }
+"#;
+
 /// After they are written: sent when the picture differs.
 const DRAWN_AFTER: &str = r#"        if !done.sync && draws(&entity.nbt) != drawn_before {
             game.native_block_entity_sync(pos);
@@ -1670,6 +1697,14 @@ pub const DESCRIPTION: &str = "{description}";
                 self.shared_ticks,
                 !self.block_models.is_empty(),
             ));
+            // The classes of the mod's own that block entities keep lists of.
+            let mut lists: Vec<String> = Vec::new();
+            for l in self.block_entities.iter().flat_map(|b| &b.lists) {
+                if !lists.contains(l) {
+                    lists.push(l.clone());
+                }
+            }
+            r.push_str(&block_entity::list_structs(self.scan, &lists));
             // Create's stress values, by block: what a kinetic network adds up.
             if !self.scan.stress.is_empty() {
                 let table = |kind: &str| -> String {
@@ -2480,6 +2515,51 @@ fn {id}_block_entity_tick(
         )
     }};
     machine.containers = Some(&container_at);
+    // Any loaded mod block entity, by its position, read as it is before the tick; this
+    // one too (it is out of the world while it ticks), so a walk over a chain of them that
+    // starts here (a belt's) finds it.
+    let read = |tag: &Tag| -> Option<m::Saved> {{ {from_tag} }};
+    let own_view = m::Neighbour {{
+        block: game.native_block(pos),
+        pos,
+        properties: m::STATE_KEYS
+            .iter()
+            .filter_map(|key| Some((key.to_string(), game.native_block_property(pos, key)?)))
+            .collect(),
+        entity: Some(entity.id.clone()),
+        values: entity
+            .nbt
+            .iter()
+            .filter_map(|(k, tag)| read(tag).map(|v| (k.to_string_lossy(), v)))
+            .collect(),
+        items: slots.clone(),
+    }};
+    let entity_lookup = |at: [i32; 3]| -> Option<m::Neighbour> {{
+        if at == pos {{
+            return Some(own_view.clone());
+        }}
+        let e = game.native_mod_block_entity(at)?;
+        Some(m::Neighbour {{
+            block: game.native_block(at),
+            pos: at,
+            properties: m::STATE_KEYS
+                .iter()
+                .filter_map(|key| Some((key.to_string(), game.native_block_property(at, key)?)))
+                .collect(),
+            entity: Some(e.id.clone()),
+            values: e
+                .nbt
+                .iter()
+                .filter_map(|(k, tag)| read(tag).map(|v| (k.to_string_lossy(), v)))
+                .collect(),
+            items: e
+                .items
+                .iter()
+                .map(|s| s.as_ref().map(|s| m::Stack::new(&s.item, s.count)))
+                .collect(),
+        }})
+    }};
+    machine.lookup = Some(&entity_lookup);
     // Its tanks and energy, as Horizon keeps them: `fluids` (a list of
     // `{{Fluid, Amount}}`) and the int `energy`.
     let storage = m::STORAGE.iter().find(|(id, _, _)| *id == entity.id);
@@ -2612,8 +2692,15 @@ fn {id}_block_entity_tick(
             game.native_block_entity_sync(at);
         }}
     }}
-    // And in those it reached further off.
+    // And in those it reached further off. One at its own place (a helper it called
+    // walked a chain from here: a belt's `initBelt`) is the entity in hand, out of the
+    // world while it ticks: that write waits for the tick's own values, below.
+    let mut own_writes: Vec<(String, m::Saved)> = Vec::new();
     for (at, key, value) in std::mem::take(&mut done.far_writes) {{
+        if at == pos {{
+            own_writes.push((key, value));
+            continue;
+        }}
         let tag = {to_tag};
         if game
             .native_with_mod_block_entity(at, |e| {{
@@ -2774,6 +2861,12 @@ fn {id}_block_entity_tick(
             entity.nbt.insert(key.into(), tag);
         }}
 {drawn_after}    }}
+    // What a helper the tick called wrote to this block entity itself: Java's call came
+    // before the rest of its tick, so it stands over the tick's own values.
+    for (key, value) in own_writes {{
+        let tag = {to_tag};
+        entity.nbt.insert(JavaString::from(key.as_str()), tag);
+    }}
     if done.slots != slots {{
         let items = &mut entity.items;
         for (i, new) in done.slots.iter().enumerate() {{
@@ -2848,7 +2941,7 @@ fn {id}_block_entity_container(block: &str, container: &mut Option<horizon_clien
     if container.is_some() {{
         return;
     }}
-    // A chest-like block: every slot reached from every side, as a chest's. One
+{handlers}    // A chest-like block: every slot reached from every side, as a chest's. One
     // without a menu (a skillet) only holds its items: no side reaches them.
     if let Some((_, menu, slots)) = m::VANILLA_CONTAINERS.iter().find(|(b, _, _)| *b == block) {{
         let all: Vec<usize> = if menu.is_empty() {{ Vec::new() }} else {{ (0..*slots).collect() }};
@@ -2863,6 +2956,11 @@ fn {id}_block_entity_container(block: &str, container: &mut Option<horizon_clien
     }}
 {machine}}}
 "#,
+                    handlers = if self.block_entities.is_empty() {
+                        ""
+                    } else {
+                        ITEM_HANDLER_CONTAINER
+                    },
                     machine = if self.machines.is_empty() {
                         String::new()
                     } else {

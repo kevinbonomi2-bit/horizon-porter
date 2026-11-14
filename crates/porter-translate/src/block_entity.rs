@@ -79,6 +79,12 @@ pub struct BlockEntity {
     /// Java makes it: (`basinChecker`, `new DeferralBehaviour(this, this::updateBasin)`).
     /// The kept part's tick calls that code, so it is part of this block entity's tick.
     pub made: Vec<(String, String)>,
+    /// The slots it opens to the blocks around (Java's item handler capability), as
+    /// (those that take items, those that give them): a hopper, a chute, a funnel reach
+    /// them. None where it registers no capability.
+    pub handler: Option<(Vec<usize>, Vec<usize>)>,
+    /// The classes of the mod's own it keeps lists of (a belt's `TransportedItemStack`).
+    pub lists: Vec<String>,
     /// The classes of other block entities that take something it holds and call the
     /// code it gave it: a depot's `DepotBehaviour`, for a press.
     pub called_by: Vec<Caller>,
@@ -337,6 +343,9 @@ fn reach(neighbours: bool, far: bool, around: bool, drawn: bool) -> Vec<String> 
     if around {
         has.push("the mod block entities at the other places of the 3×3×3 around it too, diagonals included (`machine.at(pos)` for what `BlockPos.betweenClosed(pos.offset(-1, -1, -1), pos.offset(1, 1, 1))` walks, each with its block, state, saved values and item slots)".to_string());
     }
+    if neighbours || far || around {
+        has.push("any mod block entity loaded, however far (`machine.entity_at(pos)` for `level.getBlockEntity(pos)` at a place the Java works out: a belt's controller or next segment, the belt under a funnel; a copy as it was before the tick, with its block, state, saved values and item slots; `machine.set_at` and `machine.set_item_at` change one after the tick)".to_string());
+    }
     if drawn {
         has.push("`machine.sync()`, which sends clients its state again for its renderer (`sendBlockUpdated`)".to_string());
     }
@@ -429,6 +438,11 @@ fn shared_runtime(shared: &[SharedTick]) -> String {
             let how = if own_type(&f.java).starts_with("BlockPos ") {
                 format!(
                     "{how}; the position as `x y z` (`4 64 -2`: written with `pos_text(pos)`, read with `text_pos(&text)`), empty for none (null)"
+                )
+            } else if let Some(element) = list_doc(&f.java) {
+                format!(
+                    "{how}; a list of `{element}`, as text: read with `{s}_list(&text)`, written with `{s}_list_text(&list)`, empty for none",
+                    s = snake_case(&element)
                 )
             } else if own_type(&f.java).starts_with("BlockState ") {
                 format!(
@@ -858,6 +872,8 @@ pub fn find(scan: &ModScan, ns: &str) -> Vec<BlockEntity> {
             shared: None,
             overrides: Vec::new(),
             made: Vec::new(),
+            handler: None,
+            lists: Vec::new(),
         };
         if let Some(class) = class {
             state_of(scan, class, &mut be);
@@ -957,6 +973,36 @@ pub fn find(scan: &ModScan, ns: &str) -> Vec<BlockEntity> {
                 }
             }
             hold(scan, &owners, &mut be);
+            // Whether its items are open to the blocks around (an item handler capability
+            // registered for its type, `Capabilities.ItemHandler.BLOCK`): its input
+            // inventories take, its output ones give (a millstone's), every slot both ways
+            // where it has but one.
+            let registers = owners.iter().any(|c| {
+                std::fs::read_to_string(std::path::Path::new(&scan.input).join(&c.path))
+                    .is_ok_and(|text| text.contains("Capabilities.ItemHandler.BLOCK"))
+            });
+            if registers && be.items > 0 {
+                let mut start = 0;
+                let (mut inputs, mut outputs) = (Vec::new(), Vec::new());
+                for (name, n) in &be.inventories {
+                    let lower = name.to_ascii_lowercase();
+                    let slots = start..start + n;
+                    if lower.contains("output") || lower.contains("result") {
+                        outputs.extend(slots);
+                    } else if lower.contains("input") {
+                        inputs.extend(slots);
+                    } else {
+                        inputs.extend(slots.clone());
+                        outputs.extend(slots);
+                    }
+                    start += n;
+                }
+                if be.inventories.is_empty() {
+                    inputs = (0..be.items).collect();
+                    outputs = inputs.clone();
+                }
+                be.handler = Some((inputs, outputs));
+            }
             // Whether any of that looks two steps away: `worldPosition.below(2)`.
             let reaches = |c: &ClassInfo| {
                 std::fs::read_to_string(std::path::Path::new(&scan.input).join(&c.path)).is_ok_and(
@@ -1426,7 +1472,18 @@ fn state_fields(scan: &ModScan, class: &ClassInfo, be: &mut BlockEntity) {
         }
         // An enum of the mod's own is kept as its constant's name.
         let is_enum = is_mod_enum(scan, class, &f.ty);
-        let Some(kind) = Kind::from_java(&f.ty).or(is_enum.then_some(Kind::Text)) else {
+        // A list of a class of the mod's own (a belt's `List<TransportedItemStack>`):
+        // kept as text, its element a struct of its own (`list_structs`).
+        let listed = list_element(scan, &f.ty);
+        if let Some(element) = listed
+            && !be.lists.contains(&element.name)
+        {
+            be.lists.push(element.name.clone());
+        }
+        let Some(kind) = Kind::from_java(&f.ty)
+            .or(is_enum.then_some(Kind::Text))
+            .or(listed.map(|_| Kind::Text))
+        else {
             be.left_out.push(format!(
                 "`{} {}`: no Rust type for it yet; where the Java fills it by looking something up (a recipe it found), look it up again where the Java reads it",
                 f.ty, f.name
@@ -1587,6 +1644,163 @@ fn lerped_start(made: &str, then: &str) -> Option<String> {
 
 /// Whether `ty` is an enum of the mod's own: one of its classes, or one nested in
 /// `class` (`PressingBehaviour.Mode`, written `Mode` there).
+/// The Java lists a field can hold a mod's objects in.
+const LIST_TYPES: &[&str] = &[
+    "List<",
+    "ArrayList<",
+    "LinkedList<",
+    "Collection<",
+    "Deque<",
+    "Queue<",
+];
+
+/// The class of the mod's own a list field holds (`List<TransportedItemStack>`), when it
+/// has plain fields to keep: a number, a flag, a word, an item, a direction or position.
+pub(crate) fn list_element<'a>(scan: &'a ModScan, ty: &str) -> Option<&'a ClassInfo> {
+    let inner = LIST_TYPES
+        .iter()
+        .find_map(|p| ty.trim().strip_prefix(p))?
+        .strip_suffix('>')?
+        .trim();
+    let simple = inner.rsplit(['.', '$']).next().unwrap_or(inner);
+    let mut found = scan.classes.iter().filter(|c| {
+        c.name.rsplit(['.', '$']).next() == Some(simple) && c.kind == porter_model::ClassKind::Class
+    });
+    let (Some(class), None) = (found.next(), found.next()) else {
+        return None;
+    };
+    (!element_fields(scan, class).is_empty()).then_some(class)
+}
+
+/// The fields of a list's element class it keeps: (Rust name, kind, Java field), its
+/// own and its mod parents', plain ones only (an item keeps its count beside it).
+pub(crate) fn element_fields(scan: &ModScan, class: &ClassInfo) -> Vec<(String, Kind, String)> {
+    let mut out: Vec<(String, Kind, String)> = Vec::new();
+    let mut next = Some(class);
+    for _ in 0..4 {
+        let Some(c) = next else { break };
+        for f in c.fields.iter().filter(|f| !f.is_static) {
+            let plain = match f.ty.rsplit('.').next().unwrap_or(&f.ty) {
+                "Direction" | "Axis" => Some(Kind::Text),
+                _ => Kind::from_java(&f.ty).or(is_mod_enum(scan, c, &f.ty).then_some(Kind::Text)),
+            };
+            let Some(kind) = plain.filter(|k| *k != Kind::Lerped) else {
+                continue;
+            };
+            let name = rust_ident(&f.name);
+            if out.iter().any(|(n, _, _)| *n == name) {
+                continue;
+            }
+            out.push((name.clone(), kind, format!("{} {}", f.ty, f.name)));
+            if kind == Kind::Item {
+                out.push((
+                    format!("{}_count", name.trim_start_matches("r#")),
+                    Kind::Int,
+                    format!("{}'s count", f.name),
+                ));
+            }
+        }
+        next = c
+            .superclass
+            .as_deref()
+            .and_then(|n| scan.classes.iter().find(|k| k.name == n));
+    }
+    out
+}
+
+/// `TransportedItemStack` -> `transported_item_stack`.
+fn snake_case(simple: &str) -> String {
+    let mut out = String::new();
+    for (i, c) in simple.chars().enumerate() {
+        if c.is_ascii_uppercase() {
+            if i > 0 {
+                out.push('_');
+            }
+            out.push(c.to_ascii_lowercase());
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// The runtime.rs code for the classes the block entities keep lists of: a struct for
+/// each, and its list as text (`x_list(&text)`, `x_list_text(&list)`), as a field keeps it.
+pub fn list_structs(scan: &ModScan, classes: &[String]) -> String {
+    let mut r = String::new();
+    if classes.is_empty() {
+        return r;
+    }
+    r.push_str(LIST_ESCAPE);
+    let mut tests = String::new();
+    for name in classes {
+        let Some(class) = scan.classes.iter().find(|c| c.name == *name) else {
+            continue;
+        };
+        let simple = name.rsplit(['.', '$']).next().unwrap_or(name);
+        let snake = snake_case(simple);
+        let ty = camel(&snake);
+        let fields = element_fields(scan, class);
+        let _ = writeln!(
+            r,
+            "\n/// One `{simple}` (`{name}`), as a block entity keeps a list of them\n/// (`{snake}_list`): its plain fields. A direction is its name (`north`), an item its id with its count beside it.\n#[derive(Clone, Debug, Default, PartialEq)]\npub struct {ty} {{"
+        );
+        for (f, kind, java) in &fields {
+            let _ = writeln!(r, "    /// `{java}`.\n    pub {f}: {},", kind.rust());
+        }
+        r.push_str("}\n");
+        let _ = writeln!(
+            r,
+            "\nimpl {ty} {{\n    /// As text: `field=value;..`.\n    pub fn to_text(&self) -> String {{\n        let mut out: Vec<String> = Vec::new();"
+        );
+        for (f, kind, _) in &fields {
+            let key = f.trim_start_matches("r#");
+            let value = match kind {
+                Kind::Bool => format!("if self.{f} {{ \"1\" }} else {{ \"0\" }}"),
+                Kind::Text | Kind::Item => format!("list_escape(&self.{f})"),
+                _ => format!("self.{f}"),
+            };
+            let _ = writeln!(r, "        out.push(format!(\"{key}={{}}\", {value}));");
+        }
+        r.push_str("        out.join(\";\")\n    }\n\n    /// From its text (`to_text`); a field missing keeps its default.\n    pub fn from_text(text: &str) -> Self {\n        let mut v = Self::default();\n        for part in text.split(';') {\n            let Some((k, raw)) = part.split_once('=') else {\n                continue;\n            };\n            match k {\n");
+        for (f, kind, _) in &fields {
+            let key = f.trim_start_matches("r#");
+            let parse = match kind {
+                Kind::Bool => format!("v.{f} = raw == \"1\""),
+                Kind::Text | Kind::Item => format!("v.{f} = list_unescape(raw)"),
+                _ => format!("v.{f} = raw.parse().unwrap_or_default()"),
+            };
+            let _ = writeln!(r, "                \"{key}\" => {parse},");
+        }
+        r.push_str("                _ => {}\n            }\n        }\n        let _ = &text;\n        v\n    }\n}\n");
+        let _ = writeln!(
+            r,
+            "\n/// The `{simple}`s a list field holds, from its text: what the Java's list holds.\npub fn {snake}_list(text: &str) -> Vec<{ty}> {{\n    text.split('|').filter(|t| !t.is_empty()).map({ty}::from_text).collect()\n}}\n\n/// A list of `{simple}`s as a field keeps it.\npub fn {snake}_list_text(list: &[{ty}]) -> String {{\n    list.iter().map({ty}::to_text).collect::<Vec<_>>().join(\"|\")\n}}"
+        );
+        tests.push_str(&format!(
+            "\n    #[test]\n    fn {snake}_list_round_trip() {{\n        let list = vec![{ty}::default(), {ty}::default()];\n        assert_eq!({snake}_list(&{snake}_list_text(&list)), list);\n        assert!({snake}_list(\"\").is_empty());\n    }}\n"
+        ));
+    }
+    let _ = writeln!(
+        r,
+        "\n#[cfg(test)]\nmod list_tests {{\n    use super::*;\n\n    #[test]\n    fn list_values_keep_their_separators() {{\n        let v = \"a;b|c=d%3B\";\n        assert_eq!(list_unescape(&list_escape(v)), v);\n    }}\n{tests}}}"
+    );
+    r
+}
+
+/// How a value in a list kept as text is written: `;`, `|`, `=` and `%` as `%3B`,
+/// `%7C`, `%3D`, `%25`.
+const LIST_ESCAPE: &str = r#"
+/// A value in a list kept as text, its separators written out.
+fn list_escape(v: &str) -> String {
+    v.replace('%', "%25").replace(';', "%3B").replace('|', "%7C").replace('=', "%3D")
+}
+
+fn list_unescape(v: &str) -> String {
+    v.replace("%3D", "=").replace("%7C", "|").replace("%3B", ";").replace("%25", "%")
+}
+"#;
+
 fn is_mod_enum(scan: &ModScan, class: &ClassInfo, ty: &str) -> bool {
     let simple = ty.rsplit(['.', '$']).next().unwrap_or(ty);
     if simple.is_empty() || !simple.starts_with(|c: char| c.is_ascii_uppercase()) {
@@ -1707,6 +1921,11 @@ fn hold(scan: &ModScan, owners: &[&ClassInfo], be: &mut BlockEntity) {
                 part.fields.clear();
                 state_of(scan, c, &mut part);
                 ticks |= part.ticks && c.name == held.name;
+                for l in part.lists {
+                    if !theirs.lists.contains(&l) {
+                        theirs.lists.push(l);
+                    }
+                }
                 for x in part.fields {
                     if !theirs
                         .fields
@@ -1747,6 +1966,7 @@ fn hold(scan: &ModScan, owners: &[&ClassInfo], be: &mut BlockEntity) {
                     }
                 }
             }
+            be.lists = theirs.lists.clone();
             let prefix = rust_ident(&f.name);
             let mut took = false;
             for mut x in theirs.fields.into_iter().take(24) {
@@ -1800,6 +2020,21 @@ fn hold(scan: &ModScan, owners: &[&ClassInfo], be: &mut BlockEntity) {
         be.items = all.iter().map(|(_, n)| n).sum();
         be.inventories = all;
     }
+}
+
+/// The element class a list field's Java holds (`List<TransportedItemStack> items`).
+fn list_doc(java: &str) -> Option<String> {
+    let own = own_type(java);
+    let inner = LIST_TYPES.iter().find_map(|p| own.strip_prefix(p))?;
+    let inner = &inner[..inner.find('>')?];
+    Some(
+        inner
+            .rsplit(['.', '$'])
+            .next()
+            .unwrap_or(inner)
+            .trim()
+            .to_string(),
+    )
 }
 
 /// A field's own type and name, without the part it is kept in: `BlockState bracket` of
@@ -2144,9 +2379,20 @@ pub const BLOCK_ENTITIES: &[(&str, &str, bool)] = &[
             };
             let how = if f.java.contains("enum ") {
                 format!("{how}; the constant's name (`BELT`), empty before it is set")
+            } else if f.java.trim().ends_with("()") {
+                // A method's value Java saves for its clients (`isController()`).
+                format!(
+                    "{how}; what Java saves of `{}` for its clients: the Java works it out each time it calls the method, so where the code calls it, work it out as the method does from the fields it reads, and set this field to it",
+                    one_line(f.java.trim())
+                )
             } else if own_type(&f.java).starts_with("BlockPos ") {
                 format!(
                     "{how}; the position as `x y z` (`4 64 -2`: written with `pos_text(pos)`, read with `text_pos(&text)`), empty for none (null)"
+                )
+            } else if let Some(element) = list_doc(&f.java) {
+                format!(
+                    "{how}; a list of `{element}`, as text: read with `{s}_list(&text)`, written with `{s}_list_text(&list)`, empty for none",
+                    s = snake_case(&element)
                 )
             } else if own_type(&f.java).starts_with("BlockState ") {
                 format!(
@@ -2472,6 +2718,17 @@ pub const BLOCK_ENTITIES: &[(&str, &str, bool)] = &[
                 "Some([{c}, {i}, {o}])"
             ))
         );
+    }
+    r.push_str("];\n");
+    r.push_str("\n/// Block entities whose items are open to the blocks around (Java's item handler\n/// capability): (block entity, item slots, the slots that take items, those that give them).\n/// A hopper, a chute or a funnel beside one reaches them through Horizon.\npub const ITEM_HANDLERS: &[(&str, usize, &[usize], &[usize])] = &[\n");
+    for be in entities {
+        if let Some((inputs, outputs)) = &be.handler {
+            let _ = writeln!(
+                r,
+                "    ({:?}, {}, &{:?}, &{:?}),",
+                be.id, be.items, inputs, outputs
+            );
+        }
     }
     r.push_str("];\n");
     r.push_str("\n/// Block entities whose tick looks at the blocks beside it.\npub const NEIGHBOURS: &[&str] = &[");

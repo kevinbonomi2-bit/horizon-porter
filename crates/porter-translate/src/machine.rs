@@ -466,6 +466,8 @@ pub struct Machine<'a> {
     /// The world's time of day in ticks (`level.getDayTime()`): it keeps counting past
     /// 24000 (noon is 6000), so take it modulo 24000 for the hour.
     pub day_time: i64,
+    /// Any loaded mod block entity by its position: see `entity_at`.
+    pub lookup: Option<&'a dyn Fn([i32; 3]) -> Option<Neighbour>>,
     /// The container on a side, as its slots: see `container`.
     pub containers: Option<&'a dyn Fn(Side) -> Option<Vec<Option<Stack>>>>,
     /// A kinetic network's totals: see `network_totals`.
@@ -765,6 +767,7 @@ impl<'a> Machine<'a> {
             day_time: 0,
             networks: None,
             containers: None,
+            lookup: None,
         }
     }
 
@@ -1000,6 +1003,21 @@ impl<'a> Machine<'a> {
             .flatten()
             .chain(self.far.iter())
             .find(|n| n.pos == pos && n.entity.is_some())
+    }
+
+    /// The mod block entity at `pos`, however far: `level.getBlockEntity(pos)` for a
+    /// position the Java works out (a belt's controller, `BeltHelper.getSegmentBE` for
+    /// the segment a funnel stands on, a linked block). One beside it or two steps away
+    /// comes from what the tick was given; any other is read from the world, as it was
+    /// before the tick, the block entity ticking now included (a walk along a chain that
+    /// starts at `pos` finds it; its state as the tick changes it is `state`). None for a
+    /// place not loaded and a block that isn't a mod's block entity. Change one with
+    /// `set_at` and `set_item_at`.
+    pub fn entity_at(&self, pos: [i32; 3]) -> Option<Neighbour> {
+        if let Some(n) = self.at(pos) {
+            return Some(n.clone());
+        }
+        self.lookup.and_then(|f| f(pos)).filter(|n| n.entity.is_some())
     }
 
     /// Changes saved value `key` of the mod block entity at `pos` (one `at` gives),

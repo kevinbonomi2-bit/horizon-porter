@@ -595,13 +595,20 @@ pub fn translate(
         }
     };
     let mut work = pending(dir)?;
+    // Those still to port, apart from the ported ones `--refresh` adds.
+    let unported: Vec<(String, String)> = work
+        .iter()
+        .map(|u| (u.file.clone(), u.function.clone()))
+        .collect();
     if opts.refresh {
         work.extend(outdated(dir)?);
     }
-    // What `--only` leaves out, kept for the shared functions a ported one calls.
+    // What `--only` leaves out, kept for the shared functions a ported one calls: only
+    // those still to port. One ported already stays as it is, though it is outdated (a
+    // shared tick that works): `--only` names it to port it again.
     let mut rest: Vec<Unit> = Vec::new();
     if let Some(only) = &opts.only {
-        let (wanted, others) = work.into_iter().partition(|u| {
+        let (wanted, others): (Vec<Unit>, Vec<Unit>) = work.into_iter().partition(|u| {
             // (Several, with commas between: `tick_motor,render_motor`.)
             only.split(',')
                 .map(str::trim)
@@ -609,7 +616,14 @@ pub fn translate(
                 .any(|o| u.function.contains(o))
         });
         work = wanted;
-        rest = others;
+        rest = others
+            .into_iter()
+            .filter(|u| {
+                unported
+                    .iter()
+                    .any(|(f, n)| *n == u.function && *f == u.file)
+            })
+            .collect();
     }
     if let Some(limit) = opts.limit {
         work.truncate(limit);
@@ -1323,6 +1337,9 @@ fn cargo_test(dir: &Path) -> std::result::Result<(), String> {
 const JAVA_BUDGET: usize = 400_000;
 /// Of it, the most for the mod's classes the named ones use (about 15 000 tokens).
 const USED_BUDGET: usize = 60_000;
+/// Of the classes past that budget, at most this much of the short methods the code calls
+/// on them by name (`BeltHelper.getVectorForOffset(..)`).
+const CALLED_BUDGET: usize = 6_000;
 
 /// A prompt: a part shared by every prompt of its kind, which the API caches, and
 /// the part for this function.
@@ -1389,6 +1406,54 @@ fn prompt(dir: &Path, scan: &ModScan, unit: &Unit) -> Result<Prompt> {
         }
         budget = if budget > 8_000 { budget / 2 } else { 0 };
     }
+}
+
+/// The methods of class `simple` that `calling` calls by name (`Simple.method(`), with
+/// their bodies on one line where those are short.
+fn called_bodies(simple: &str, source: &str, calling: &str) -> Vec<(String, String)> {
+    let ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    let mut out: Vec<(String, String)> = Vec::new();
+    let needle = format!("{simple}.");
+    for (at, _) in calling.match_indices(&needle) {
+        if calling[..at].chars().next_back().is_some_and(ident) {
+            continue;
+        }
+        let rest = &calling[at + needle.len()..];
+        let method: String = rest.chars().take_while(|c| ident(*c)).collect();
+        if method.is_empty()
+            || !rest[method.len()..].starts_with('(')
+            || !method.starts_with(|c: char| c.is_ascii_lowercase())
+            || out.iter().any(|(m, _)| *m == method)
+        {
+            continue;
+        }
+        let Some(body) = crate::questions::method_body(source, &method).filter(|b| b.len() <= 800)
+        else {
+            continue;
+        };
+        // Its declaration, as written: what it takes and gives.
+        let declared = source
+            .match_indices(&format!(" {method}("))
+            .find_map(|(i, _)| {
+                let rest = &source[i..];
+                let open = rest.find('{')?;
+                if rest[..open].contains(';') {
+                    return None;
+                }
+                let start = source[..i].rfind('\n').map_or(0, |n| n + 1);
+                Some(
+                    source[start..i + open]
+                        .split_whitespace()
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                )
+            });
+        let Some(declared) = declared else {
+            continue;
+        };
+        out.push((method, format!("{declared} {{ {body} }}")));
+    }
+    out
 }
 
 /// The prompt for one function, with up to `used_budget` characters of the mod's
@@ -1571,6 +1636,7 @@ fn prompt_with(dir: &Path, scan: &ModScan, unit: &Unit, used_budget: usize) -> R
         calling.push_str(&how);
     }
     let mut used: std::collections::VecDeque<(&porter_model::ClassInfo, String)> = used.into();
+    let mut called_chars = 0;
     // (Classes a shown class hands work to, found as they are shown.)
     let mut followed: Vec<String> = Vec::new();
     while let Some((class, source)) = used.pop_front() {
@@ -1582,12 +1648,44 @@ fn prompt_with(dir: &Path, scan: &ModScan, unit: &Unit, used_budget: usize) -> R
             // its constants the code names, so `ModSounds.EGG_HATCH` isn't a guess.
             let simple = class.name.rsplit('.').next().unwrap_or(&class.name);
             unseen_java.push_str(&source);
-            let named = named_constants(simple, &source, &java_text);
-            if named.is_empty() {
+            // Still, the short methods of it the code calls by name: what a call does,
+            // not a guess (`BeltHelper.getVectorForOffset(belt, offset)`).
+            let mut bodies = String::new();
+            for (method, body) in called_bodies(simple, &source, &calling) {
+                let _ = &method;
+                let line = format!(
+                    "{body}
+"
+                );
+                if called_chars + line.len() > CALLED_BUDGET {
+                    break;
+                }
+                called_chars += line.len();
+                bodies.push_str(&line);
+            }
+            if !bodies.is_empty() {
+                let _ = writeln!(
+                    p,
+                    "`{}` is a class of the mod too long to show whole. The methods of it the code above calls, each on one line:
+
+```java
+{bodies}```
+",
+                    class.name
+                );
                 out.notes.push(format!(
-                    "{} (a class it uses) left out: past the budget for them",
+                    "{} (a class it uses): only the methods the code calls are shown",
                     class.name
                 ));
+            }
+            let named = named_constants(simple, &source, &java_text);
+            if named.is_empty() {
+                if bodies.is_empty() {
+                    out.notes.push(format!(
+                        "{} (a class it uses) left out: past the budget for them",
+                        class.name
+                    ));
+                }
             } else {
                 let _ = writeln!(
                     p,
@@ -2655,6 +2753,16 @@ fn equivalents(java: &str, stub: &str) -> String {
             "Machine",
             "hasNeighborSignal(",
             "`level.hasNeighborSignal(pos)` is `machine.powered`",
+        ),
+        (
+            "Machine",
+            "getBlockEntity(",
+            "`level.getBlockEntity(pos)` (and `BlockEntityBehaviour.get(level, pos, X.TYPE)`, `BeltHelper.getSegmentBE`) at a place the Java works out is `machine.entity_at(pos)`: a copy with its block, state properties, saved values and item slots, its state read with that entity's `State::load(|k| n.get(k))`; change it with `machine.set_at(pos, key, value)` (a changed state struct goes back key by key: `for (k, v) in s.save() { machine.set_at(pos, k, v) }`) and `machine.set_item_at(pos, slot, stack)`, which land after the tick",
+        ),
+        (
+            "Machine",
+            "List<",
+            "a list of the mod's own objects a field keeps (`List<TransportedItemStack> items`) is that field's text: read it with the list's `_list(&text)` function into structs of their plain fields, change those, and write it back with `_list_text(&list)`",
         ),
         (
             "dyn World",
@@ -4082,6 +4190,19 @@ impl State {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_class_too_long_to_show_still_gives_the_methods_called_on_it() {
+        let helper = "public class BeltHelper {\n\tpublic static Vec3 getVectorForOffset(BeltBlockEntity controller, float offset) {\n\t\treturn VecHelper.getCenterOf(controller.getBlockPos()).add(offset - .5f, 0, 0);\n\t}\n\tpublic static boolean isItemUpright(ItemStack stack) {\n\t\treturn false;\n\t}\n}";
+        let calling = "Vec3 outPos = BeltHelper.getVectorForOffset(belt, stack.beltPosition); MyBeltHelper.x(); BeltHelper.MAX;";
+        assert_eq!(
+            called_bodies("BeltHelper", helper, calling),
+            vec![(
+                "getVectorForOffset".to_string(),
+                "public static Vec3 getVectorForOffset(BeltBlockEntity controller, float offset) { return VecHelper.getCenterOf(controller.getBlockPos()).add(offset - .5f, 0, 0); }".to_string()
+            )]
+        );
+    }
 
     #[test]
     fn parts_drawn_from_their_own_buffers_keep_their_own_turns() {

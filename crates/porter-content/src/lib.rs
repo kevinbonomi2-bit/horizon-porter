@@ -2564,7 +2564,10 @@ fn template_for_states(
     if has("face") && has("powered") {
         return kind("minecraft:stone_button", "minecraft:oak_button", "button");
     }
-    if has("powered") && states.len() == 1 {
+    // A pressure plate when its name says so: a full block powered by redstone (Create's
+    // smart chute, its track observer) has the same one state, and as a plate it would be
+    // too thin to hold a lever or stand on.
+    if has("powered") && states.len() == 1 && name.contains("plate") {
         return kind(
             "minecraft:stone_pressure_plate",
             "minecraft:oak_pressure_plate",
@@ -4179,6 +4182,17 @@ vt 0 0
         assert_eq!(p.keys().collect::<Vec<_>>(), ["facing", "level", "north"]);
         // `up` is no horizontal facing: no template from it.
         assert!(template_for_states(&p, "thing").is_none());
+        // Powered and nothing else: a pressure plate only where its name says so.
+        let powered = blockstate_properties(
+            &serde_json::json!({ "variants": { "powered=false": {}, "powered=true": {} } }),
+        );
+        assert_eq!(
+            template_for_states(&powered, "brass_pressure_plate")
+                .unwrap()
+                .0,
+            "minecraft:oak_pressure_plate"
+        );
+        assert!(template_for_states(&powered, "smart_chute").is_none());
         let (decl, default) = declare(&p["level"]);
         assert_eq!(decl["values"], serde_json::json!(["1", "2", "10"]));
         assert_eq!(default, "1");

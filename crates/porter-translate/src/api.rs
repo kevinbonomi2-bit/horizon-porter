@@ -1960,6 +1960,26 @@ fn recipes(host: &dyn mod_api::Host, kind: &str) -> Vec<runtime::Recipe> {
 /// Block `block`'s item slots and the menu they show in: a chest-like block's, or a
 /// machine's (as a furnace: hoppers put in from above and the sides, take from below).
 fn container_of(block: &str) -> Option<mod_api::ModContainer> {
+    // A block entity whose items are open to the blocks around (an item handler
+    // capability): a hopper, a chute or a funnel takes from its outputs and gives to its
+    // inputs. Before the chest-like blocks: a machine that only holds its items there (a
+    // millstone) is reached here.
+    if let Some((_, entity, _)) = runtime::BLOCK_ENTITIES.iter().find(|(b, _, _)| *b == block)
+        && let Some((_, slots, inputs, outputs)) = runtime::ITEM_HANDLERS.iter().find(|(e, ..)| e == entity)
+    {
+        let all: Vec<usize> = (0..*slots).collect();
+        let menu = runtime::VANILLA_CONTAINERS
+            .iter()
+            .find(|(b, menu, n)| *b == block && !menu.is_empty() && n == slots)
+            .map(|(_, menu, _)| (*menu).into());
+        return Some(mod_api::ModContainer {
+            slots: *slots,
+            faces: std::array::from_fn(|_| all.clone()),
+            inputs: inputs.to_vec(),
+            outputs: outputs.to_vec(),
+            menu,
+        });
+    }
     if let Some((_, menu, slots)) = runtime::VANILLA_CONTAINERS.iter().find(|(b, _, _)| *b == block) {
         // One without a menu (a skillet) only holds its items: no side reaches them.
         let all: Vec<usize> = if menu.is_empty() { Vec::new() } else { (0..*slots).collect() };

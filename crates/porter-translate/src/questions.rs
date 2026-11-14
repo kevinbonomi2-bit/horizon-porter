@@ -29,6 +29,8 @@ const ENTITY_LIMIT: usize = 20;
 /// And at most this many more that a shared tick asks of the block entity it runs for.
 const OWN_LIMIT: usize = 24;
 const HELPER_LIMIT: usize = 12;
+/// At most this many helpers that work on the level.
+const WORLD_LIMIT: usize = 32;
 
 /// A body longer than this isn't quoted: the class is read instead.
 const BODY_LIMIT: usize = 600;
@@ -42,6 +44,9 @@ pub enum Asks {
     Entity,
     /// No one: a static helper that takes block entities.
     Helper,
+    /// No one: a static helper that works on the level at a place (`BeltBlock.initBelt(level,
+    /// pos)`), called from a block entity's code: given `machine`.
+    World,
 }
 
 /// One question, with what each class answers.
@@ -83,6 +88,9 @@ pub struct Answer {
     pub of: Vec<String>,
     /// The method's body on one line; none when it is too long to quote.
     pub body: Option<String>,
+    /// The mod's methods that body calls on another class (`BeltBlockEntity::hasPulley`),
+    /// each with its own body where that is short: what the answer is worked out from.
+    pub refs: Vec<(String, String)>,
 }
 
 /// The mod's questions: to a block, to a block entity, and the helpers that take block
@@ -248,9 +256,79 @@ pub fn find(
                 params,
                 returns,
                 default: decl.body.filter(|b| b.len() <= BODY_LIMIT),
-                answers: answers(by_class, method, &source),
+                answers: answers(by_class, method, &source, &scan.classes),
                 asked: asked[method],
                 others,
+            });
+        }
+    }
+    // And a method a block class of the mod's introduces (not an override of the game's)
+    // that a class below it overrides, asked of something: a chute's direction
+    // (`AbstractChuteBlock.getFacing`: a chute's `facing`, a smart chute's `DOWN`), which
+    // code holding only the state asks through a cast or a static helper.
+    let mut bases: Vec<&ClassInfo> = Vec::new();
+    for c in block_chains.iter().flat_map(|chain| chain.iter().skip(1)) {
+        if c.kind != ClassKind::Interface && !bases.iter().any(|b| b.name == c.name) {
+            bases.push(c);
+        }
+    }
+    for base in bases {
+        let Some(text) = source(base) else {
+            continue;
+        };
+        for method in &base.method_names {
+            if to_blocks.iter().any(|q| q.method == *method) || !asked.contains_key(method) {
+                continue;
+            }
+            // Its own: no `@Override` just before it.
+            let introduced = text.match_indices(&format!(" {method}(")).any(|(at, _)| {
+                let before = &text[at.saturating_sub(160)..at];
+                let stmt = &before[before.rfind([';', '}', '{']).map_or(0, |i| i + 1)..];
+                !stmt.contains("@Override")
+            });
+            if !introduced {
+                continue;
+            }
+            let mut by_class: Vec<(&ClassInfo, Vec<String>)> = Vec::new();
+            for (id, own) in &blocks {
+                let chain = chain(&own.name);
+                if !chain.iter().any(|c| c.name == base.name) {
+                    continue;
+                }
+                let decides = chain
+                    .into_iter()
+                    .find(|c| c.method_names.iter().any(|n| n == method));
+                if let Some(c) = decides {
+                    match by_class.iter_mut().find(|(k, _)| k.name == c.name) {
+                        Some((_, ids)) => ids.push(id.clone()),
+                        None => by_class.push((c, vec![id.clone()])),
+                    }
+                }
+            }
+            // Asked of blocks whose classes answer differently: else it is no question.
+            if by_class.len() < 2 {
+                continue;
+            }
+            let Some((decl, params, returns)) =
+                declarations(text, method).into_iter().find_map(|d| {
+                    signature(&d, Asks::Block, &entity_classes, &block_types)
+                        .map(|(p, r)| (d, p, r))
+                })
+            else {
+                continue;
+            };
+            to_blocks.push(Question {
+                asks: Asks::Block,
+                owner: base.name.clone(),
+                method: method.clone(),
+                java_params: decl.params_text.clone(),
+                rust: format!("{}_{}", snake(&simple(&base.name)), snake(method)),
+                params,
+                returns,
+                default: decl.body.filter(|b| b.len() <= BODY_LIMIT),
+                answers: answers(by_class, method, &source, &scan.classes),
+                asked: asked[method],
+                others: Vec::new(),
             });
         }
     }
@@ -276,11 +354,13 @@ pub fn find(
     let mut called_into: BTreeSet<String> = BTreeSet::new();
     let mut core: HashMap<&str, usize> = HashMap::new();
     let mut seen: BTreeSet<&str> = BTreeSet::new();
+    let mut entity_texts: Vec<&String> = Vec::new();
     for (_, classes) in &chains {
         for c in classes {
             if seen.insert(c.name.as_str())
                 && let Some(text) = source(c)
             {
+                entity_texts.push(text);
                 called_into.extend(static_receivers(text));
                 for m in called_methods(text) {
                     *core.entry(m).or_default() += 1;
@@ -387,7 +467,7 @@ pub fn find(
             params,
             returns,
             default: None,
-            answers: answers(by_class, method, &source),
+            answers: answers(by_class, method, &source, &scan.classes),
             asked: core[*method],
             others: Vec::new(),
         });
@@ -413,6 +493,7 @@ pub fn find(
     // Helpers: static functions that take block entities, of classes the block
     // entities' own classes call into.
     let mut helpers: Vec<Question> = Vec::new();
+    let mut worlds: Vec<Question> = Vec::new();
     for c in scan.classes.iter().filter(|c| {
         !c.is_mixin
             && c.kind != ClassKind::Interface
@@ -426,16 +507,34 @@ pub fn find(
         names.sort();
         names.dedup();
         for method in names {
-            let Some((decl, params, returns)) =
-                declarations(text, method).into_iter().find_map(|d| {
+            // Or one that works on the level at a place, where a block entity's own code
+            // calls it (`BeltBlock.initBelt(level, worldPosition)`).
+            let called = format!("{}.{method}(", simple(&c.name));
+            let found = declarations(text, method)
+                .into_iter()
+                .find_map(|d| {
                     signature(&d, Asks::Helper, &entity_classes, &block_types)
-                        .map(|(p, r)| (d, p, r))
+                        .map(|(p, r)| (Asks::Helper, d, p, r))
                 })
-            else {
+                .or_else(|| {
+                    if !entity_texts.iter().any(|t| t.contains(&called)) {
+                        return None;
+                    }
+                    declarations(text, method).into_iter().find_map(|d| {
+                        signature(&d, Asks::World, &entity_classes, &block_types)
+                            .map(|(p, r)| (Asks::World, d, p, r))
+                    })
+                });
+            let Some((asks, decl, params, returns)) = found else {
                 continue;
             };
-            helpers.push(Question {
-                asks: Asks::Helper,
+            let into = if asks == Asks::World {
+                &mut worlds
+            } else {
+                &mut helpers
+            };
+            into.push(Question {
+                asks,
                 owner: c.name.clone(),
                 method: method.clone(),
                 java_params: decl.params_text.clone(),
@@ -453,25 +552,91 @@ pub fn find(
     helpers.sort_by(|a, b| b.asked.cmp(&a.asked).then(a.rust.cmp(&b.rust)));
     helpers.truncate(HELPER_LIMIT);
     out.extend(helpers);
+    worlds.sort_by(|a, b| b.asked.cmp(&a.asked).then(a.rust.cmp(&b.rust)));
+    worlds.truncate(WORLD_LIMIT);
+    out.extend(worlds);
     out
 }
 
-/// The answers of `by_class`, each with its body where that is short enough to quote.
+/// The answers of `by_class`, each with its body where that is short enough to quote, and
+/// the methods of the mod's other classes that body calls.
 fn answers<'a>(
     by_class: Vec<(&ClassInfo, Vec<String>)>,
     method: &str,
     source: &impl Fn(&ClassInfo) -> Option<&'a String>,
+    classes: &'a [ClassInfo],
 ) -> Vec<Answer> {
     by_class
         .into_iter()
-        .map(|(c, of)| Answer {
-            class: c.name.clone(),
-            of,
-            body: source(c)
+        .map(|(c, of)| {
+            let body = source(c)
                 .and_then(|s| method_body(s, method))
-                .filter(|b| b.len() <= BODY_LIMIT),
+                .filter(|b| b.len() <= BODY_LIMIT);
+            let refs = body
+                .as_deref()
+                .map(|b| referenced(b, &simple(&c.name), source, classes))
+                .unwrap_or_default();
+            Answer {
+                class: c.name.clone(),
+                of,
+                body,
+                refs,
+            }
         })
         .collect()
+}
+
+/// The methods of the mod's other classes `body` calls (`BeltBlockEntity::hasPulley`,
+/// `FluidPipeBlock.isPipe(..)`), with their bodies where those are short: at most three.
+fn referenced<'a>(
+    body: &str,
+    own: &str,
+    source: &impl Fn(&ClassInfo) -> Option<&'a String>,
+    classes: &'a [ClassInfo],
+) -> Vec<(String, String)> {
+    let ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    let mut out: Vec<(String, String)> = Vec::new();
+    for (sep, at) in body
+        .match_indices("::")
+        .chain(body.match_indices('.'))
+        .map(|(i, m)| (m.len(), i))
+        .collect::<Vec<_>>()
+    {
+        let class: String = body[..at]
+            .chars()
+            .rev()
+            .take_while(|c| ident(*c))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        let method: String = body[at + sep..].chars().take_while(|c| ident(*c)).collect();
+        if !class.starts_with(|c: char| c.is_ascii_uppercase())
+            || !method.starts_with(|c: char| c.is_ascii_lowercase())
+            || class == own
+        {
+            continue;
+        }
+        let name = format!("{class}.{method}()");
+        if out.iter().any(|(n, _)| *n == name) {
+            continue;
+        }
+        let mut found = classes.iter().filter(|k| simple(&k.name) == class);
+        let (Some(k), None) = (found.next(), found.next()) else {
+            continue;
+        };
+        let Some(b) = source(k)
+            .and_then(|s| method_body(s, &method))
+            .filter(|b| b.len() <= BODY_LIMIT)
+        else {
+            continue;
+        };
+        out.push((name, b));
+        if out.len() == 3 {
+            break;
+        }
+    }
+    out
 }
 
 /// What a view of a block entity is, for the comments of what takes one.
@@ -499,6 +664,14 @@ pub fn runtime(questions: &[Question]) -> String {
                     method = q.method,
                     java = q.java_params,
                     example = example(q),
+                );
+            }
+            Asks::World => {
+                let _ = write!(
+                    r,
+                    "\n/// `{owner}.{method}({java})`: a helper of the mod's code that works on the level,\n/// ported here once for every function that calls it. The level is `machine`, the one of\n/// the tick that calls it: a block entity at a place it works out is `machine.entity_at(pos)`\n/// (a copy as it was before the tick: its block, state properties, saved values and item\n/// slots), and what it changes goes through `machine.set_at(pos, key, value)`,\n/// `machine.set_item_at(..)` and `machine.set_block_at(..)`, which land after that tick.\n/// A block entity it takes is a view: {VIEW}.\n",
+                    method = q.method,
+                    java = q.java_params,
                 );
             }
             Asks::Helper => {
@@ -529,6 +702,9 @@ pub fn runtime(questions: &[Question]) -> String {
                         simple(&a.class),
                         one_line(body)
                     );
+                    for (name, called) in &a.refs {
+                        let _ = writeln!(r, "///   (`{name}` is `{}`)", one_line(called));
+                    }
                 }
                 None => {
                     let _ = writeln!(
@@ -574,7 +750,7 @@ pub fn runtime(questions: &[Question]) -> String {
                     "/// A block entity none of them covers gives the plainest answer."
                 );
             }
-            Asks::Helper => {
+            Asks::Helper | Asks::World => {
                 if let Some(body) = &q.default {
                     let _ = writeln!(r, "///\n/// In Java: `{}`", one_line(body));
                 }
@@ -588,7 +764,7 @@ pub fn runtime(questions: &[Question]) -> String {
         let (given, names) = match q.asks {
             Asks::Block => ("block: &str, state: &[(String, String)]", "block, state"),
             Asks::Entity => ("be: &Neighbour", "be"),
-            Asks::Helper => ("", ""),
+            Asks::Helper | Asks::World => ("", ""),
         };
         let mut params: Vec<String> = Vec::new();
         let mut used: Vec<String> = Vec::new();
@@ -600,22 +776,34 @@ pub fn runtime(questions: &[Question]) -> String {
             params.push(format!("{n}: {t}"));
             used.push(n.clone());
         }
+        if q.asks == Asks::World {
+            params.push("machine: &mut Machine<'_>".to_string());
+            used.push("machine".to_string());
+        }
         let todo = match q.asks {
-            Asks::Helper => format!("TODO: port `{}` of {from}.", q.method),
+            Asks::Helper | Asks::World => format!("TODO: port `{}` of {from}.", q.method),
             _ => format!("TODO: port from {from}."),
         };
         let _ = write!(
             r,
-            "///\n/// {todo}\npub fn {rust}({params}) -> {returns} {{\n    let _ = {used};\n    {value}\n}}\n",
+            "///\n/// {todo}\npub fn {rust}({params}){returns} {{\n    let _ = {used};\n{value}}}\n",
             rust = q.rust,
             params = params.join(", "),
-            returns = q.returns,
+            // (A command returns nothing.)
+            returns = if q.returns == "()" {
+                String::new()
+            } else {
+                format!(" -> {}", q.returns)
+            },
             // (`block, state` is two names in one entry: always a tuple unless it is one.)
             used = match &used[..] {
                 [one] if !one.contains(',') => one.clone(),
                 many => format!("({})", many.join(", ")),
             },
-            value = default_value(q.returns),
+            value = match q.returns {
+                "()" => String::new(),
+                returns => format!("    {}\n", default_value(returns)),
+            },
         );
     }
     r
@@ -655,6 +843,14 @@ pub fn ported(module: &str, java: &str, function: &str) -> String {
                 let _ = writeln!(
                     out,
                     "- `x.{method}(..)` asked of a block entity is `{rust}`, already ported for every block entity of the mod: `{signature}`. Pass a view of the one asked: a neighbour is one (`machine.neighbour(side)`), and `machine.me(pos, &state.save())` is this one."
+                );
+            }
+            Asks::World
+                if java.contains(&format!("{method}(")) && java.contains(owner.as_str()) =>
+            {
+                let _ = writeln!(
+                    out,
+                    "- `{owner}.{method}(level, ..)` is `{rust}`, ported on its own: `{signature}`. Call it with the places and this tick's `machine`: what it changes lands after the tick."
                 );
             }
             Asks::Helper
@@ -705,6 +901,8 @@ fn in_module(module: &str) -> Vec<Ported> {
                 Some(Asks::Block)
             } else if line.contains("a helper of the mod's code that takes block entities") {
                 Some(Asks::Helper)
+            } else if line.contains("a helper of the mod's code that works on the level") {
+                Some(Asks::World)
             } else {
                 None
             };
@@ -833,10 +1031,12 @@ fn signature(
     entity_classes: &BTreeSet<String>,
     block_types: &BTreeSet<String>,
 ) -> Option<(Vec<(String, String)>, &'static str)> {
-    if decl.is_static != (asks == Asks::Helper) {
+    if decl.is_static != matches!(asks, Asks::Helper | Asks::World) {
         return None;
     }
     let returns = match plain(&decl.returns) {
+        // A helper that works on the level may be a command.
+        "void" if asks == Asks::World => "()",
         "boolean" => "bool",
         "int" => "i32",
         "long" => "i64",
@@ -854,6 +1054,7 @@ fn signature(
     let mut params: Vec<(String, String)> = Vec::new();
     let mut asked_block = false;
     let mut views = 0;
+    let mut level = false;
     for (ty, name) in &decl.params {
         let name = snake(name);
         let name = if matches!(
@@ -881,9 +1082,12 @@ fn signature(
                 ));
                 "&[(String, String)]"
             }
-            // The level isn't given.
+            // The level isn't given (to a helper that works on it, it is `machine`).
             "Level" | "LevelReader" | "LevelAccessor" | "BlockGetter" | "ServerLevel"
-            | "BlockAndTintGetter" | "CollisionGetter" => continue,
+            | "BlockAndTintGetter" | "CollisionGetter" => {
+                level = true;
+                continue;
+            }
             "BlockPos" => "[i32; 3]",
             "Direction" => "Side",
             "Axis" | "Direction.Axis" => "&str",
@@ -906,6 +1110,10 @@ fn signature(
     }
     // A helper is offered for the block entities it takes.
     if asks == Asks::Helper && views == 0 {
+        return None;
+    }
+    // One that works on the level, for a place in it.
+    if asks == Asks::World && !(level && params.iter().any(|(_, t)| t == "[i32; 3]")) {
         return None;
     }
     Some((params, returns))
@@ -1256,6 +1464,28 @@ mod tests {
             signature(&d, Asks::Helper, &entities(), &BTreeSet::new()),
             None
         );
+        // One that works on the level at a place, a command: given `machine`.
+        let d = first(helper, "handleAdded");
+        assert_eq!(
+            signature(&d, Asks::World, &entities(), &BTreeSet::new()),
+            Some((
+                vec![
+                    ("pos".to_string(), "[i32; 3]".to_string()),
+                    ("be_".to_string(), "&Neighbour".to_string())
+                ],
+                "()"
+            ))
+        );
+        // Not without the level, nor without a place.
+        assert_eq!(
+            signature(
+                &first(helper, "isLargeToLargeGear"),
+                Asks::World,
+                &entities(),
+                &BTreeSet::new()
+            ),
+            None
+        );
         // Called on the class: a helper the block entities call into.
         let calls = static_receivers(
             "RotationPropagator.handleAdded(level, pos, this); AXIS.get(); x.y();",
@@ -1263,6 +1493,45 @@ mod tests {
         assert!(
             calls.contains("RotationPropagator") && calls.len() == 1,
             "{calls:?}"
+        );
+    }
+
+    #[test]
+    fn an_answer_brings_the_methods_it_calls() {
+        let belt = "public class BeltBlockEntity {
+	public boolean hasPulley() {
+		return getBlockState().getValue(BeltBlock.PART) != BeltPart.MIDDLE;
+	}
+}"
+        .to_string();
+        let classes = vec![ClassInfo {
+            name: "com.belt.BeltBlockEntity".into(),
+            kind: ClassKind::Class,
+            path: "BeltBlockEntity.java".into(),
+            superclass: None,
+            interfaces: Vec::new(),
+            references: Vec::new(),
+            side: porter_model::Side::Common,
+            is_mixin: false,
+            lines: 5,
+            methods: 1,
+            fields: Vec::new(),
+            method_names: vec!["hasPulley".into()],
+            saved: Vec::new(),
+        }];
+        let source = |c: &ClassInfo| (c.name == "com.belt.BeltBlockEntity").then_some(&belt);
+        let refs = referenced(
+            "return getBlockEntityOptional(world, pos).map(BeltBlockEntity::hasPulley).orElse(false);",
+            "BeltBlock",
+            &source,
+            &classes,
+        );
+        assert_eq!(
+            refs,
+            vec![(
+                "BeltBlockEntity.hasPulley()".to_string(),
+                "return getBlockState().getValue(BeltBlock.PART) != BeltPart.MIDDLE;".to_string()
+            )]
         );
     }
 
@@ -1280,6 +1549,7 @@ mod tests {
                 class: "com.spin.MotorBlock".into(),
                 of: vec!["spin:motor".into()],
                 body: Some("return face == state.getValue(FACING);".into()),
+                refs: Vec::new(),
             }],
             asked: 3,
             others: vec!["spin:crank".into()],
