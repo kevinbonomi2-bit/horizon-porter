@@ -655,6 +655,35 @@ entities riding it are left out. A belt placed from a game test structure keeps 
 `Controller` position, which the port doesn't read. Haiku for this pass: about $0.74
 (the night's total about $1.69 of the $5 approved).
 
+### Belt ends and funnels (2026-11-13, later)
+
+Checked in game on build `native-66f3981-c44e6aaa728a` ("porter trials"), 29 of 29 checks;
+`ai-test/create_belt_ends.py` builds it as a player would, 3 of 4 pass:
+
+- A **pushing belt funnel** takes a chest's iron ingots out one by one onto the belt below.
+- The **belt's end hands an item to a depot**; the depot holds one, and the rest queue a
+  block apart behind it, as in Java.
+- A **pulling belt funnel** over a segment takes what passes under it into the chest
+  behind it (7 of 7, with nothing lost or doubled).
+- Still failing: an item dropped on a segment other than the controller's isn't taken in
+  (the belt tick still notes it can't hand it to the controller).
+
+What made it work, in the porter: a behaviour method asked of another block entity
+(`DirectBeltInputBehaviour.handleInsertion`, `InvManipulationBehaviour.insert`,
+`FilteringBehaviour.test`, ...) is a function of its own, ported once for every block
+entity that sets the behaviour up (nine take belt input: belts, depots, funnels, chutes,
+basins, millstones, saws, crushers, drains); Create's belt helpers over its kept
+`BeltInventory` (`checkForFunnels`, the tunnel and crusher checks) are functions of their
+own; ticks reach containers anywhere (`give_at`, `take_at`); fields start where Java's
+constructors start them (a filter's 64 and "up to"); and prompts quote the short methods
+a function calls on classes too big to show. Haiku for this round: about $1.00 (the
+night's total about $2.69 of the $5 approved).
+
+Seen and not yet checked against Java: two items put on the same spot of a belt are
+spread out backwards, sometimes past the belt's last segment, before they move on. A
+belt funnel's `facing` is stored half a turn from Java's (as its model is drawn), so a
+test or command that sets one by hand gives the opposite of Java's facing.
+
 One thing to watch: re-translating the item ticks also re-translated the shared kinetic
 step they call, and the new one squared speeds (`getConveyedSpeed` already includes the
 speed). The 29 checks caught it; the working one was put back, and `translate --refresh`
