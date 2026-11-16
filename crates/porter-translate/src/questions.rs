@@ -1192,6 +1192,15 @@ struct Ported {
     signature: String,
 }
 
+/// The mod's methods a runtime.rs has a function for already, its questions and helpers:
+/// (the owner's simple name, the method).
+pub fn ported_methods(module: &str) -> Vec<(String, String)> {
+    in_module(module)
+        .into_iter()
+        .map(|q| (q.owner, q.method))
+        .collect()
+}
+
 /// The questions a runtime.rs carries.
 fn in_module(module: &str) -> Vec<Ported> {
     let mut out = Vec::new();

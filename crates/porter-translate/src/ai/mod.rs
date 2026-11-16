@@ -1398,7 +1398,10 @@ fn prompt(dir: &Path, scan: &ModScan, unit: &Unit) -> Result<Prompt> {
     loop {
         let mut out = prompt_with(dir, scan, unit, budget, called)?;
         if budget == 0 && called > 0 && tokens_of(out.len()) > PROMPT_ROOM {
-            called = if called > 2_000 { called / 2 } else { 0 };
+            // By what it is over, not by half: what still fits stays (a belt segment's
+            // `insertItem`, the last quoted, was what its tick needed).
+            let over = ((tokens_of(out.len()) - PROMPT_ROOM) as f64 * CHARS_PER_TOKEN) as usize;
+            called = called.saturating_sub(over.max(500));
             continue;
         }
         if tokens_of(out.len()) <= PROMPT_ROOM || budget == 0 {
@@ -1441,22 +1444,89 @@ fn methods_named_of(comment: &str, class: &str) -> Option<Vec<String>> {
 }
 
 /// The methods of class `simple` that `calling` calls by name (`Simple.method(`), with
-/// their bodies on one line where those are short.
+/// their bodies on one line where those are short. Where `calling` makes one (`new
+/// Simple(..)`), also those of its methods it calls on what it made, through whatever
+/// it is kept as (`handler.insertItem(..)` on the `IItemHandler` a belt segment made as
+/// an `ItemHandlerBeltSegment`).
 fn called_bodies(simple: &str, source: &str, calling: &str) -> Vec<(String, String)> {
     let ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
     let mut out: Vec<(String, String)> = Vec::new();
+    // `.method(` at `at`, a word before the dot: the method's name.
+    let called_at = |at: usize, dot: usize| -> Option<String> {
+        if calling[..at].chars().next_back().is_some_and(ident) {
+            return None;
+        }
+        let rest = &calling[at + dot..];
+        let method: String = rest.chars().take_while(|c| ident(*c)).collect();
+        (!method.is_empty()
+            && rest[method.len()..].starts_with('(')
+            && method.starts_with(|c: char| c.is_ascii_lowercase()))
+        .then_some(method)
+    };
+    let mut methods: Vec<String> = Vec::new();
     let needle = format!("{simple}.");
     for (at, _) in calling.match_indices(&needle) {
+        if let Some(m) = called_at(at, needle.len()) {
+            methods.push(m);
+        }
+    }
+    let made = format!("new {simple}(");
+    if calling
+        .match_indices(&made)
+        .any(|(at, _)| !calling[..at].chars().next_back().is_some_and(ident))
+    {
+        for (at, _) in calling.match_indices('.') {
+            // (After a word or a call's close: `handler.`, `get().`.)
+            let before = calling[..at].chars().next_back();
+            if !before.is_some_and(|c| ident(c) || c == ')') {
+                continue;
+            }
+            let rest = &calling[at + 1..];
+            let method: String = rest.chars().take_while(|c| ident(*c)).collect();
+            if !method.is_empty()
+                && rest[method.len()..].starts_with('(')
+                && method.starts_with(|c: char| c.is_ascii_lowercase())
+                && source.contains(&format!(" {method}("))
+            {
+                methods.push(method);
+            }
+        }
+    }
+    // And those called on what the code keeps as one (`for (TransportedItemStack stack :
+    // items)` .. `stack.compareTo(newStack)`): Create's `compareTo` orders by position
+    // backwards, which a guess at it gets the other way round.
+    let mut typed: Vec<&str> = Vec::new();
+    for (at, _) in calling.match_indices(simple) {
         if calling[..at].chars().next_back().is_some_and(ident) {
             continue;
         }
-        let rest = &calling[at + needle.len()..];
-        let method: String = rest.chars().take_while(|c| ident(*c)).collect();
-        if method.is_empty()
-            || !rest[method.len()..].starts_with('(')
-            || !method.starts_with(|c: char| c.is_ascii_lowercase())
-            || out.iter().any(|(m, _)| *m == method)
+        let rest = &calling[at + simple.len()..];
+        let Some(after) = rest.strip_prefix(' ') else {
+            continue;
+        };
+        let name = &after[..after.find(|c: char| !ident(c)).unwrap_or(after.len())];
+        let next = after[name.len()..].trim_start();
+        if !name.is_empty()
+            && name.starts_with(|c: char| c.is_ascii_lowercase())
+            // (A variable or parameter, not a method: `stack = `, `stack :`, `stack)`.)
+            && ["=", ":", ";", ",", ")"].iter().any(|p| next.starts_with(p))
+            && !typed.contains(&name)
         {
+            typed.push(name);
+        }
+    }
+    for var in typed {
+        let needle = format!("{var}.");
+        for (at, _) in calling.match_indices(&needle) {
+            if let Some(m) = called_at(at, needle.len())
+                && source.contains(&format!(" {m}("))
+            {
+                methods.push(m);
+            }
+        }
+    }
+    for method in methods {
+        if out.iter().any(|(m, _)| *m == method) {
             continue;
         }
         let Some(body) =
@@ -1797,10 +1867,20 @@ fn prompt_with(
     }
     called.sort_by_key(|c| std::cmp::Reverse(c.0));
     let mut called_chars = 0;
+    // A method the module has a function for already (a helper of the mod's that works on
+    // the level: `BeltFunnelInteractionHandler.checkForFunnels`) is named with that
+    // function below: its Java would take the room of one that has none.
+    let ported_here = crate::questions::ported_methods(&file);
     for (_, name, found) in called {
+        let simple = name.rsplit(['.', '$']).next().unwrap_or(&name);
         let mut bodies = String::new();
-        for (_, body) in found {
+        let mut over = false;
+        for (method, body) in found {
+            if ported_here.iter().any(|(o, m)| o == simple && *m == method) {
+                continue;
+            }
             if called_chars + body.len() + 1 > called_budget {
+                over = true;
                 continue;
             }
             called_chars += body.len() + 1;
@@ -1808,6 +1888,10 @@ fn prompt_with(
             bodies.push('\n');
         }
         if bodies.is_empty() {
+            if !over {
+                // (Each a function of the module already.)
+                continue;
+            }
             out.notes.push(format!(
                 "{name} (a class it uses) left out: past the budget for them"
             ));
@@ -2028,6 +2112,16 @@ fn prompt_with(
                      `Saved::Byte(0)`, an `i32` `Saved::Int`, an `f32` `Saved::Float`, a `String` \
                      `Saved::Text`). A flag the Java sets on another block entity \
                      (`other.checker.scheduleUpdate()`) is set this way, by its key:\n{reached}"
+                );
+            }
+            if let Some(own) = holds_own_kind(&file, &own_java, &stub) {
+                let _ = writeln!(
+                    p,
+                    "The Java keeps another `{own}` too (a belt segment's controller): one of this block \
+                     entity's own kind, elsewhere. Its values are under the keys this one's `save()` writes \
+                     (a list field too: `Saved::Text`, written with its `_list_text` function). Read it with \
+                     `machine.entity_at(pos)` and `n.get(key)`, and change it with `machine.set_at(pos, key, \
+                     value)`: what the Java does to that one is done this way, not left out.\n"
                 );
             }
             // A click or a placement that tells a block entity to do what only its
@@ -3647,6 +3741,43 @@ fn takes_an_entity_for_a_block(function: &str, module: &str) -> Option<(String, 
         .map(|(block, entity)| (entity.to_string(), block.to_string()))
 }
 
+/// The class of the function's own block entity, where its Java keeps another one of
+/// that class (`BeltBlockEntity controller = getControllerBE()`): a belt segment writes
+/// what lands on it into its controller's list.
+fn holds_own_kind(module: &str, java: &str, stub: &str) -> Option<String> {
+    let is_own = |name: &str| {
+        stub.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .any(|w| w == name)
+    };
+    let ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    for (_, name, classes, _) in entity_keys(module) {
+        if !is_own(name) {
+            continue;
+        }
+        for class in classes {
+            let simple = class.rsplit(['.', '$']).next().unwrap_or(class);
+            let held = java.match_indices(simple).any(|(at, _)| {
+                if java[..at].chars().next_back().is_some_and(ident) {
+                    return false;
+                }
+                let Some(after) = java[at + simple.len()..].strip_prefix(' ') else {
+                    return false;
+                };
+                let var = &after[..after.find(|c: char| !ident(c)).unwrap_or(after.len())];
+                let next = after[var.len()..].trim_start();
+                var.starts_with(|c: char| c.is_ascii_lowercase())
+                    && ["=", ":", ";", ",", ")"]
+                        .iter()
+                        .any(|p| next.starts_with(p))
+            });
+            if held {
+                return Some(simple.to_string());
+            }
+        }
+    }
+    None
+}
+
 fn reached_keys(module: &str, java: &str, stub: &str) -> String {
     let mut out = String::new();
     let found = entity_keys(module);
@@ -4284,6 +4415,69 @@ mod tests {
         );
         // Named for itself too: shown whole.
         assert_eq!(methods_named_of(comment, "com.x.BeltBlockEntity"), None);
+    }
+
+    #[test]
+    fn a_class_the_code_makes_gives_the_methods_called_on_what_it_made() {
+        let segment = "public class ItemHandlerBeltSegment implements IItemHandler {
+	public int getSlots() {
+		return 1;
+	}
+	@Override
+	public ItemStack insertItem(int slot, ItemStack stack, boolean simulate) {
+		if (this.beltInventory.canInsertAt(offset)) {
+			return ItemStack.EMPTY;
+		}
+		return stack;
+	}
+}";
+        let calling = "itemHandler = new ItemHandlerBeltSegment(inventory, index);
+ItemStack remainder = handler.insertItem(0, asItem, false); level.getBlockState(pos).isAir();";
+        let found = called_bodies("ItemHandlerBeltSegment", segment, calling);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].0, "insertItem");
+        assert!(found[0].1.contains("canInsertAt(offset)"));
+        // Not made by the code: its methods called through another type are not its.
+        assert!(
+            called_bodies(
+                "ItemHandlerBeltSegment",
+                segment,
+                "handler.insertItem(0, s, false);"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_block_entity_that_holds_another_of_its_kind_is_told_its_keys() {
+        let module = "/// The state of a `demo:belt` block entity: `net.demo.BeltBlockEntity`'s fields, saved with the block.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Belt {
+    /// `int index`, saved as `Index`.
+    pub index: i32,
+}
+";
+        let stub =
+            "pub fn tick_belt(pos: [i32; 3], state: &mut Belt, machine: &mut Machine<'_>) {}";
+        let java = "public BeltBlockEntity getControllerBE() { return null; } void land() { BeltBlockEntity controller = getControllerBE(); }";
+        assert_eq!(
+            holds_own_kind(module, java, stub).as_deref(),
+            Some("BeltBlockEntity")
+        );
+        // Named only as itself (`new BeltBlockEntity(..)`, a return type): none held.
+        let alone = "public BeltBlockEntity(BlockEntityType<?> type) { super(type); } BeltBlockEntity self() { return this; }";
+        assert_eq!(holds_own_kind(module, alone, stub), None);
+    }
+
+    #[test]
+    fn a_class_gives_the_methods_called_on_what_the_code_keeps_as_one() {
+        let stack = "public class TransportedItemStack implements Comparable<TransportedItemStack> {\n\tpublic int compareTo(TransportedItemStack o) {\n\t\treturn beltPosition < o.beltPosition ? 1 : beltPosition > o.beltPosition ? -1 : 0;\n\t}\n\tpublic TransportedItemStack copy() {\n\t\treturn this;\n\t}\n}";
+        let calling = "for (TransportedItemStack stack : items) {\n\tif (stack.compareTo(newStack) > 0 == beltMovementPositive)\n\t\tbreak;\n}\nItemStack copy = item.copy();";
+        let found = called_bodies("TransportedItemStack", stack, calling);
+        assert_eq!(
+            found.iter().map(|(m, _)| m.as_str()).collect::<Vec<_>>(),
+            vec!["compareTo"]
+        );
     }
 
     #[test]

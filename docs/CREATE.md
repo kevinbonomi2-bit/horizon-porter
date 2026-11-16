@@ -689,6 +689,38 @@ step they call, and the new one squared speeds (`getConveyedSpeed` already inclu
 speed). The 29 checks caught it; the working one was put back, and `translate --refresh`
 no longer re-ports an already ported function just because one it ports calls it.
 
+### Belt drop-in (2026-11-16)
+
+Checked in game on build `native-66f3981-793c65fede9b` ("porter trials"): 29 of 29 checks, and
+`ai-test/create_belt_ends.py` 4 of 4, twice:
+
+- An **item dropped on any segment** is taken in: a gold ingot dropped on the last segment
+  rides the belt and the pulling funnel puts it in its chest. A segment that isn't the
+  controller writes what lands on it into the controller's list (`entity_at`, `set_at` on
+  `inventory.toInsert`), as `ItemHandlerBeltSegment.insertItem` does in Java.
+- **Items keep Java's order** on the belt, and nothing drifts past the belt's far end any
+  more: Create's `TransportedItemStack.compareTo` orders by position backwards (a lower
+  position compares as greater), and the port had read it as the natural order, so an item
+  put where others wait was listed behind them and the spacing rule pushed it back.
+  Every ingot is accounted for in both phases.
+
+What the porter gained: prompts quote the methods a function calls on what its code makes
+(`new ItemHandlerBeltSegment(..)`, then `handler.insertItem(..)`) and on variables of a class
+(`for (TransportedItemStack stack : items)` .. `stack.compareTo(..)`); they don't quote the Java
+of a helper the module has its own function for (`checkForFunnels`), which left room for those;
+they trim quoted methods by what a prompt is over Haiku's price line instead of halving them;
+the landing note says each block takes in what lands on its own box, even where Java keeps it
+in another block entity; and a block entity whose Java holds another of its own kind (a
+controller) is told its own keys reach that one.
+
+One hand edit, said in the code: the belt tick in the trial is Haiku's port that hands drops to
+the controller, with its one sort comparison turned to Java's order. The belt tick is about 540
+lines, at the edge of what Haiku writes in one answer: of three re-ports, one handed drops to the
+controller, one kept Java's order, and one ran out of room. The general fix is to port what
+lands on a block (`updateEntityAfterFallOn`, `entityInside`) as a function of its own beside the
+tick, for every block that has one. Haiku for this round: about $0.29 (the night's total about
+$2.98 of the $5 approved).
+
 ## Suggested order
 
 1. Catnip and Registrate shims, kinetic block entities, shafts, cogs and a hand crank:

@@ -1686,7 +1686,43 @@ pub(crate) fn list_element<'a>(scan: &'a ModScan, ty: &str) -> Option<&'a ClassI
     let (Some(class), None) = (found.next(), found.next()) else {
         return None;
     };
-    (!element_fields(scan, class).is_empty()).then_some(class)
+    (!game_object(scan, class) && !element_fields(scan, class).is_empty()).then_some(class)
+}
+
+/// Whether a class is one of the game's things (a block entity, an entity, a block, an
+/// item) or extends one: a list of them (`List<OceanographerTableBlockEntity> guestFish`)
+/// holds the things themselves, kept in the world, not values to copy into a field.
+fn game_object(scan: &ModScan, class: &ClassInfo) -> bool {
+    const THINGS: &[&str] = &[
+        "BlockEntity",
+        "TileEntity",
+        "Entity",
+        "LivingEntity",
+        "Mob",
+        "PathfinderMob",
+        "Block",
+        "Item",
+    ];
+    let mut name = class.name.clone();
+    for _ in 0..8 {
+        let simple = name.rsplit(['.', '$']).next().unwrap_or(&name);
+        if THINGS.contains(&simple)
+            || simple.ends_with("BlockEntity")
+            || simple.ends_with("TileEntity")
+        {
+            return true;
+        }
+        let Some(next) = scan
+            .classes
+            .iter()
+            .find(|c| c.name == name)
+            .and_then(|c| c.superclass.clone())
+        else {
+            return false;
+        };
+        name = next;
+    }
+    false
 }
 
 /// The fields of a list's element class it keeps: (Rust name, kind, Java field), its
@@ -2976,8 +3012,10 @@ fn lands_doc(be: &BlockEntity) -> String {
         Some((class, method)) => format!(
             "\n/// Its block's `{method}` ({}) acts on what lands on it in Java, which Horizon gives\n/// ported code no hook for. Where that is taking in dropped items (`ItemEntity`), do it\n/// here each tick: `machine.dropped_in(min, max)` over the block and the one above it,\n/// the items put in its slots as the Java's insert would, and `machine.take_dropped(id,\n/// count)` for what went in. An item resting on top of the block has landed on it: take\n/// what the box holds, without asking which block an item's own position falls in (a\n/// hollow Java lets items drop into may be solid here). What it puts out and Java tags\n/// so it isn't taken back in (`BypassCrushingWheel`) is dropped with `machine.eject(..)`,\n/// which `dropped_in` leaves out from then on. Where the Java hands what
 /// lands to another block entity (a belt segment's to its controller: `getControllerBE()`),
-/// this one takes it in for that one: read it with `machine.entity_at(pos)` and write its
-/// changed state back with `machine.set_at`, as its own code would have.",
+/// this block still takes in what lands on its own box: that one's tick sees only its own,
+/// so don't leave it to that one. Read that one with `machine.entity_at(pos)`, add what
+/// landed to what it keeps, and write it back with `machine.set_at(pos, key, value)`, as
+/// Java's insert into it would.",
             class.rsplit('.').next().unwrap_or(class)
         ),
         None => String::new(),
@@ -3503,6 +3541,48 @@ mod tests {
         assert_eq!(initial(Kind::Int, "0", &class), None);
         assert_eq!(initial(Kind::Int, "new Random().nextInt()", &class), None);
         assert_eq!(initial(Kind::Int, "OTHER", &class), None);
+    }
+
+    #[test]
+    fn a_list_of_block_entities_is_not_a_list_of_values() {
+        let class = |name: &str, superclass: Option<&str>| ClassInfo {
+            name: name.into(),
+            kind: porter_model::ClassKind::Class,
+            path: String::new(),
+            superclass: superclass.map(Into::into),
+            interfaces: Vec::new(),
+            references: Vec::new(),
+            side: porter_model::Side::Common,
+            is_mixin: false,
+            lines: 0,
+            methods: 0,
+            fields: vec![porter_model::FieldInfo {
+                name: "fishScale".into(),
+                ty: "float".into(),
+                is_static: false,
+                is_final: false,
+                init: None,
+            }],
+            method_names: Vec::new(),
+            saved: Vec::new(),
+        };
+        let scan = ModScan {
+            classes: vec![
+                class(
+                    "a.OceanographerTableBlockEntity",
+                    Some("net.minecraft.world.level.block.entity.BlockEntity"),
+                ),
+                class("a.TankBase", Some("a.TankBlockEntity")),
+                class("a.Fish", None),
+            ],
+            ..Default::default()
+        };
+        assert!(list_element(&scan, "List<OceanographerTableBlockEntity>").is_none());
+        assert!(list_element(&scan, "List<TankBase>").is_none());
+        assert_eq!(
+            list_element(&scan, "List<Fish>").map(|c| c.name.as_str()),
+            Some("a.Fish")
+        );
     }
 
     #[test]
