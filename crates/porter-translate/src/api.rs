@@ -206,7 +206,7 @@ fn lib_rs(
         r.push_str(if has(Kind::ItemUseOn) {
             PART_USE_ON
         } else {
-            "        Flow::Continue\n    }\n\n"
+            "        None\n    }\n\n"
         });
     }
     if has(Kind::ItemUse) {
@@ -315,6 +315,15 @@ impl Hooks for Mod {
             let kind = registrar.block_entity_type(name).blocks(&blocks).build();
             let _ = registrar.block_entity_part(&kind, PortedEntity);
         }
+        // Their item slots, declared with their blocks: hoppers, comparators and breaking
+        // the block use them as they use vanilla's containers. (The merged API of
+        // 2026-11-16 takes them at registration, where a hook asked for them before.)
+        for (block, _, _) in runtime::BLOCK_ENTITIES {
+            if let Some(container) = container_of(block) {
+                let key = registrar.block_key(block);
+                registrar.block_container(&key, container);
+            }
+        }
 ",
         );
     }
@@ -347,19 +356,6 @@ impl Hooks for Mod {
     }
     if drops {
         r.push_str(HOOK_DROPS);
-    }
-    if entities {
-        r.push_str(
-            "
-    fn block_entity_container(
-        &self,
-        _host: &dyn mod_api::Host,
-        event: &mut mod_api::BlockEntityContainerEvent<'_>,
-    ) -> Option<mod_api::ModContainer> {
-        container_of(event.block)
-    }
-",
-        );
     }
     r.push_str(
         "}
@@ -411,7 +407,7 @@ const HEADER: &str = r#"//! The mod on Horizon's mod API, written by horizon-por
 // Helpers a mod's kinds leave unused stay: the glue is the same for every mod.
 #![allow(dead_code, clippy::all)]
 
-#[allow(dead_code, unused_variables, unused_imports, clippy::all)]
+#[allow(dead_code, unused_variables, unused_imports, unused_mut, non_snake_case, clippy::all)]
 mod runtime;
 
 #[allow(unused_imports)]
@@ -1018,7 +1014,8 @@ impl runtime::World for Here<'_> {
             .filter_map(|e| {
                 // Living things only, and not the players.
                 let living = host.living(e)?;
-                let kind = e.kind(host)?;
+                // (A key since the merged API of 2026-11-16, read back as its id.)
+                let kind = e.kind(host)?.id(host);
                 if kind == "minecraft:player" {
                     return None;
                 }
@@ -1595,12 +1592,21 @@ fn click(host: &mut dyn ServerHost, state: BlockState, click: &BlockClick<'_>) -
 static MAIN_HAND_TOOK: std::sync::Mutex<Option<(u128, [i32; 3])>> = std::sync::Mutex::new(None);
 "#;
 
-const USE_ON_HEAD: &str = r#"    fn use_on(&self, host: &mut dyn ServerHost, event: &mut mod_api::UseOnEvent<'_>) -> Flow {
+const USE_ON_HEAD: &str = r#"    // (Asked on both sides since the merged API of 2026-11-16, as `use_item` is: the
+    // port's code is the server's; the client lets the server answer.)
+    fn use_on(
+        &self,
+        host: mod_api::HostSide<'_>,
+        event: &mut mod_api::UseOnEvent<'_>,
+    ) -> Option<InteractionResult> {
+        let mod_api::HostSide::Server(host) = host else {
+            return None;
+        };
         let item = event.stack.item().id(&*host).to_string();
 "#;
 
 const USE_ON_PLANT: &str = r#"        if let Some((_, block, rule)) = runtime::PLACES.iter().find(|(i, _, _)| *i == item) {
-            return if plant(host, event, block, rule) { Flow::Cancel } else { Flow::Continue };
+            return plant(host, event, block, rule).then_some(InteractionResult::SuccessServer);
         }
 "#;
 
@@ -1679,7 +1685,7 @@ fn plant(host: &mut dyn ServerHost, event: &mod_api::UseOnEvent<'_>, block: &str
 "#;
 
 const PART_USE_ON: &str = r#"        if !runtime::item_acts_on_block(&item) {
-            return Flow::Continue;
+            return None;
         }
         let block = host
             .players()
@@ -1691,9 +1697,9 @@ const PART_USE_ON: &str = r#"        if !runtime::item_acts_on_block(&item) {
             .unwrap_or_else(|| "minecraft:air".into());
         let on = runtime::UseOn { block, pos: event.pos, face: event.face, hit: event.hit.point };
         if item_use(host, event.stack, Some(on), event.player_entity_id, runtime::use_item_on) {
-            Flow::Cancel
+            Some(InteractionResult::SuccessServer)
         } else {
-            Flow::Continue
+            None
         }
     }
 
@@ -2070,7 +2076,7 @@ impl mod_api::BlockEntityPart for PortedEntity {
                     .filter_map(|e| {
                         // Living things only, and not the players.
                         let living = reader.living(e)?;
-                        let kind = e.kind(reader)?;
+                        let kind = e.kind(reader)?.id(reader);
                         if kind == "minecraft:player" {
                             return None;
                         }

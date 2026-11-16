@@ -339,3 +339,57 @@ loop `block_entities.tick` is the other way to the same tick. Neither is written
 prebuilt game that has function replacement there is nothing to build it against, and a helper
 that has not been compiled is a guess.
 
+## The merged mod API (2026-11-16)
+
+The fork's mod API was merged into Horizon on 2026-11-16 (horizon-rust/horizon pull request
+16941, merge commit `f7a2c6f`), and the mod team carries on in Sunrise (sunrise-org/sunrise).
+The pull request says the native mods published for the old system don't load after the merge.
+Neither Horizon build a player gets has the API yet: Horizon's newest Nightly is still
+2026-11-13 (`9f42064`, the old system) and Horizon has no `sdk-` release. Sunrise has one,
+`sdk-bd21c4d` (2026-11-16), with the horizon-mixins tool at `e59da90`.
+
+Checked by compiling `port --api` for six fixtures, seven of the trial mods and Create, against
+`horizon-mod-api` at Horizon's main (`c07bfa7`, 41 commits after the merge: the merge commit
+itself doesn't build its API, a hook file from main's side is left in it) and against
+`sunrise-mod-api` at `bd21c4d`. Create twice: with its stub `runtime.rs` and with the translated
+one. Advanced Netherite's fresh port has no `api/` (nothing the glue runs).
+
+Three changes, now in `api.rs`:
+
+- **An entity's `kind` is an `EntityTypeKey`**, read back as its id with `.id(host)`.
+- **`use_on` is asked on both sides**, as `use_item` is: a `HostSide`, and an answer
+  (`Option<InteractionResult>`) where it had the server's host and a `Flow`.
+- **The `block_entity_container` hook is gone**: a block's slots are declared at registration,
+  `registrar.block_container(&key, container)`.
+
+With them, all of it compiles on Horizon's main without a warning, except VillagersPlus, whose
+`runtime.rs` defines `OceanographerTableBlockEntity` twice (the porter reads its `guestFish`
+list as a list of the block entity's own class, so the list's element struct takes the block
+entity's name: the porter's bug, not the API's; fixed the same day, a list of block entities,
+entities, blocks or items is no longer read as a list of values, and VillagersPlus then compiles
+on Horizon's main too). On Sunrise the same, once the glue's two attribute macros take
+Sunrise's names (`sunrise_part`, `sunrise_mod`).
+
+Until a port pins an SDK, `port --api` writes glue for the merged API beside a `Cargo.toml` that
+still names `514ecf9` by git: that `api/` is for checking against a checkout, not for a player's
+launcher.
+
+`tools/fork_hooks.py` at the merge, at Horizon's main and on Sunrise alike: of the porter's 432
+hooks, 244 have the same function and parameters, 120 changed, 68 are gone; of the 52 Create's
+bundle uses, 17 / 20 / 15.
+
+What a port needs for the new route, not done yet:
+
+- **The API crate by the SDK's path**: `horizon-mod-api = { path =
+  ".horizon/sdk/api/crates/horizon-mod-api" }`, which `cargo horizon-mod` fetches. The launcher
+  refuses a git dependency (`E_SDK_SOURCE`).
+- **The pins**: `mixins` is `e59da9094f0c2fdda6c627fe9eff22dec6a906f0` at both. `horizon` must
+  be a build with an `sdk-<sha>` release: none on Horizon until the first Nightly after the
+  merge; `bd21c4d7206d1764e6b5b5b42b8e42879fb1a0e7` on Sunrise.
+- **The package** is the flat `.hmod`: `horizon-mod.toml` with `[native]` (`game`, `horizon`,
+  `mixins`), `Cargo.toml`, `src/`, `assets/`, `data/`, which is what `api/` already is. No
+  `Cargo.lock` without registry dependencies; no build script (`E_NATIVE_BUILD_SCRIPT`).
+- **For Sunrise**: `sunrise-mod.toml`, `[native] sunrise = ..`, `sunrise-mod-api = { path =
+  ".sunrise/sdk/api/crates/sunrise-mod-api" }`, and the macros' names. The lib is still `mod_api`
+  and the API the same otherwise.
+- Still one published loop, `block_entities.tick`.
