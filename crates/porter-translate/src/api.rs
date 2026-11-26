@@ -1,5 +1,6 @@
-//! The port as a trait mod on Horizon's mod API (`mod_api`, the arismoko/horizon fork:
-//! Parts, a prebuilt game, ~1 s builds), beside the horizon-mixins bundle: `api/` holds
+//! The port as a mod on Horizon's mod API (`mod_api`, merged into Horizon on 2026-11-16:
+//! Hooks and Parts, built against a prebuilt game), beside the horizon-mixins bundle for
+//! older builds: `api/` holds
 //! `horizon-mod.toml` (the content mod's, with `[native]` pins), `Cargo.toml`, the
 //! content's `assets/` and `data/`, `src/runtime.rs` (a copy of the bundle's, written
 //! with it, so the translated code is the same) and `src/lib.rs`, the glue written here:
@@ -9,7 +10,10 @@
 //! The glue covers the behaviours runtime.rs dispatches by kind (placement, clicks,
 //! shape updates, ticks, survival, comparators, item use, tooltips) and the block
 //! entities (their state, ticks with their `Machine`, slots and what clients get of
-//! them). Renderers, screens, shift-clicks and the mod's own hooks are the bundle's alone
+//! them). A tick reaches as far as the bundle's: the block entities and containers around
+//! it, any of the mod's by position, kinetic networks, other block entities' values and
+//! slots written back, items moved through item handlers, tanks and energy. Renderers,
+//! screens, shift-clicks and the mod's own hooks are the bundle's alone
 //! for now.
 
 use std::collections::BTreeMap;
@@ -17,13 +21,13 @@ use std::fmt::Write;
 
 use crate::blocks::{Behaviour, Kind};
 
-/// The prebuilt game the glue was checked against (`prebuilt-<commit>` on
-/// arismoko/horizon): the API changes daily, so a port pins one. This one is the newest
-/// with a prebuilt game published (2026-11-11), so the launcher compiles the mod alone;
-/// the glue type-checks against the fork's main of 2026-11-12 too.
-pub const API_HORIZON: &str = "514ecf9a966cdf2bc4f81f091827d81767756fd9";
-/// The horizon-mixins commit that prebuilt's launcher pins.
-pub const API_MIXINS: &str = "5a64af938ec86b00d53d16a408aabc0038fb3e57";
+/// The Horizon build a port is made for (`[native] horizon`): the launcher compiles the mod
+/// against that build's prebuilt game, its mod SDK (`sdk-<commit>`). The mod API changes
+/// from build to build, so a port pins the one its glue was checked against: Horizon's
+/// main of 2026-11-22 (`f1bb66f`), the mod API as merged on 2026-11-16 and after.
+pub const API_HORIZON: &str = "f1bb66f353cf67f2aa4665293fc75c8d91186fc7";
+/// The horizon-mixins commit that build's launcher pins (its `mixins_tool::REV`).
+pub const API_MIXINS: &str = "e59da9094f0c2fdda6c627fe9eff22dec6a906f0";
 
 /// `api/`'s generated files (runtime.rs aside: `bundle::write` copies the bundle's).
 /// `content_manifest` is the content mod's `horizon-mod.toml`; `entities`, whether
@@ -40,6 +44,7 @@ pub fn files(
     plants: bool,
     particles: &[String],
     drops: bool,
+    recipe_types: &[String],
 ) -> BTreeMap<String, String> {
     let mut out = BTreeMap::new();
     out.insert(
@@ -52,13 +57,20 @@ pub fn files(
     out.insert(
         "api/Cargo.toml".into(),
         format!(
-            "[package]\nname = \"mod-{id}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\n# The launcher points this at the Horizon source it builds the game from.\nhorizon-mod-api = {{ git = \"https://github.com/arismoko/horizon\", rev = \"{API_HORIZON}\" }}\n"
+            "[package]\nname = \"mod-{id}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\n# The pinned build's SDK, which `cargo horizon-mod` fetches into .horizon/sdk/: the\n# launcher takes no other form.\nhorizon-mod-api = {{ path = \".horizon/sdk/api/crates/horizon-mod-api\" }}\n\n[dev-dependencies]\n# `cargo test` here runs the glue's tests against the API's fake host.\nhorizon-mod-api = {{ path = \".horizon/sdk/api/crates/horizon-mod-api\", features = [\"testing\"] }}\n"
         ),
     );
     out.insert(
         "api/src/lib.rs".into(),
         lib_rs(
-            behaviours, entities, machines, renderers, plants, particles, drops,
+            behaviours,
+            entities,
+            machines,
+            renderers,
+            plants,
+            particles,
+            drops,
+            recipe_types,
         ),
     );
     out
@@ -83,6 +95,7 @@ fn lib_rs(
     plants: bool,
     particles: &[String],
     drops: bool,
+    recipe_types: &[String],
 ) -> String {
     let has = |k: Kind| behaviours.iter().any(|b| b.kind == k);
     let block_kinds = [
@@ -233,12 +246,56 @@ fn lib_rs(
         has(Kind::Placed),
         has(Kind::Destroyed),
         drops,
+        recipe_types,
     ));
+    if entities {
+        r.push_str(GLUE_TESTS);
+    }
     r
 }
 
+/// The glue's own tests, run by `cargo test` in `api/` against the mod API's fake host
+/// (`testing::FakeHost`): items moved through a block entity's item handler, as a tick's
+/// transfers and a funnel's take and give are.
+const GLUE_TESTS: &str = r#"
+#[cfg(test)]
+mod glue_tests {
+    use super::*;
+    use mod_api::testing::FakeHost;
+
+    #[test]
+    fn items_go_into_a_block_entity_and_come_back_out() {
+        let mut host = FakeHost::new();
+        let level = host.level.level();
+        host.level.block_entity([0, 64, 0]).with_items(2);
+        let iron = mod_api::Identifier::parse("minecraft:iron_ingot").unwrap();
+        host.registries.resolve_items([iron]).unwrap();
+        let server: &mut dyn ServerHost = &mut host;
+        let went = give_items(server, level, [0, 64, 0], Some(mod_api::Direction::Up), "minecraft:iron_ingot", 5);
+        assert_eq!(went, 5);
+        let got = take_items(server, level, [0, 64, 0], Some(mod_api::Direction::Down), None, Some("minecraft:iron_ingot"), 3);
+        assert_eq!(got, Some(("minecraft:iron_ingot".to_string(), 3)));
+        // Only what is there comes out.
+        let none = take_items(server, level, [0, 64, 0], None, None, Some("minecraft:gold_ingot"), 3);
+        assert_eq!(none, None);
+        let slots = host.level.block_entity_at([0, 64, 0]).unwrap().items.as_ref().unwrap();
+        assert_eq!(slots.count("minecraft:iron_ingot"), 2);
+    }
+
+    #[test]
+    fn a_side_names_the_face_and_faces_back() {
+        assert_eq!(direction(runtime::Side::Up), mod_api::Direction::Up);
+        assert_eq!(back(runtime::Side::North), runtime::Side::South);
+        for side in runtime::Side::ALL {
+            assert_eq!(back(back(side)), side);
+        }
+    }
+}
+"#;
+
 /// The mod's `Hooks`: its parts attached at registration, its block entity types
 /// declared with their blocks, and their containers.
+#[allow(clippy::too_many_arguments)]
 fn register(
     entities: bool,
     plants: bool,
@@ -247,6 +304,7 @@ fn register(
     placed: bool,
     broken: bool,
     drops: bool,
+    recipe_types: &[String],
 ) -> String {
     let mut r = String::from(
         "
@@ -266,6 +324,19 @@ impl Hooks for Mod {
         }
 ",
     );
+    if !recipe_types.is_empty() {
+        // The mod's own recipe types, which its data's recipes use: kept as their JSON, which
+        // the port's code reads (`recipes_of_type`), as Java's serializers would have.
+        let list: String = recipe_types.iter().map(|t| format!("{t:?}, ")).collect();
+        let _ = write!(
+            r,
+            "        for kind in [{list}] {{
+            registrar.register_recipe_type(kind);
+            registrar.register_raw_recipe_serializer(kind, kind);
+        }}
+"
+        );
+    }
     if plants {
         r.push_str(
             "        // Items that plant a block of another name (seeds).
@@ -1852,6 +1923,25 @@ fn ability_tag(action: &str) -> Option<&'static str> {
 
 /// The recipes of type `kind`, ingredients resolved to items: the mod's own types, and the
 /// cooking table the porter wrote for vanilla's.
+/// An ingredient as 26.3 writes it (`"minecraft:wheat"`, `"#c:ingots/iron"`, or a list of
+/// items), from the form a mod's own recipe files may keep (`{"item": ..}`, `{"tag": ..}`:
+/// Create's): the game's parser takes 26.3's, and reads the other as nothing.
+fn ingredient_json(v: &mod_api::serde_json::Value) -> String {
+    use mod_api::serde_json::Value;
+    match v {
+        Value::Object(map) => match (map.get("item"), map.get("tag")) {
+            (Some(Value::String(item)), _) => format!("{item:?}"),
+            (_, Some(Value::String(tag))) => format!("{:?}", format!("#{tag}")),
+            _ => v.to_string(),
+        },
+        Value::Array(list) => format!(
+            "[{}]",
+            list.iter().map(ingredient_json).collect::<Vec<_>>().join(",")
+        ),
+        _ => v.to_string(),
+    }
+}
+
 fn recipes(host: &dyn mod_api::Host, kind: &str) -> Vec<runtime::Recipe> {
     let items = |json: &str| -> Vec<String> {
         host.recipe_ingredient(json).ok().flatten().map(|i| i.order).unwrap_or_default()
@@ -1878,12 +1968,12 @@ fn recipes(host: &dyn mod_api::Host, kind: &str) -> Vec<runtime::Recipe> {
             if ingredients.is_empty() {
                 for key in ["ingredient", "input"] {
                     if let Some(v) = r.json.get(key) {
-                        ingredients.push(items(&v.to_string()));
+                        ingredients.push(items(&ingredient_json(v)));
                     }
                 }
                 for key in ["ingredients", "inputs"] {
                     if let Some(list) = r.json.get(key).and_then(|v| v.as_array()) {
-                        ingredients.extend(list.iter().map(|v| items(&v.to_string())));
+                        ingredients.extend(list.iter().map(|v| items(&ingredient_json(v))));
                     }
                 }
             }
@@ -1892,7 +1982,7 @@ fn recipes(host: &dyn mod_api::Host, kind: &str) -> Vec<runtime::Recipe> {
                 if let Some(v) = r.json.get(key) {
                     let json = match v.get("action").and_then(|a| a.as_str()).and_then(ability_tag) {
                         Some(tag) => format!("{tag:?}"),
-                        None => v.to_string(),
+                        None => ingredient_json(v),
                     };
                     ingredients.push(items(&json));
                 }
@@ -2000,6 +2090,103 @@ fn container_of(block: &str) -> Option<mod_api::ModContainer> {
 __MACHINE_CONTAINER__    None
 }
 
+/// The face of a block a side names.
+fn direction(side: runtime::Side) -> mod_api::Direction {
+    match side {
+        runtime::Side::Down => mod_api::Direction::Down,
+        runtime::Side::Up => mod_api::Direction::Up,
+        runtime::Side::North => mod_api::Direction::North,
+        runtime::Side::South => mod_api::Direction::South,
+        runtime::Side::West => mod_api::Direction::West,
+        runtime::Side::East => mod_api::Direction::East,
+    }
+}
+
+/// The side facing back: a neighbour's face that looks at the block on `side` of it.
+fn back(side: runtime::Side) -> runtime::Side {
+    match side {
+        runtime::Side::Down => runtime::Side::Up,
+        runtime::Side::Up => runtime::Side::Down,
+        runtime::Side::North => runtime::Side::South,
+        runtime::Side::South => runtime::Side::North,
+        runtime::Side::West => runtime::Side::East,
+        runtime::Side::East => runtime::Side::West,
+    }
+}
+
+/// Takes up to `count` out of the item handler of the block at `at` (`face`'s): from index
+/// `slot` where one is named, or else the first that holds something (`item` alone, where
+/// one is named). What came out, and how many: a hopper's, a chest's, a mod's block entity's.
+fn take_items(
+    host: &mut dyn ServerHost,
+    level: mod_api::LevelRef,
+    at: [i32; 3],
+    face: Option<mod_api::Direction>,
+    slot: Option<usize>,
+    item: Option<&str>,
+    count: u32,
+) -> Option<(String, u32)> {
+    if count == 0 {
+        return None;
+    }
+    let handler = level.capability(host, &mod_api::ITEMS, at, face)?;
+    <dyn ServerHost as mod_api::HostTransaction>::transaction(host, |host, tx| -> Result<Option<(String, u32)>, ()> {
+        let size = handler.size(host);
+        let indices: Vec<usize> = match slot {
+            Some(s) if s < size => vec![s],
+            Some(_) => Vec::new(),
+            None => (0..size).collect(),
+        };
+        for index in indices {
+            let Some(resource) = handler.resource(host, index) else {
+                continue;
+            };
+            let Some(stack) = resource.to_stack(1) else {
+                continue;
+            };
+            let Some((id, _)) = stack_of(&*host, &stack) else {
+                continue;
+            };
+            if item.is_some_and(|i| i != id) {
+                continue;
+            }
+            let got = handler.extract(host, tx, index, &resource, count);
+            if got > 0 {
+                return Ok(Some((id, got)));
+            }
+        }
+        Ok(None)
+    })
+    .ok()
+    .flatten()
+}
+
+/// Puts up to `count` of `item` into the item handler of the block at `at` (`face`'s),
+/// wherever it goes: how many went in.
+fn give_items(
+    host: &mut dyn ServerHost,
+    level: mod_api::LevelRef,
+    at: [i32; 3],
+    face: Option<mod_api::Direction>,
+    item: &str,
+    count: u32,
+) -> u32 {
+    if count == 0 {
+        return 0;
+    }
+    let Some(handler) = level.capability(host, &mod_api::ITEMS, at, face) else {
+        return 0;
+    };
+    let Some(stack) = item_stack(&*host, item, 1) else {
+        return 0;
+    };
+    let resource = mod_api::ItemResource::of(&stack);
+    <dyn ServerHost as mod_api::HostTransaction>::transaction(host, |host, tx| -> Result<u32, ()> {
+        Ok(handler.insert_any(host, tx, &resource, count))
+    })
+    .unwrap_or(0)
+}
+
 /// The port's code for one of the mod's block entities.
 struct PortedEntity;
 
@@ -2025,6 +2212,16 @@ impl mod_api::BlockEntityPart for PortedEntity {
     }
 
     fn block_entity_tick(&self, host: &mut dyn ServerHost, event: &mut mod_api::BlockEntityTickEvent<'_>) {
+        // The items each block entity put out as its own (`machine.eject`), by entity id,
+        // with the place it stands: its `dropped_in` leaves them out, as Java's tag on them
+        // does (Create's `BypassCrushingWheel`). The newest few thousand are kept.
+        static EJECTED: std::sync::Mutex<Vec<(u32, &'static str, [i32; 3])>> = std::sync::Mutex::new(Vec::new());
+        // Each kinetic block entity's last report to its network (`machine.network_report`),
+        // by level and position: (network, stress, capacity, when). Create's `KineticNetwork`
+        // members, summed for each of them.
+        #[allow(clippy::type_complexity)]
+        static NETWORKS: std::sync::Mutex<std::collections::BTreeMap<(&'static str, [i32; 3]), (i64, f32, f32, std::time::Instant)>> =
+            std::sync::Mutex::new(std::collections::BTreeMap::new());
         let id = event.entity.id().to_string();
         if !runtime::BLOCK_ENTITIES.iter().any(|(_, e, _)| *e == id) {
             return;
@@ -2032,6 +2229,10 @@ impl mod_api::BlockEntityPart for PortedEntity {
         let pos = event.pos;
         let dimension = host.dimension();
         let level = host.level(dimension);
+        let ejected: Vec<u32> = EJECTED
+            .lock()
+            .map(|list| list.iter().filter(|(_, d, at)| *d == dimension && *at == pos).map(|(id, _, _)| *id).collect())
+            .unwrap_or_default();
         let (block, props) = level
             .and_then(|l| l.block_state(&*host, pos))
             .and_then(|s| host.block_state_string(s))
@@ -2040,6 +2241,44 @@ impl mod_api::BlockEntityPart for PortedEntity {
         let slots: Vec<Option<runtime::Stack>> =
             event.entity.items.iter().map(|s| s.as_ref().and_then(|s| stack_of(&*host, s)).map(|(i, c)| runtime::Stack::new(&i, c))).collect();
         let data = event.entity.data.clone();
+        // Its tanks and energy, as it saves them: `fluids` (a list of `{Fluid, Amount}`) and
+        // the int `energy`.
+        let storage = runtime::STORAGE.iter().find(|(e, _, _)| *e == id);
+        let (tanks, energy, energy_capacity) = match storage {
+            Some((_, capacities, energy)) => {
+                let list = match compound_get(&event.entity.nbt, "fluids") {
+                    Some(mod_api::Tag::List(list)) => list.clone(),
+                    _ => Vec::new(),
+                };
+                let tanks: Vec<runtime::Tank> = capacities
+                    .iter()
+                    .enumerate()
+                    .map(|(i, capacity)| {
+                        let (fluid, amount) = match list.get(i) {
+                            Some(mod_api::Tag::Compound(map)) => (
+                                match compound_get(map, "Fluid") {
+                                    Some(mod_api::Tag::String(f)) if f.to_string_lossy() != "minecraft:empty" => Some(f.to_string_lossy()),
+                                    _ => None,
+                                },
+                                match compound_get(map, "Amount") {
+                                    Some(mod_api::Tag::Int(a)) => *a,
+                                    _ => 0,
+                                },
+                            ),
+                            _ => (None, 0),
+                        };
+                        runtime::Tank { fluid, amount, capacity: *capacity }
+                    })
+                    .collect();
+                let capacity = energy.map_or(0, |e| e[0]);
+                let energy = match compound_get(&event.entity.nbt, "energy") {
+                    Some(mod_api::Tag::Int(e)) => (*e).clamp(0, capacity),
+                    _ => 0,
+                };
+                (tanks, energy, capacity)
+            }
+            None => (Vec::new(), 0, 0),
+        };
         // The dropped items its tick looked at, by the id it was given.
         let seen: std::cell::RefCell<Vec<mod_api::EntityRef>> = std::cell::RefCell::new(Vec::new());
         let (changed, mut done) = {
@@ -2050,6 +2289,9 @@ impl mod_api::BlockEntityPart for PortedEntity {
                 };
                 let mut out = Vec::new();
                 for entity in level.entities_in(reader, min, max).unwrap_or_default() {
+                    if ejected.contains(&entity.id()) {
+                        continue;
+                    }
                     let Some(item) = reader.item_entity(entity) else {
                         continue;
                     };
@@ -2092,7 +2334,121 @@ impl mod_api::BlockEntityPart for PortedEntity {
             let recipes_of = |kind: &str| recipes(reader, kind);
             let tags = |kind: &str, tag: &str, id: &str| in_tag(reader, kind, tag, id);
             let items = |item: &str| item_facts(reader, item);
+            // The block at `at`, and its state's properties.
+            let state_at = |at: [i32; 3]| -> (String, Vec<(String, String)>) {
+                level
+                    .and_then(|l| l.block_state(reader, at))
+                    .and_then(|s| reader.block_state_string(s))
+                    .map_or_else(|| ("minecraft:air".to_string(), Vec::new()), |t| parse_state(&t))
+            };
+            // The items of the block entity at `at` (this one is out of the level while it
+            // ticks: its own are `slots`): a mod's, slot by slot; a vanilla container's from
+            // what it saves (`Items`), as long as the container is.
+            let slots_at = |at: [i32; 3]| -> Option<Vec<Option<runtime::Stack>>> {
+                if at == pos {
+                    return Some(slots.clone());
+                }
+                let found = reader.block_entity(level?, at)?;
+                let mut mine = Vec::new();
+                for slot in 0..64u32 {
+                    match found.item_slot(reader, slot) {
+                        Ok(s) => mine.push(s.as_ref().and_then(|s| stack_of(reader, s)).map(|(i, c)| runtime::Stack::new(&i, c))),
+                        Err(_) => break,
+                    }
+                }
+                if !mine.is_empty() {
+                    return Some(mine);
+                }
+                let (block, _) = state_at(at);
+                let size = runtime::VANILLA_CONTAINERS.iter().find(|(b, _, _)| *b == block).map(|(_, _, n)| *n)?;
+                let mut out: Vec<Option<runtime::Stack>> = vec![None; size];
+                let data = found.data(reader)?;
+                if let Some(mod_api::Tag::List(list)) = compound_get(&data, "Items") {
+                    for entry in list {
+                        let mod_api::Tag::Compound(entry) = entry else {
+                            continue;
+                        };
+                        let slot = match compound_get(entry, "Slot") {
+                            Some(mod_api::Tag::Byte(v)) => *v as usize,
+                            Some(mod_api::Tag::Int(v)) => *v as usize,
+                            _ => continue,
+                        };
+                        let Some(mod_api::Tag::String(item)) = compound_get(entry, "id") else {
+                            continue;
+                        };
+                        let count = match compound_get(entry, "count") {
+                            Some(mod_api::Tag::Int(v)) => *v as u32,
+                            Some(mod_api::Tag::Byte(v)) => *v as u32,
+                            _ => 1,
+                        };
+                        if let Some(cell) = out.get_mut(slot) {
+                            *cell = Some(runtime::Stack::new(&item.to_string_lossy(), count));
+                        }
+                    }
+                }
+                Some(out)
+            };
+            // The containers beside it, and at any place (a funnel's, behind it).
+            let container_beside = |side: runtime::Side| -> Option<Vec<Option<runtime::Stack>>> {
+                let [dx, dy, dz] = side.offset();
+                slots_at([pos[0] + dx, pos[1] + dy, pos[2] + dz])
+            };
+            let container_at_place = |at: [i32; 3], _side: runtime::Side| slots_at(at);
+            // Any of the mod's block entities, by its position, as it is before the tick; this
+            // one too (it is out of the level while it ticks), so a walk over a chain of them
+            // that starts here (a belt's) finds it.
+            let own_view = runtime::Neighbour {
+                block: block.clone(),
+                pos,
+                properties: props.clone(),
+                entity: Some(id.clone()),
+                values: event
+                    .entity
+                    .nbt
+                    .iter()
+                    .filter_map(|(k, t)| saved_of(t).map(|v| (k.to_string_lossy(), v)))
+                    .collect(),
+                items: slots.clone(),
+            };
+            let entity_lookup = |at: [i32; 3]| -> Option<runtime::Neighbour> {
+                if at == pos {
+                    return Some(own_view.clone());
+                }
+                let found = reader.block_entity(level?, at)?;
+                let entity = found.kind(reader).map(|k| k.id(reader))?;
+                if !runtime::BLOCK_ENTITIES.iter().any(|(_, e, _)| *e == entity) {
+                    return None;
+                }
+                let (block, properties) = state_at(at);
+                let values = found
+                    .data(reader)
+                    .map(|data| data.iter().filter_map(|(k, t)| saved_of(t).map(|v| (k.to_string_lossy(), v))).collect())
+                    .unwrap_or_default();
+                Some(runtime::Neighbour { block, pos: at, properties, entity: Some(entity), values, items: slots_at(at).unwrap_or_default() })
+            };
+            // The kinetic networks: what every member reported on its last tick, summed by
+            // network, a report a second old or older left out (a block broken, moved on).
+            let network_totals = |net: i64| -> Option<runtime::NetworkTotals> {
+                let list = NETWORKS.lock().ok()?;
+                let now = std::time::Instant::now();
+                let mut totals = runtime::NetworkTotals::default();
+                for ((d, _), (of, stress, capacity, at)) in list.iter() {
+                    if *d == dimension && *of == net && now.duration_since(*at).as_secs_f32() < 1.0 {
+                        totals.stress += stress;
+                        totals.capacity += capacity;
+                        totals.size += 1;
+                    }
+                }
+                (totals.size > 0).then_some(totals)
+            };
             let mut machine = runtime::Machine::new(slots.clone(), data.clone(), &recipes_of);
+            machine.containers = Some(&container_beside);
+            machine.containers_at = Some(&container_at_place);
+            machine.lookup = Some(&entity_lookup);
+            machine.networks = Some(&network_totals);
+            machine.tanks = tanks.clone();
+            machine.energy = energy;
+            machine.energy_capacity = energy_capacity;
             machine.tags = Some(&tags);
             machine.items = Some(&items);
             machine.block = block.clone();
@@ -2119,18 +2475,39 @@ impl mod_api::BlockEntityPart for PortedEntity {
                                     .collect()
                             })
                             .unwrap_or_default();
-                        Some(runtime::Neighbour { block, pos: at, properties, entity, values, items: Vec::new() })
+                        // Its item slots too, for a tick that reads them (a press, the depot under it).
+                        let items = if reads { slots_at(at).unwrap_or_default() } else { Vec::new() };
+                        Some(runtime::Neighbour { block, pos: at, properties, entity, values, items })
                     })
                     .collect();
                 // The mod block entities two steps away along each axis, where its tick
                 // reaches them (runtime.rs's `FAR`). What it sets in them (`set_at`), like
-                // what it sets in a neighbour, isn't carried out on this API yet.
+                // what it sets in a neighbour, is merged into them after the tick.
+                // And those at the other places of the 3x3x3 around it, for one whose Java walks
+                // that (`AROUND`: cogwheels meshing diagonally).
+                let mut places: Vec<[i32; 3]> = Vec::new();
                 if runtime::FAR.contains(&id.as_str()) {
-                    machine.far = runtime::Side::ALL
-                        .iter()
-                        .filter_map(|side| {
-                            let [dx, dy, dz] = side.offset();
-                            let at = [pos[0] + 2 * dx, pos[1] + 2 * dy, pos[2] + 2 * dz];
+                    for side in runtime::Side::ALL {
+                        let [dx, dy, dz] = side.offset();
+                        places.push([pos[0] + 2 * dx, pos[1] + 2 * dy, pos[2] + 2 * dz]);
+                    }
+                }
+                if runtime::AROUND.contains(&id.as_str()) {
+                    for dx in -1..=1 {
+                        for dy in -1..=1 {
+                            for dz in -1..=1 {
+                                // (Those beside it are its neighbours already.)
+                                if [dx, dy, dz].iter().filter(|d| **d != 0).count() >= 2 {
+                                    places.push([pos[0] + dx, pos[1] + dy, pos[2] + dz]);
+                                }
+                            }
+                        }
+                    }
+                }
+                if !places.is_empty() {
+                    machine.far = places
+                        .into_iter()
+                        .filter_map(|at| {
                             let found = reader.block_entity(level, at)?;
                             let (block, properties) = level
                                 .block_state(reader, at)
@@ -2145,7 +2522,8 @@ impl mod_api::BlockEntityPart for PortedEntity {
                                         .collect()
                                 })
                                 .unwrap_or_default();
-                            Some(runtime::Neighbour { block, pos: at, properties, entity, values, items: Vec::new() })
+                            let items = slots_at(at).unwrap_or_default();
+                            Some(runtime::Neighbour { block, pos: at, properties, entity, values, items })
                         })
                         .collect();
                 }
@@ -2172,6 +2550,100 @@ impl mod_api::BlockEntityPart for PortedEntity {
         if done.sync {
             host.block_entity_sync(pos);
         }
+        // What the tick sent to or took from the blocks beside it (`machine.push`,
+        // `machine.pull`), through their item handlers on the face that looks at it.
+        for transfer in std::mem::take(&mut done.transfers) {
+            let Some(level) = level else {
+                break;
+            };
+            let (slot, side, max, push) = match transfer {
+                runtime::Transfer::Push { slot, side, max } => (slot, side, max, true),
+                runtime::Transfer::Pull { slot, side, max } => (slot, side, max, false),
+            };
+            let [dx, dy, dz] = side.offset();
+            let next = [pos[0] + dx, pos[1] + dy, pos[2] + dz];
+            let face = Some(direction(back(side)));
+            if push {
+                let Some(Some(stack)) = done.slots.get(slot).cloned() else {
+                    continue;
+                };
+                let moved = give_items(host, level, next, face, &stack.item, stack.count.min(max));
+                if let Some(Some(s)) = done.slots.get_mut(slot) {
+                    s.count -= moved.min(s.count);
+                    if s.count == 0 {
+                        done.slots[slot] = None;
+                    }
+                }
+            } else {
+                let held = done.slots.get(slot).cloned().flatten();
+                let room = match &held {
+                    Some(h) => runtime::MAX_STACK.saturating_sub(h.count),
+                    None => runtime::MAX_STACK,
+                };
+                if let Some((item, got)) = take_items(host, level, next, face, None, held.as_ref().map(|h| h.item.as_str()), room.min(max)) {
+                    if let Some(cell) = done.slots.get_mut(slot) {
+                        let s = cell.get_or_insert_with(|| runtime::Stack::new(&item, 0));
+                        s.count += got;
+                    }
+                }
+            }
+        }
+        // Saved values the tick changed in the block entities it reached, beside it or
+        // further off: one merge each. One at its own place (a helper it called walked a
+        // chain from here: a belt's `initBelt`) is the entity in hand, out of the level while
+        // it ticks: that write waits for the tick's own values, below.
+        let mut own_writes: Vec<(String, runtime::Saved)> = Vec::new();
+        let mut merges: Vec<([i32; 3], mod_api::Compound)> = Vec::new();
+        let beside: Vec<([i32; 3], String, runtime::Saved)> = std::mem::take(&mut done.neighbour_writes)
+            .into_iter()
+            .map(|(side, key, value)| {
+                let [dx, dy, dz] = side.offset();
+                ([pos[0] + dx, pos[1] + dy, pos[2] + dz], key, value)
+            })
+            .collect();
+        for (at, key, value) in beside.into_iter().chain(std::mem::take(&mut done.far_writes)) {
+            if at == pos {
+                own_writes.push((key, value));
+                continue;
+            }
+            let i = match merges.iter().position(|(p, _)| *p == at) {
+                Some(i) => i,
+                None => {
+                    merges.push((at, mod_api::Compound::new()));
+                    merges.len() - 1
+                }
+            };
+            merges[i].1.insert(key.as_str().into(), tag_of(value));
+        }
+        if let Some(level) = level {
+            for (at, data) in merges {
+                if let Some(found) = host.block_entity(level, at) {
+                    let _ = found.merge_data(host, data);
+                }
+            }
+        }
+        // Item slots it changed in the block entities it reached.
+        let mut own_items: Vec<(usize, Option<runtime::Stack>)> = Vec::new();
+        let item_writes = std::mem::take(&mut done.item_writes);
+        if let (Some(level), false) = (level, item_writes.is_empty()) {
+            let _ = <dyn ServerHost as mod_api::HostTransaction>::transaction(host, |host, tx| -> Result<(), ()> {
+                for (at, slot, stack) in item_writes {
+                    if at == pos {
+                        own_items.push((slot, stack));
+                        continue;
+                    }
+                    let Some(found) = host.block_entity(level, at) else {
+                        continue;
+                    };
+                    let made = stack.as_ref().and_then(|s| item_stack(&*host, &s.item, s.count));
+                    if found.set_item_slot(host, tx, slot as u32, made).is_ok() {
+                        let _ = found.set_changed(host);
+                        host.block_entity_sync(at);
+                    }
+                }
+                Ok(())
+            });
+        }
         // The tick's sounds, particles and drops.
         for effect in std::mem::take(&mut done.effects) {
             match effect {
@@ -2186,16 +2658,42 @@ impl mod_api::BlockEntityPart for PortedEntity {
                         let _ = level.send_particles(host, &options, None, at, spread, speed, count);
                     }
                 }
-                // (An ejected item's mark, `own`, isn't kept on this route yet: its
-                // block entity may take it back in.)
-                // (Kinetic networks aren't kept on this route yet: a member sees none.)
-                runtime::Effect::Network { .. } => {}
-                // (Nor a container's slots taken from or given to on this route yet.)
-                runtime::Effect::TakeFrom { .. }
-                | runtime::Effect::GiveTo { .. }
-                | runtime::Effect::TakeAt { .. }
-                | runtime::Effect::GiveAt { .. } => {}
-                runtime::Effect::Drop { item, count, at, motion, .. } => {
+                runtime::Effect::Network { id: net, stress, capacity } => {
+                    if let Ok(mut list) = NETWORKS.lock() {
+                        if net == 0 {
+                            list.remove(&(dimension, pos));
+                        } else {
+                            list.insert((dimension, pos), (net, stress, capacity, std::time::Instant::now()));
+                        }
+                    }
+                }
+                // A container's slots taken from or given to: beside it through the face that
+                // looks at it, or at a place through the face named.
+                runtime::Effect::TakeFrom { side, slot, count } => {
+                    if let Some(level) = level {
+                        let [dx, dy, dz] = side.offset();
+                        let next = [pos[0] + dx, pos[1] + dy, pos[2] + dz];
+                        let _ = take_items(host, level, next, Some(direction(back(side))), Some(slot), None, count);
+                    }
+                }
+                runtime::Effect::GiveTo { side, stack } => {
+                    if let Some(level) = level {
+                        let [dx, dy, dz] = side.offset();
+                        let next = [pos[0] + dx, pos[1] + dy, pos[2] + dz];
+                        let _ = give_items(host, level, next, Some(direction(back(side))), &stack.item, stack.count);
+                    }
+                }
+                runtime::Effect::TakeAt { pos: at, face, slot, count } => {
+                    if let Some(level) = level {
+                        let _ = take_items(host, level, at, Some(direction(face)), Some(slot), None, count);
+                    }
+                }
+                runtime::Effect::GiveAt { pos: at, face, stack } => {
+                    if let Some(level) = level {
+                        let _ = give_items(host, level, at, Some(direction(face)), &stack.item, stack.count);
+                    }
+                }
+                runtime::Effect::Drop { item, count, at, motion, own } => {
                     use mod_api::Tag;
                     let mut stack = mod_api::Compound::new();
                     stack.insert("id".into(), Tag::String(item.as_str().into()));
@@ -2208,7 +2706,13 @@ impl mod_api::BlockEntityPart for PortedEntity {
                         "Motion".into(),
                         Tag::List(motion.iter().map(|v| Tag::Double(v.to_bits())).collect()),
                     );
-                    let _ = host.summon(dimension, "minecraft:item", at, nbt);
+                    let made = host.summon(dimension, "minecraft:item", at, nbt);
+                    if let (true, Some(made), Ok(mut list)) = (own, made, EJECTED.lock()) {
+                        list.push((made, dimension, pos));
+                        if list.len() > 4096 {
+                            list.drain(..1024);
+                        }
+                    }
                 }
                 runtime::Effect::TakeDropped { id, count } => {
                     let Some(entity) = seen.borrow().get(id as usize).copied() else {
@@ -2286,6 +2790,34 @@ impl mod_api::BlockEntityPart for PortedEntity {
         }
         if done.data != data {
             event.entity.data = done.data.clone();
+        }
+        // What a helper the tick called wrote to this block entity itself: Java's call came
+        // before the rest of its tick, so it stands over the tick's own values.
+        for (key, value) in own_writes {
+            event.entity.nbt.insert(key.as_str().into(), tag_of(value));
+        }
+        for (slot, stack) in own_items {
+            if let Some(cell) = event.entity.items.get_mut(slot) {
+                *cell = stack.as_ref().and_then(|s| item_stack(&*host, &s.item, s.count));
+            }
+        }
+        // Its tanks and energy, as it saves them.
+        if storage.is_some() && done.tanks != tanks {
+            use mod_api::Tag;
+            let list = done
+                .tanks
+                .iter()
+                .map(|t| {
+                    let mut map = mod_api::Compound::new();
+                    map.insert("Fluid".into(), Tag::String(t.fluid.as_deref().unwrap_or("minecraft:empty").into()));
+                    map.insert("Amount".into(), Tag::Int(t.amount));
+                    Tag::Compound(map)
+                })
+                .collect();
+            event.entity.nbt.insert("fluids".into(), Tag::List(list));
+        }
+        if storage.is_some() && done.energy != energy {
+            event.entity.nbt.insert("energy".into(), mod_api::Tag::Int(done.energy));
         }
     }
 

@@ -214,11 +214,13 @@ async fn port(
             .join("Horizon Porter")
     };
     let lang = porter_translate::bundle::load_lang(&scan);
-    let bundle = porter_translate::bundle::generate_with(
+    let mut bundle = porter_translate::bundle::generate_with(
         &scan,
         &lang,
         porter_map::ledger::horizon_source().as_deref(),
     );
+    // Both: api/ for Horizon's mod API (builds from 2026-11-16 on), the bundle for older ones.
+    bundle.write_api = true;
     let out = parent.join(format!("{}-horizon", bundle.id));
     let has_files = std::fs::read_dir(&out)
         .map(|mut d| d.next().is_some())
@@ -344,11 +346,14 @@ async fn build(app: AppHandle, ported: State<'_, Ported>) -> Result<Option<Build
         .clone()
         .ok_or_else(|| "Port a mod first".to_string())?;
     let port = porter_verify::Port::read(&out).map_err(|e| format!("{e:#}"))?;
-    let Some(folder) = port.native.clone() else {
+    let Some(launcher) = launcher(&app)? else {
+        return Ok(None);
+    };
+    // api/ on a launcher with Horizon's mod API (2026-11-16 on), the bundle on an older one.
+    let route = port.route(&launcher);
+    let content = route.dev_mods.first().cloned();
+    let Some(folder) = route.build.clone() else {
         // A content mod alone: nothing to build or trust, it plays as it is.
-        let Some(launcher) = launcher(&app)? else {
-            return Ok(None);
-        };
         let instance = tauri::async_runtime::spawn_blocking(move || {
             launcher.ensure_instance(&format!("{id} port"))
         })
@@ -356,7 +361,7 @@ async fn build(app: AppHandle, ported: State<'_, Ported>) -> Result<Option<Build
         .map_err(message)?
         .map_err(|e| format!("{e:#}"))?;
         let name = instance.name.clone();
-        *app.state::<Horizon>().built.lock().map_err(message)? = Some((instance, port.content));
+        *app.state::<Horizon>().built.lock().map_err(message)? = Some((instance, content));
         return Ok(Some(BuildView {
             instance: name,
             result: "A content mod: nothing to build. Play loads it from content/.".into(),
@@ -366,9 +371,9 @@ async fn build(app: AppHandle, ported: State<'_, Ported>) -> Result<Option<Build
     let trusted = app
         .dialog()
         .message(format!(
-            "Building compiles the Rust code in {} into Horizon. Native mods are not sandboxed: \
+            "Building compiles the Rust code in {} for Horizon. Native mods are not sandboxed: \
              the code runs with your rights on this computer. Build only code you have read and trust.",
-            out.join("mixins").join(&id).display()
+            folder.display()
         ))
         .title("Trust this mod's code")
         .kind(MessageDialogKind::Warning)
@@ -380,9 +385,6 @@ async fn build(app: AppHandle, ported: State<'_, Ported>) -> Result<Option<Build
     if !trusted {
         return Ok(None);
     }
-    let Some(launcher) = launcher(&app)? else {
-        return Ok(None);
-    };
     let events = app.clone();
     let (instance, result) = tauri::async_runtime::spawn_blocking(move || {
         let instance = launcher.ensure_instance(&format!("{id} port"))?;
@@ -403,7 +405,7 @@ async fn build(app: AppHandle, ported: State<'_, Ported>) -> Result<Option<Build
     .map_err(message)?
     .map_err(|e| format!("{e:#}"))?;
     let name = instance.name.clone();
-    *app.state::<Horizon>().built.lock().map_err(message)? = Some((instance, port.content));
+    *app.state::<Horizon>().built.lock().map_err(message)? = Some((instance, content));
     Ok(Some(BuildView {
         instance: name,
         result,

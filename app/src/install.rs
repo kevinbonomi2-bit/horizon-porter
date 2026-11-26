@@ -83,21 +83,14 @@ pub async fn install_port(
         .home
         .clone()
         .ok_or("That instance has no game folder")?;
+    // api/ on a launcher with Horizon's mod API (2026-11-16 on), the bundle on an older one.
+    let api_route = launcher(&app)?.is_some_and(|l| l.has_mod_api());
     let installed = tauri::async_runtime::spawn_blocking(move || {
         let dist = dir.join(".porter").join("dist");
         let files = porter_translate::bundle::package(&dir, &dist)?;
-        let pick = |ext: &str| {
-            files
-                .iter()
-                .find(|f| f.extension().is_some_and(|e| e == ext))
-                .cloned()
-        };
-        porter_verify::install(
-            &home,
-            &mod_id,
-            pick("hmod").as_deref(),
-            pick("hnmod").as_deref(),
-        )
+        let port = porter_verify::Port::read(&dir)?;
+        let (content, native) = port.packages(&files, api_route);
+        porter_verify::install(&home, &mod_id, content.as_deref(), native.as_deref())
     })
     .await
     .map_err(message)?
@@ -156,10 +149,9 @@ pub async fn build_installed(
             if !done.is_empty() {
                 let files =
                     porter_translate::bundle::package(dir, &dir.join(".porter").join("dist"))?;
-                let hnmod = files
-                    .iter()
-                    .find(|f| f.extension().is_some_and(|e| e == "hnmod"));
-                porter_verify::install(home, mod_id, None, hnmod.map(|p| p.as_path()))?;
+                let port = porter_verify::Port::read(dir)?;
+                let (_, native) = port.packages(&files, launcher.has_mod_api());
+                porter_verify::install(home, mod_id, None, native.as_deref())?;
             }
             Ok(done)
         };

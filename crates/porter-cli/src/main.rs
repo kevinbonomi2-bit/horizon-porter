@@ -45,7 +45,8 @@ enum Command {
         #[arg(long, hide = true, requires = "html")]
         embedded: bool,
     },
-    /// Generate a Horizon native mod bundle for a client mod, with a porting checklist
+    /// Port a mod: the mod for Horizon's mod API (api/, for builds from 2026-11-16 on), the
+    /// horizon-mixins bundle for older builds (mixins/), its content and a porting checklist
     Port {
         /// The mod's source directory (a Gradle project), or its .jar (decompiled first)
         path: PathBuf,
@@ -55,10 +56,13 @@ enum Command {
         /// Replace the generated files in a folder that already has files
         #[arg(long)]
         force: bool,
-        /// Also write the mod as a trait mod on Horizon's new mod API (api/: Parts, built
-        /// against a prebuilt game), beside the horizon-mixins bundle
-        #[arg(long)]
+        /// (api/ is written by default now; kept so older scripts still run)
+        #[arg(long, hide = true)]
         api: bool,
+        /// Don't write api/, the mod for Horizon's mod API (builds from 2026-11-16 on): only
+        /// the bundle for older builds
+        #[arg(long)]
+        no_api: bool,
     },
     /// Build a ported mod into a Horizon instance with your Horizon launcher
     Build {
@@ -245,7 +249,8 @@ fn run(cli: Cli) -> Result<ExitCode> {
             path,
             out,
             force,
-            api,
+            api: _,
+            no_api,
         } => {
             // A jar is decompiled into a source tree first (once; it is kept).
             let source = if path.is_dir() {
@@ -270,14 +275,16 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 &lang,
                 porter_map::ledger::horizon_source().as_deref(),
             );
-            bundle.write_api = api;
+            bundle.write_api = !no_api;
             porter_translate::bundle::write(&bundle, &out, force)?;
-            if api {
+            if !no_api {
                 if bundle.api.is_empty() {
-                    println!("No api/: the mod's code has no behaviour the mod API glue runs yet.");
+                    println!(
+                        "No api/: the mod has no code the mod API glue runs, so content/ is the whole mod on Horizon builds from 2026-11-16 on."
+                    );
                 } else {
                     println!(
-                        "Wrote api/: the mod as a trait mod on Horizon's mod API, pinned to the prebuilt game {}.",
+                        "Wrote api/: the mod for Horizon's mod API (builds from 2026-11-16 on), pinned to build {}.",
                         &porter_translate::api::API_HORIZON[..7]
                     );
                 }
@@ -368,21 +375,37 @@ fn run(cli: Cli) -> Result<ExitCode> {
         } => {
             let port = porter_verify::Port::read(&path)?;
             let id = port.id.clone();
-            if port.native.is_some() && !trust_native_code {
+            let launcher = porter_verify::Launcher::find(launcher.as_deref())?;
+            // api/ on a launcher with Horizon's mod API, the bundle on an older one.
+            let route = port.route(&launcher);
+            if route.build.is_some() && !trust_native_code {
                 eprintln!(
-                    "Native mods are not sandboxed: this compiles the Rust in {} into Horizon, and it runs with your rights.\n\
+                    "Native mods are not sandboxed: this compiles the Rust in {} for Horizon, and it runs with your rights.\n\
                      Read it, and if you trust it, run this again with --trust-native-code.",
-                    path.join("mixins").join(&id).display()
+                    route.build.as_deref().unwrap_or(&path).display()
                 );
                 return Ok(ExitCode::FAILURE);
             }
-            let launcher = porter_verify::Launcher::find(launcher.as_deref())?;
+            if route.api && port.api.is_none() && port.native.is_some() {
+                eprintln!(
+                    "{} has Horizon's mod API, and this port has no api/ (it was written with --no-api, or by an older horizon-porter): port it again to build it.",
+                    launcher.version
+                );
+                return Ok(ExitCode::FAILURE);
+            }
             let name = instance.unwrap_or_else(|| format!("{id} port"));
             let instance = launcher.ensure_instance(&name)?;
-            if let Some(folder) = &port.native {
+            if let Some(folder) = &route.build {
                 println!(
-                    "Building {} into the instance \"{}\" with {}. The first build downloads Rust and takes a while.",
-                    id, instance.name, launcher.version
+                    "Building {} ({}) into the instance \"{}\" with {}. The first build downloads Rust and takes a while.",
+                    id,
+                    if route.api {
+                        "api/, on Horizon's mod API"
+                    } else {
+                        "the horizon-mixins bundle"
+                    },
+                    instance.name,
+                    launcher.version
                 );
                 // The launcher's own lines, its result last, already show as progress.
                 launcher.native_build(
@@ -398,11 +421,12 @@ fn run(cli: Cli) -> Result<ExitCode> {
                     instance.name
                 );
             }
-            let dev_mods: Vec<&std::path::Path> = port.content.as_deref().into_iter().collect();
+            let dev_mods: Vec<&std::path::Path> =
+                route.dev_mods.iter().map(|p| p.as_path()).collect();
             if play {
                 launcher.play(&instance, &dev_mods)?;
                 println!("Starting \"{}\".", instance.name);
-                if port.content.is_some() {
+                if !dev_mods.is_empty() {
                     println!(
                         "Its blocks and items load from content/: restart the game after editing it."
                     );
@@ -694,18 +718,11 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 .context("the launcher gave no game folder for that instance")?;
             let files =
                 porter_translate::bundle::package(&path, &path.join(".porter").join("dist"))?;
-            let pick = |ext: &str| {
-                files
-                    .iter()
-                    .find(|f| f.extension().is_some_and(|e| e == ext))
-                    .cloned()
-            };
-            let installed = porter_verify::install(
-                &home,
-                &port.id,
-                pick("hmod").as_deref(),
-                pick("hnmod").as_deref(),
-            )?;
+            // On a launcher with Horizon's mod API, api/'s .hmod is the whole mod, built
+            // from horizon-native-mods/; on an older one, the bundle and the content mod.
+            let (content, native) = port.packages(&files, launcher.has_mod_api());
+            let installed =
+                porter_verify::install(&home, &port.id, content.as_deref(), native.as_deref())?;
             for f in installed.content.iter().chain(installed.native.iter()) {
                 println!("Added {}", f.display());
             }

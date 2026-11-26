@@ -50,6 +50,37 @@ fn writes_a_trait_mod_beside_the_bundle() {
     let runtime = std::fs::read_to_string(dir.join("api/src/runtime.rs")).unwrap();
     assert!(runtime.contains("pub fn use_block("));
     assert!(dir.join("api/horizon-mod.toml").is_file());
+    // The mod API's package: the launcher takes only the SDK's path for the API crate.
+    let cargo = std::fs::read_to_string(dir.join("api/Cargo.toml")).unwrap();
+    assert!(
+        cargo.contains("path = \".horizon/sdk/api/crates/horizon-mod-api\""),
+        "{cargo}"
+    );
+    assert!(!cargo.contains("git ="), "{cargo}");
+
+    // Packed: api/ as the .hmod, code and all; the content mod beside it by another name.
+    let files = bundle::package(&dir, &dir.join("out")).unwrap();
+    let names: Vec<String> = files
+        .iter()
+        .map(|f| f.file_name().unwrap().to_string_lossy().into_owned())
+        .collect();
+    let api = files
+        .iter()
+        .find(|f| !f.to_string_lossy().contains("-content-") && f.extension().unwrap() == "hmod")
+        .unwrap_or_else(|| panic!("{names:?}"));
+    let mut zip = zip::ZipArchive::new(std::fs::File::open(api).unwrap()).unwrap();
+    let inside: Vec<String> = (0..zip.len())
+        .map(|i| zip.by_index(i).unwrap().name().unwrap().to_string())
+        .collect();
+    for want in [
+        "horizon-mod.toml",
+        "Cargo.toml",
+        "src/lib.rs",
+        "src/runtime.rs",
+    ] {
+        assert!(inside.iter().any(|n| n == want), "{want}: {inside:?}");
+    }
+    assert!(names.iter().any(|n| n.ends_with(".hnmod")), "{names:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -67,20 +98,23 @@ fn compiles_against_the_mod_api() {
     let _ = std::fs::remove_dir_all(&dir);
     bundle::write(&b, &dir, false).unwrap();
     let crate_dir = dir.join("api");
-    let cargo = std::fs::read_to_string(crate_dir.join("Cargo.toml")).unwrap();
-    let start = cargo.find("horizon-mod-api = ").unwrap();
-    let end = start + cargo[start..].find('\n').unwrap();
-    let local = format!(
-        "horizon-mod-api = {{ path = {:?} }}",
-        Path::new(&api).to_string_lossy()
+    // The SDK's path, where `cargo horizon-mod` would fetch it, is the checkout's here (the
+    // dependency and the test one with the fake host).
+    let cargo = std::fs::read_to_string(crate_dir.join("Cargo.toml"))
+        .unwrap()
+        .replace(
+            "\".horizon/sdk/api/crates/horizon-mod-api\"",
+            &format!("{:?}", Path::new(&api).to_string_lossy()),
+        );
+    assert!(
+        cargo.contains(&*Path::new(&api).to_string_lossy()),
+        "{cargo}"
     );
-    let cargo = format!(
-        "{}{}{}\n[workspace]\n",
-        &cargo[..start],
-        local,
-        &cargo[end..]
-    );
-    std::fs::write(crate_dir.join("Cargo.toml"), cargo).unwrap();
+    std::fs::write(
+        crate_dir.join("Cargo.toml"),
+        format!("{cargo}\n[workspace]\n"),
+    )
+    .unwrap();
     let out = std::process::Command::new("cargo")
         .args(["check", "--message-format", "short"])
         .current_dir(&crate_dir)

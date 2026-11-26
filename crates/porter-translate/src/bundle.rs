@@ -634,6 +634,7 @@ pub fn generate_with(scan: &ModScan, lang: &Lang, horizon: Option<&Path>) -> Bun
             !places.is_empty(),
             &mod_particles(&content),
             drops.is_some() && (!behaviours.is_empty() || !places.is_empty()),
+            &mod_recipe_types(&content, &id),
         )
     } else {
         BTreeMap::new()
@@ -789,6 +790,41 @@ fn mod_particles(content: &porter_content::Content) -> Vec<String> {
     out
 }
 
+/// The recipe types of the mod's own namespace its recipe files use (`create:compacting`):
+/// on the mod API a code mod registers each one, or the game refuses to load its recipes.
+fn mod_recipe_types(content: &porter_content::Content, id: &str) -> Vec<String> {
+    let recipe = |rel: &str| {
+        let parts: Vec<&str> = rel.split('/').collect();
+        parts.len() >= 4
+            && parts[0] == "data"
+            && matches!(parts[2], "recipe" | "recipes")
+            && rel.ends_with(".json")
+    };
+    let prefix = format!("{id}:");
+    let type_of = |text: &str| -> Option<String> {
+        let value: serde_json::Value =
+            serde_json::from_str(text.trim_start_matches('\u{feff}')).ok()?;
+        let kind = value.get("type")?.as_str()?;
+        kind.starts_with(&prefix).then(|| kind.to_string())
+    };
+    let mut out: Vec<String> = Vec::new();
+    for (rel, text) in &content.files {
+        if recipe(rel) {
+            out.extend(type_of(text));
+        }
+    }
+    for (rel, src) in &content.copies {
+        if recipe(rel)
+            && let Ok(text) = fs::read_to_string(src)
+        {
+            out.extend(type_of(&text));
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
 /// Copies the bundle's runtime.rs (`mixins/<id>/runtime.rs`, with whatever `translate`
 /// ported in it) into `api/src/runtime.rs`, where a port has `api/`: the trait mod runs
 /// the same code.
@@ -869,32 +905,46 @@ pub fn native_manifest(id: &str, version: &str, horizon: &str, mixins: &str, hoo
     serde_json::to_string_pretty(&manifest).unwrap_or_default() + "\n"
 }
 
-/// Packs a bundle folder (as `port` writes it, edited or not) into a `.hnmod`, the
-/// way horizon-mods' `native.py package` does: `horizon-native.json`, the `.rs` and
-/// `.toml` files under `mixins/<id>/` and the folder's LICENSE, sorted, with fixed
-/// timestamps so the same sources give the same file. The content mod under
-/// `content/`, if there is one, becomes a `.hmod` beside it. Returns their paths.
+/// Packs a folder `port` wrote (edited or not). `api/`, the mod for Horizon's mod API
+/// (builds from 2026-11-16 on), becomes `<id>-<version>.hmod`: its manifest, `Cargo.toml`,
+/// `src/`, `assets/` and `data/`, the package the launcher compiles. The bundle for older
+/// builds becomes a `.hnmod`, the way horizon-mods' `native.py package` does:
+/// `horizon-native.json`, the `.rs` and `.toml` files under `mixins/<id>/` and the folder's
+/// LICENSE, sorted, with fixed timestamps so the same sources give the same file; and
+/// `content/` the content mod beside it (`<id>-content-<version>.hmod` where there is an
+/// `api/` too). Returns their paths.
 pub fn package(dir: &Path, out_dir: &Path) -> Result<Vec<PathBuf>> {
     let native = dir.join("mixins").is_dir();
     let content = dir.join("content").join("horizon-mod.toml").is_file();
-    if !native && !content {
+    let api = dir.join("api").join("horizon-mod.toml").is_file()
+        && dir.join("api").join("Cargo.toml").is_file();
+    if !native && !content && !api {
         bail!(
-            "{} has neither a mixins/ folder nor content/horizon-mod.toml: is it a folder `port` wrote?",
+            "{} has none of api/, mixins/ or content/horizon-mod.toml: is it a folder `port` wrote?",
             dir.display()
         );
     }
     let mut out = Vec::new();
+    if api {
+        out.push(package_content(&dir.join("api"), out_dir, true, "")?);
+    }
     if native {
         out.push(package_native(dir, out_dir)?);
     }
     if content {
-        out.push(package_content(&dir.join("content"), out_dir)?);
+        out.push(package_content(
+            &dir.join("content"),
+            out_dir,
+            false,
+            if api { "-content" } else { "" },
+        )?);
     }
     Ok(out)
 }
 
-/// Packs a content mod folder (`horizon-mod.toml`, `assets/`, `data/`) into a `.hmod`.
-fn package_content(dir: &Path, out_dir: &Path) -> Result<PathBuf> {
+/// Packs a mod folder (`horizon-mod.toml`, `assets/`, `data/`, and with `code` its
+/// `Cargo.toml` and `src/`) into `<id><suffix>-<version>.hmod`.
+fn package_content(dir: &Path, out_dir: &Path, code: bool, suffix: &str) -> Result<PathBuf> {
     let manifest: toml::Table = toml::from_str(&fs::read_to_string(dir.join("horizon-mod.toml"))?)
         .with_context(|| format!("reading {}", dir.join("horizon-mod.toml").display()))?;
     let field = |key: &str| {
@@ -910,7 +960,15 @@ fn package_content(dir: &Path, out_dir: &Path) -> Result<PathBuf> {
         "horizon-mod.toml".into(),
         fs::read(dir.join("horizon-mod.toml"))?,
     );
-    for top in ["assets", "data"] {
+    if code {
+        files.insert("Cargo.toml".into(), fs::read(dir.join("Cargo.toml"))?);
+    }
+    let tops: &[&str] = if code {
+        &["assets", "data", "src"]
+    } else {
+        &["assets", "data"]
+    };
+    for top in tops {
         let mut stack = vec![dir.join(top)];
         while let Some(d) = stack.pop() {
             let Ok(entries) = fs::read_dir(&d) else {
@@ -931,7 +989,7 @@ fn package_content(dir: &Path, out_dir: &Path) -> Result<PathBuf> {
             }
         }
     }
-    let out = out_dir.join(format!("{id}-{version}.hmod"));
+    let out = out_dir.join(format!("{id}{suffix}-{version}.hmod"));
     write_zip(&out, &files)?;
     Ok(out)
 }
@@ -3903,8 +3961,26 @@ Left out, having no block entity to draw them with (they show their plain model)
             input = scan.input,
             id = self.id,
         );
+        if !bundle.api.is_empty() {
+            let _ = write!(
+                p,
+                "## Which Horizon\n\n\
+                 Horizon changed how native mods work on 2026-11-16, when its mod API was merged. The port is here both ways, \
+                 running the same `runtime.rs` (`translate` ports it once, for both):\n\n\
+                 - `api/`: the mod for Horizon builds from 2026-11-16 on, made for build `{build}`. A native mod on the mod API: \
+                 the launcher compiles it against that build's mod SDK and never rebuilds the game \
+                 (`horizon-launcher native-build api --instance <name> --trust-native-code`).\n\
+                 - `mixins/{id}/`: the horizon-mixins bundle for older builds (Nightly 2026-11-13 and before), which the \
+                 launcher builds into the game (`horizon-porter build .`).\n\n",
+                build = &crate::api::API_HORIZON[..7],
+                id = self.id,
+            );
+        }
 
         p.push_str("## Files\n\n| File | What it is |\n| --- | --- |\n");
+        if !bundle.api.is_empty() {
+            p.push_str("| `api/` | The mod for Horizon's mod API: `horizon-mod.toml` (its `[native]` pins), `Cargo.toml`, `src/lib.rs` (the glue to the API), `src/runtime.rs` (a copy of the bundle's), `assets/` and `data/` |\n");
+        }
         p.push_str("| `Cargo.toml` | Runs the module's tests: `cargo test` |\n");
         p.push_str("| `compatibility.json` | The Minecraft version, hook points version and the Horizon commits the bundle targets |\n");
         let _ = writeln!(
@@ -4815,6 +4891,45 @@ fn level_calls(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_code_mod_registers_the_recipe_types_of_its_own_namespace() {
+        let dir = std::env::temp_dir().join(format!("porter-recipe-types-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let milling = dir.join("wheat.json");
+        fs::write(
+            &milling,
+            "\u{feff}{\"type\": \"create:milling\", \"ingredients\": []}",
+        )
+        .unwrap();
+        let mut content = porter_content::Content::default();
+        content
+            .copies
+            .insert("data/create/recipe/milling/wheat.json".into(), milling);
+        content.files.insert(
+            "data/create/recipe/crafting/cog.json".into(),
+            "{\"type\": \"minecraft:crafting_shaped\"}".into(),
+        );
+        content.files.insert(
+            "data/create/recipe/pressing/sheet.json".into(),
+            "{\"type\": \"create:pressing\"}".into(),
+        );
+        // Not a recipe, and another mod's type.
+        content.files.insert(
+            "data/create/loot_table/x.json".into(),
+            "{\"type\": \"create:x\"}".into(),
+        );
+        content.files.insert(
+            "data/create/recipe/compat/y.json".into(),
+            "{\"type\": \"farmersdelight:cutting\"}".into(),
+        );
+        assert_eq!(
+            mod_recipe_types(&content, "create"),
+            vec!["create:milling".to_string(), "create:pressing".to_string()]
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn versions_become_semver() {

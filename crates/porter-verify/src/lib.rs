@@ -92,7 +92,10 @@ pub fn install(
         installed.content = Some(place(f, "horizon-mods", "hmod")?);
     }
     if let Some(f) = hnmod {
-        installed.native = Some(place(f, "horizon-native-mods", "hnmod")?);
+        // A bundle (`.hnmod`, older Horizon) or a native mod on the mod API (a `.hmod`
+        // with Rust source): both go where the launcher builds native mods from.
+        let ext = f.extension().and_then(|e| e.to_str()).unwrap_or("hnmod");
+        installed.native = Some(place(f, "horizon-native-mods", ext)?);
     }
     turn_on(home, id)?;
     Ok(installed)
@@ -157,6 +160,18 @@ impl Launcher {
             path: path.to_path_buf(),
             version,
         })
+    }
+
+    /// Whether this launcher builds mods on Horizon's mod API (from 2026-11-16 on): its
+    /// commands list `developer-install`, which came with it. An older one builds bundles
+    /// into the game.
+    pub fn has_mod_api(&self) -> bool {
+        command(&self.path)
+            .arg("--help")
+            .stdin(Stdio::null())
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).contains("developer-install"))
+            .unwrap_or(false)
     }
 
     pub fn instances(&self) -> Result<Vec<Instance>> {
@@ -369,10 +384,78 @@ pub fn build_folder(dir: &Path) -> Result<PathBuf> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Port {
     pub id: String,
-    /// The folder to give `native-build`, when it has a native half.
+    /// The folder to give `native-build`, when it has a native half: the horizon-mixins
+    /// bundle, for Horizon builds before its mod API (2026-11-16).
     pub native: Option<PathBuf>,
     /// The content mod folder (`content/`), when it has one.
     pub content: Option<PathBuf>,
+    /// The mod on Horizon's mod API (`api/`: code, assets and data together), for builds
+    /// from 2026-11-16 on, when `port` wrote one.
+    pub api: Option<PathBuf>,
+}
+
+/// What a launcher builds and plays of a port.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Route {
+    /// The folder to give `native-build`, when there is code to build.
+    pub build: Option<PathBuf>,
+    /// The folders to load as development mods when playing.
+    pub dev_mods: Vec<PathBuf>,
+    /// Whether it is the mod API's route (`api/`).
+    pub api: bool,
+}
+
+impl Port {
+    /// Of the packages `bundle::package` wrote for this port, the ones an instance takes
+    /// (content mod, native mod): with `api_route`, api/'s `.hmod` alone, the whole mod,
+    /// built from `horizon-native-mods/`; else the bundle's `.hnmod` and the content mod.
+    pub fn packages(
+        &self,
+        files: &[PathBuf],
+        api_route: bool,
+    ) -> (Option<PathBuf>, Option<PathBuf>) {
+        let named = |ext: &str, content: bool| {
+            files
+                .iter()
+                .find(|f| {
+                    f.extension().is_some_and(|e| e == ext)
+                        && f.to_string_lossy().contains("-content-") == content
+                })
+                .cloned()
+        };
+        if api_route && self.api.is_some() {
+            (None, named("hmod", false))
+        } else if self.api.is_some() {
+            (named("hmod", true), named("hnmod", false))
+        } else {
+            (named("hmod", false), named("hnmod", false))
+        }
+    }
+
+    /// What `launcher` builds and plays: `api/` on a launcher with the mod API (it has
+    /// `developer-install`, which came with it), whose assets and data are in it; else the
+    /// bundle, with `content/` loaded beside it.
+    pub fn route(&self, launcher: &Launcher) -> Route {
+        if launcher.has_mod_api() {
+            if let Some(api) = &self.api {
+                return Route {
+                    build: Some(api.clone()),
+                    dev_mods: Vec::new(),
+                    api: true,
+                };
+            }
+            return Route {
+                build: None,
+                dev_mods: self.content.iter().cloned().collect(),
+                api: true,
+            };
+        }
+        Route {
+            build: self.native.clone(),
+            dev_mods: self.content.iter().cloned().collect(),
+            api: false,
+        }
+    }
 }
 
 impl Port {
@@ -414,10 +497,15 @@ impl Port {
                 dir.display()
             );
         };
+        let api_dir = dir.join("api");
+        let api = (api_dir.join("horizon-mod.toml").is_file()
+            && api_dir.join("Cargo.toml").is_file())
+        .then_some(api_dir);
         Ok(Port {
             id,
             native,
             content,
+            api,
         })
     }
 }
