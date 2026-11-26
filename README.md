@@ -78,9 +78,9 @@ horizon-porter install my-mod-horizon --build --trust-native-code
 horizon-porter check my-mod-horizon                   # try it in a test world
 ```
 
-Add `--api` to `port` to also write the mod for Horizon's new mod API (experimental, on the
-[arismoko/horizon](https://github.com/arismoko/horizon) fork for now).
-[docs/USAGE.md](docs/USAGE.md) explains every command.
+A port is written for both kinds of Horizon: `api/` for builds since its mod API (2026-11-16 on,
+made for `f1bb66f`), and a horizon-mixins bundle for older ones. `build` and `install` pick the one
+your launcher takes. [docs/USAGE.md](docs/USAGE.md) explains every command.
 
 ## Build from source
 

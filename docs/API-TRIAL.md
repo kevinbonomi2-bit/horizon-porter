@@ -393,3 +393,48 @@ What a port needs for the new route, not done yet:
   ".sunrise/sdk/api/crates/sunrise-mod-api" }`, and the macros' names. The lib is still `mod_api`
   and the API the same otherwise.
 - Still one published loop, `block_entities.tick`.
+
+## Horizon `f1bb66f` (2026-11-26)
+
+A request to make ports work with Horizon build `f1bb66f` (its main of 2026-11-22). Horizon's GitHub
+repositories answered 404 that day (playhorizon.dev said it couldn't reach GitHub either), so the
+commit came through the arismoko/horizon fork network, and no SDK release could be checked or fetched.
+
+**`port` writes `api/` by default now**, pinned to `f1bb66f` (`mixins` `e59da90`, what that build's
+`mixins_tool::REV` pins), with the API by the SDK's path and a dev-dependency on it with `testing` for
+the glue's own tests. `build`, `install` and the app take `api/` on a launcher with the mod API (its
+`--help` lists `developer-install`: no launcher before the merge has it, checked at the merge's first
+parent `a0fe064`) and the bundle on an older one. `package` writes `api/` as `<id>-<version>.hmod`.
+
+**The tick reaches as far as the bundle's on the API alone**, no `[[native.*]]` rows: the bundle's
+tick helper calls about twenty `game.native_*` functions, and at `f1bb66f` all but five are gone, so
+a mixin on `native_block_entity_tick` would have meant rewriting it against the game's internals.
+Through the API instead: lookups of the mod's block entities by position (this one from what is in
+hand, since it is out of the level while it ticks), containers around it or anywhere (a mod's slots
+by `item_slot`, a vanilla container's from its saved `Items`), the blocks diagonally around it
+(`AROUND`) and the items of those it reaches, writes to other block entities (`merge_data`, one per
+target), their slots (`set_item_slot` in a transaction), transfers and a funnel's take and give
+through `ITEMS` capabilities on the right face, kinetic networks and ejected items' marks in statics
+keyed by dimension and position, tanks and energy as saved. A code mod's own recipe types are
+registered (`register_recipe_type`, `register_raw_recipe_serializer`), or the game refuses its
+recipes, and ingredients in the older form (`{"item": ..}`, `{"tag": ..}`) are turned into 26.3's
+before the game's parser reads them.
+
+Checked:
+
+- Create (with its 851 translated functions), Farmer's Delight, Waystones, Beautify, VillagersPlus,
+  Friends & Foes, Naturalist, Macaw's Fences and six fixtures compile against `f1bb66f`'s
+  `horizon-mod-api` with no error or warning; the glue's tests pass against `testing::FakeHost`.
+- `f1bb66f`'s SDK built here with `tools/prebuilt_game.py build` for `x86_64-pc-windows-gnu` (CI's
+  Windows target; the MSVC build fails to link its executable), the MinGW of the launcher's own
+  toolchain on PATH; its `smoke` passes. Create's `api/` compiles and links against it as the
+  launcher's build does (a 11.6 MB `create.dll`).
+- That build's dedicated server, with Create installed beside it and the prepared game files of the
+  fork's Nightly of 2026-11-11, starts (`Done (10 s)`), and 24 of `ai-test/create_check.py`'s 29
+  checks pass through its console: all the kinetics, the millstone grinding, the press pressing on
+  a depot and the mixer mixing in a basin. The other five need a player.
+
+Not checked on `f1bb66f`: a client and a world with a player in it, belts (made with the connector,
+which needs a player; placed by command, the start segment ends up with no block entity), screens.
+Sunrise at its newest SDK (`ba1f24e`): the glue has more than twenty errors there, its API having
+moved since the split, so ports don't target it.

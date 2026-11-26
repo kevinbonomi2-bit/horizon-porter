@@ -293,28 +293,40 @@ doesn't have where it runs) doesn't stop the mod: `install --build` and the app 
 function back to its stub, marked to port again, and build once more. The mod plays
 without it, and the build says which ones it put back.
 
-### As a mod on Horizon's new mod API (experimental)
+### On Horizon's mod API (builds from 2026-11-16 on)
 
-```
-horizon-porter port my-mod.jar --out my-mod-horizon --api
-```
+Horizon merged its mod API on 2026-11-16, and the native mods of the system before it (horizon-mixins
+bundles built into the game, `.hnmod`) no longer load on builds since. So `port` writes the mod both
+ways:
 
-Horizon's mod API (`mod_api`, in the [arismoko/horizon](https://github.com/arismoko/horizon)
-fork for now) replaces horizon-mixins bundles with typed hooks and Parts. `--api` writes the mod
-that way too, in `api/`, beside the bundle: `horizon-mod.toml` with `[native]` pins to the Horizon
-commit the porter was checked against, `Cargo.toml`, the content's `assets/` and `data/`,
-`src/runtime.rs` (the bundle's, with what `translate` ported in it; `translate` refreshes it) and
-`src/lib.rs`, the glue:
+- `api/`: the mod on the mod API, for Horizon builds from 2026-11-16 on. It is made for build
+  `f1bb66f` (2026-11-22): `horizon-mod.toml` with its `[native]` pins (`horizon`, and the
+  horizon-mixins tool its launcher pins), `Cargo.toml` naming the API by the SDK's path
+  (`.horizon/sdk/api/crates/horizon-mod-api`, the only form the launcher takes), the content's
+  `assets/` and `data/`, `src/runtime.rs` (the bundle's, with what `translate` ported in it;
+  `translate` refreshes it) and `src/lib.rs`, the glue. The launcher compiles it against that build's
+  mod SDK and never rebuilds the game.
+- `mixins/<id>/`: the horizon-mixins bundle, for older builds (Nightly 2026-11-13 and before).
+
+`build` and `install` pick the one your launcher takes: `api/` on a launcher with the mod API (one
+that has `horizon-launcher developer-install`), the bundle on an older one. `package` writes
+`<id>-<version>.hmod` from `api/` (code, assets and data), and for older builds the bundle's
+`.hnmod` and the content mod as `<id>-content-<version>.hmod`. `--no-api` leaves `api/` out.
+
+The glue covers:
 
 - a `BlockPart` for placement, clicks, shape updates, ticks, survival and comparators, and an
   `ItemPart` for item use and tooltips;
-- a `BlockEntityPart` for each block entity: its saved state, its tick (slots, data, recipes, the
-  blocks beside it, sounds, particles, drops), its container and menu, its screen and shift-clicks,
-  its renderer, what clients get of it, and what it drops when broken.
+- a `BlockEntityPart` for each block entity: its saved state, its tick, its container and menu,
+  its screen and shift-clicks, its renderer, what clients get of it, and what it drops when broken.
+  The tick reaches as far as the bundle's: slots, data, recipes, the blocks and containers around
+  it, any of the mod's block entities by position (a belt's chain), kinetic networks, other block
+  entities' saved values and slots written back, items moved through item handlers (a chest's, a
+  hopper's, a mod's), tanks and energy, sounds, particles and drops.
 
-Build it with that fork's launcher (`horizon-launcher native-build my-mod-horizon/api
---trust-native-code`). [docs/API-TRIAL.md](API-TRIAL.md) has what was tried, what plays, and what's
-next.
+[Sunrise](https://playsunrise.net), the fork the mod team moved to, has its own mod API, which has
+changed since the split (its crate is `sunrise-mod-api`): ports don't target it yet.
+[docs/API-TRIAL.md](API-TRIAL.md) has what was tried on the mod API, what plays, and what's next.
 
 ### Trying it in the game
 

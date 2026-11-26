@@ -721,6 +721,19 @@ lands on a block (`updateEntityAfterFallOn`, `entityInside`) as a function of it
 tick, for every block that has one. Haiku for this round: about $0.29 (the night's total about
 $2.98 of the $5 approved).
 
+### On Horizon's mod API, build `f1bb66f` (2026-11-26)
+
+Create's `api/` (the same 851 translated functions) compiled and linked against `f1bb66f`'s mod
+SDK, built here from source, and ran on that build's dedicated server: 24 of the 29 checks pass
+from its console (every check a console can run: the kinetics, diagonal cogwheels, the millstone,
+press and mixer at work). The run found three things the API route lacked, now in the porter (the
+mod's recipe types registered, Create's `{"item": ..}` ingredients read, a tick seeing the items
+of the block entities it reaches and the blocks diagonally around it). Belts and anything a player
+does weren't checked there. [API-TRIAL.md](API-TRIAL.md) has the details.
+
+On the bundle (build `native-66f3981-793c65fede9b`), checked again the same day: 29 of 29, and the
+belt tests 4 of 4.
+
 ## Suggested order
 
 1. Catnip and Registrate shims, kinetic block entities, shafts, cogs and a hand crank:
